@@ -413,6 +413,8 @@ export const phases: Phase[] = [
         id: "core-ml-concepts",
         code: "3.1",
         title: "Core ML Concepts",
+        description:
+          "Supervised/unsupervised/RL, train-validation-test split, overfitting, bias-variance, cross-validation và metrics — nền tảng để đánh giá model đúng.",
         items: [
           "Supervised vs Unsupervised vs Reinforcement Learning",
           "Train/validation/test split, overfitting & underfitting",
@@ -424,6 +426,8 @@ export const phases: Phase[] = [
         id: "linear-logistic",
         code: "3.2",
         title: "Linear & Logistic Regression",
+        description:
+          "Linear regression, logistic regression, MSE/BCE, regularization và multiclass — baseline supervised quan trọng cho mọi AI Engineer.",
         items: [
           "Linear regression — closed form & gradient descent",
           "Logistic regression — sigmoid, binary classification",
@@ -435,6 +439,8 @@ export const phases: Phase[] = [
         id: "trees-ensembles",
         code: "3.3",
         title: "Decision Trees & Ensembles",
+        description:
+          "Decision trees, Gini/entropy, random forest, gradient boosting (XGBoost/LightGBM) và feature importance cho dữ liệu tabular.",
         items: [
           "Decision trees — Gini, entropy",
           "Random forests — bagging",
@@ -446,6 +452,8 @@ export const phases: Phase[] = [
         id: "unsupervised",
         code: "3.4",
         title: "Unsupervised Learning",
+        description:
+          "K-Means, DBSCAN, PCA, t-SNE/UMAP và embedding visualization — học cấu trúc khi không có nhãn.",
         items: [
           "K-Means clustering, DBSCAN",
           "PCA — dimensionality reduction",
@@ -456,6 +464,8 @@ export const phases: Phase[] = [
         id: "hyperparameter-tuning",
         code: "3.5",
         title: "Hyperparameter Tuning",
+        description:
+          "Grid search, random search, Bayesian optimization, early stopping và strategy tuning để chọn model configuration có hệ thống.",
         items: [
           "Grid search, random search, Bayesian optimization",
           "Learning rate, batch size, epochs, layers",
@@ -466,6 +476,8 @@ export const phases: Phase[] = [
         id: "scikit-learn",
         code: "3.6",
         title: "ML with Scikit-Learn",
+        description:
+          "Pipeline, preprocessing, ColumnTransformer, GridSearchCV, joblib và API fit/transform/predict — toolkit chuẩn cho ML classic.",
         items: [
           "Pipeline(), StandardScaler, MinMaxScaler, OneHotEncoder",
           "GridSearchCV, cross_val_score",
@@ -516,6 +528,8 @@ export const phases: Phase[] = [
         id: "nn-fundamentals",
         code: "4.1",
         title: "Neural Network Fundamentals",
+        description:
+          "Neuron, perceptron, MLP, activation, forward pass, backpropagation và initialization — nền móng để hiểu deep learning.",
         items: [
           "Neuron, Perceptron, MLP",
           "Activation: Sigmoid, Tanh, ReLU, GELU, SwiGLU",
@@ -527,6 +541,8 @@ export const phases: Phase[] = [
         id: "training-techniques",
         code: "4.2",
         title: "Training Techniques",
+        description:
+          "BatchNorm, LayerNorm, dropout, residual connections và gradient clipping — kỹ thuật giúp train mạng sâu ổn định.",
         items: [
           "Batch normalization, layer normalization (transformers)",
           "Dropout, residual connections (skip connections)",
@@ -537,6 +553,8 @@ export const phases: Phase[] = [
         id: "cnn",
         code: "4.3",
         title: "Convolutional Neural Networks (CNN)",
+        description:
+          "Convolution, pooling, CNN architectures (LeNet/AlexNet/VGG/ResNet), transfer learning và ứng dụng vision.",
         items: [
           "Convolution operation, pooling layers",
           "Architectures: LeNet, AlexNet, VGG, ResNet",
@@ -547,6 +565,8 @@ export const phases: Phase[] = [
         id: "rnn",
         code: "4.4",
         title: "Recurrent Neural Networks (RNN)",
+        description:
+          "RNN, hidden state, LSTM/GRU, bidirectional RNN, Seq2Seq và beam search — kiến trúc sequence trước transformer.",
         items: [
           "RNN, hidden state, vanishing gradient trong RNNs",
           "LSTM — forget/input/output gates, GRU",
@@ -558,6 +578,8 @@ export const phases: Phase[] = [
         id: "attention",
         code: "4.5",
         title: "Attention Mechanism (Pre-Transformer)",
+        description:
+          "Attention trước transformer: additive/multiplicative, Bahdanau, soft retrieval và cách nó giải quyết bottleneck Seq2Seq.",
         items: [
           "Attention as \"soft\" alignment",
           "Additive vs multiplicative attention",
@@ -568,6 +590,8 @@ export const phases: Phase[] = [
         id: "pytorch",
         code: "4.6",
         title: "PyTorch (Master This)",
+        description:
+          "Tensor, autograd, nn.Module, Dataset/DataLoader, training loop, GPU, save/load và scheduler — framework thực tế để train model.",
         items: [
           "Tensors, torch.nn.Module, torch.optim",
           "Custom Dataset, DataLoader",
@@ -581,6 +605,8 @@ export const phases: Phase[] = [
         id: "transfer-learning",
         code: "4.7",
         title: "Transfer Learning",
+        description:
+          "Pretraining, feature extraction vs fine-tuning, freezing strategy và HuggingFace pretrained models — tận dụng model đã học sẵn.",
         items: [
           "Pretraining và tại sao quan trọng",
           "Fine-tuning vs feature extraction, freezing layers",
@@ -631,6 +657,8 @@ export const phases: Phase[] = [
         id: "text-preprocessing",
         code: "5.1",
         title: "Text Preprocessing",
+        description:
+          "Tokenization, normalization, stopwords, stemming/lemmatization, sentence segmentation, special tokens và Unicode trong text thật.",
         items: [
           "Tokenization: words, subwords, characters",
           "Lowercasing, punctuation, whitespace",
@@ -642,6 +670,8 @@ export const phases: Phase[] = [
         id: "classical-representation",
         code: "5.2",
         title: "Classical Text Representation",
+        description:
+          "Bag of Words, TF-IDF, n-grams, one-hot và sparse vs dense representation — nền tảng của search và baseline NLP.",
         items: [
           "Bag of Words (BoW)",
           "TF-IDF — formula & intuition",
@@ -653,6 +683,8 @@ export const phases: Phase[] = [
         id: "word-embeddings",
         code: "5.3",
         title: "Word Embeddings",
+        description:
+          "Word2Vec, GloVe, FastText, cosine similarity, analogies và static vs contextual embeddings — semantic vector cho NLP/RAG.",
         items: [
           "Word2Vec (CBOW vs Skip-gram), GloVe, FastText",
           "Cosine similarity, analogy tasks: king - man + woman = queen",
@@ -663,6 +695,8 @@ export const phases: Phase[] = [
         id: "subword-tokenization",
         code: "5.4",
         title: "Subword Tokenization (Modern)",
+        description:
+          "BPE, WordPiece, SentencePiece, special tokens, token IDs và vocab-size tradeoffs — cách LLM biến text thành số.",
         items: [
           "BPE (GPT), WordPiece (BERT), SentencePiece (T5, LLaMA)",
           "Special tokens: [CLS], [SEP], [PAD], [MASK], <eos>, <bos>",
@@ -673,6 +707,8 @@ export const phases: Phase[] = [
         id: "transformer-architecture",
         code: "5.5",
         title: "Transformer Architecture (Master This)",
+        description:
+          "Self-attention, Q/K/V, multi-head attention, positional encoding, encoder/decoder và causal masking — trái tim của LLM.",
         items: [
           "Self-attention: Query, Key, Value",
           "Attention score: softmax(QKᵀ/√d_k)V",
@@ -686,6 +722,8 @@ export const phases: Phase[] = [
         id: "language-modeling",
         code: "5.6",
         title: "Language Modeling",
+        description:
+          "Next-token prediction, masked language modeling, perplexity, temperature/top-k/top-p và decoding strategies.",
         items: [
           "P(next token | previous tokens), autoregressive & MLM",
           "Perplexity — đánh giá language models",
@@ -697,6 +735,8 @@ export const phases: Phase[] = [
         id: "key-models",
         code: "5.7",
         title: "Key Pretrained Models",
+        description:
+          "BERT, GPT, Claude, Gemini, T5, LLaMA, Mistral, Qwen — phân loại model families và chọn model đúng task.",
         items: [
           "BERT — classification, NER, QA",
           "GPT-4 / Claude / Gemini — generation, chat, multimodal",
@@ -708,6 +748,8 @@ export const phases: Phase[] = [
         id: "nlp-metrics",
         code: "5.8",
         title: "NLP Evaluation Metrics",
+        description:
+          "BLEU, ROUGE, BERTScore, perplexity, exact match, human evaluation và LLM-as-judge — đánh giá NLP đúng cách.",
         items: [
           "BLEU (translation), ROUGE (summarization)",
           "Perplexity, BERTScore (semantic similarity)",
@@ -718,6 +760,8 @@ export const phases: Phase[] = [
         id: "nlp-libraries",
         code: "5.9",
         title: "Key Python Libraries",
+        description:
+          "NLTK, spaCy, HuggingFace Transformers/Datasets, sentence-transformers, tiktoken và evaluate — toolkit NLP cần biết.",
         items: [
           "NLTK, spaCy (NER, parsing)",
           "transformers & datasets (HuggingFace)",

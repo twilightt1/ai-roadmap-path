@@ -1,0 +1,254 @@
+Transfer Learning là nguyên tắc trung tâm của AI hiện đại: **đừng học mọi thứ từ đầu nếu có thể tận dụng kiến thức đã học sẵn**. CNN pretrained ImageNet, BERT pretrained trên text, GPT/LLaMA pretrained trên web-scale corpus — tất cả đều dựa trên cùng ý tưởng: representation học từ data lớn có thể chuyển sang task nhỏ hơn.
+
+## Why this matters
+
+Bạn có 800 ảnh lỗi sản phẩm. Train CNN từ đầu gần như chắc chắn overfit. Nhưng ResNet pretrained trên ImageNet đã học cạnh, texture, shape. Bạn chỉ cần học classifier head cho classes của bạn.
+
+Bạn có 2,000 câu support intent. Train transformer từ đầu là bất khả thi. Nhưng DistilBERT/BERT đã học ngữ pháp và semantics; bạn fine-tune task classification.
+
+Transfer learning giúp:
+
+- giảm data cần thiết,
+- giảm compute,
+- tăng performance,
+- rút ngắn time-to-market.
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích pretraining và downstream adaptation.
+2. Phân biệt feature extraction và fine-tuning.
+3. Biết khi nào freeze/unfreeze layer.
+4. Hiểu catastrophic forgetting.
+5. Dùng pretrained ResNet hoặc HuggingFace model.
+6. Quyết định khi nào không nên fine-tune.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- CNN/neural network cơ bản.
+- PyTorch model parameters.
+- Train/validation/test split.
+- Overfitting và learning rate.
+
+## Core intuition: representation reuse
+
+Layer đầu của vision model học feature chung:
+
+```text
+edges → corners → textures → object parts → objects
+```
+
+Layer đầu của language model học pattern chung:
+
+```text
+characters/subwords → syntax → semantics → task behavior
+```
+
+Bạn reuse phần chung, chỉ học phần task-specific.
+
+<Callout type="info" title="Pretrained model là feature extractor mạnh">
+Ngay cả khi bạn không fine-tune, embedding/hidden states từ pretrained model đã là features tốt hơn rất nhiều so với raw pixels/text.
+</Callout>
+
+## Feature extraction vs fine-tuning
+
+| Strategy | Làm gì | Khi dùng |
+|---|---|---|
+| Feature extraction | Freeze backbone, train head | dataset nhỏ, domain gần |
+| Partial fine-tuning | Unfreeze vài layer cuối | dataset vừa, domain hơi khác |
+| Full fine-tuning | Train toàn bộ model | dataset lớn, domain khác, đủ compute |
+
+## Worked example: freeze ResNet
+
+```python
+import torchvision.models as models
+from torch import nn
+
+model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+
+for p in model.parameters():
+    p.requires_grad = False
+
+model.fc = nn.Linear(model.fc.in_features, 5)
+```
+
+Chỉ `model.fc` có gradient.
+
+Kiểm tra:
+
+```python
+trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+total = sum(p.numel() for p in model.parameters())
+print(trainable, total)
+```
+
+## Partial unfreeze
+
+Sau khi head ổn, unfreeze block cuối:
+
+```python
+for p in model.layer4.parameters():
+    p.requires_grad = True
+```
+
+Dùng learning rate nhỏ hơn:
+
+```python
+optimizer = torch.optim.AdamW([
+    {"params": model.layer4.parameters(), "lr": 1e-5},
+    {"params": model.fc.parameters(), "lr": 1e-4},
+])
+```
+
+Head học nhanh hơn; backbone thay đổi chậm hơn.
+
+<Callout type="warning" title="Catastrophic forgetting">
+Fine-tune LR quá lớn hoặc quá nhiều epoch trên dataset nhỏ có thể làm pretrained model quên representation tổng quát. Dùng LR nhỏ, early stopping, và freeze/unfreeze từ từ.
+</Callout>
+
+## Transfer learning trong NLP
+
+HuggingFace:
+
+```python
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+model_name = "distilbert-base-uncased"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=3)
+```
+
+Fine-tuning classifier head + transformer layers. Với dataset nhỏ, có thể freeze encoder trước:
+
+```python
+for p in model.base_model.parameters():
+    p.requires_grad = False
+```
+
+Sau đó unfreeze dần.
+
+## Khi nào không fine-tune?
+
+Fine-tune không phải búa vạn năng.
+
+Không nên fine-tune khi:
+
+- Bạn cần knowledge mới/cập nhật → RAG tốt hơn.
+- Data ít và noisy.
+- Task chỉ cần format output → prompt engineering đủ.
+- API model đã đạt yêu cầu.
+- Privacy/cost/infra không cho phép training.
+
+<Callout type="tip" title="AI Engineer decision tree">
+Nếu bài toán là “model không biết thông tin private” → RAG. Nếu bài toán là “model cần style/format ổn định” → prompt/fine-tune nhẹ. Nếu bài toán là “domain classifier nhỏ” → fine-tune encoder hoặc train sklearn baseline.
+</Callout>
+
+## Implementation lab: transfer learning workflow
+
+```python
+# Pseudocode structure
+model = load_pretrained_model()
+replace_classifier_head(model, num_classes)
+freeze_backbone(model)
+
+train(head_only, lr=1e-3, epochs=5)
+validate()
+
+unfreeze_last_block(model)
+train(partial_model, lr=1e-5, epochs=5)
+validate()
+
+save_best_checkpoint()
+```
+
+Đọc kết quả:
+
+- Nếu head-only đã tốt: dataset gần pretrained domain.
+- Nếu partial fine-tune cải thiện: cần adaptation nhẹ.
+- Nếu full fine-tune overfit: data ít/noisy hoặc LR quá cao.
+
+## Common mistakes & debugging checklist
+
+<Callout type="danger" title="Mistake 1: không dùng preprocessing đúng pretrained model">
+Vision pretrained model kỳ vọng resize/normalize cụ thể. NLP pretrained model kỳ vọng tokenizer đúng. Sai preprocessing/tokenizer làm performance tụt mạnh.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: fine-tune toàn bộ với LR lớn">
+Đây là cách nhanh nhất phá pretrained weights. Bắt đầu bằng LR nhỏ và freeze/unfreeze từ từ.
+</Callout>
+
+<Callout type="warning" title="Mistake 3: đánh giá trên dataset quá giống train">
+Nếu augment/split sai, validation có ảnh gần trùng train. Transfer model có thể nhìn rất tốt nhưng fail production.
+</Callout>
+
+Checklist:
+
+1. Tokenizer/preprocessing có đúng model không?
+2. Classifier head đã thay đúng output classes chưa?
+3. Parameters cần freeze có `requires_grad=False` không?
+4. LR backbone và head có khác nhau không?
+5. Có early stopping không?
+6. Dataset có đủ khác biệt giữa train/val không?
+7. Có so sánh với baseline đơn giản không?
+
+## Practice exercises
+
+1. Freeze toàn bộ ResNet18 trừ `fc`, in số trainable params.
+2. Unfreeze `layer4` và tạo optimizer có LR khác nhau cho layer4/fc.
+3. Với HuggingFace BERT classifier, freeze `base_model`.
+4. Giải thích khi nào RAG tốt hơn fine-tuning.
+5. Tạo experiment so sánh head-only vs partial fine-tune.
+
+## Knowledge check
+
+1. Pretraining là gì?
+2. Feature extraction khác fine-tuning thế nào?
+3. Catastrophic forgetting là gì?
+4. Vì sao LR fine-tune thường nhỏ?
+5. Vì sao tokenizer phải khớp pretrained model?
+6. Khi nào nên freeze backbone?
+7. Transfer learning giúp gì với dataset nhỏ?
+
+## Answer key
+
+1. Train model trên task/data lớn tổng quát trước downstream task.
+2. Feature extraction freeze backbone; fine-tuning cập nhật một phần/toàn bộ backbone.
+3. Model quên kiến thức pretrained do update quá mạnh trên data nhỏ/hẹp.
+4. Để tránh phá representation đã học.
+5. Embedding matrix gắn với token IDs của tokenizer đó.
+6. Dataset nhỏ hoặc domain gần pretrained.
+7. Giảm data/compute cần thiết và tăng generalization.
+
+## Mini-project: Transfer learning image classifier
+
+**Task:** Fine-tune ResNet18 cho 5 classes.
+
+**Deliverables:**
+
+- Data transforms đúng pretrained weights.
+- Head-only training.
+- Partial unfreeze experiment.
+- Confusion matrix.
+- Misclassified examples.
+
+**Success criteria:**
+
+- Có freeze/unfreeze rõ ràng.
+- Có LR khác nhau cho backbone/head.
+- Có early stopping.
+- Có phân tích khi nào fine-tune giúp hoặc làm overfit.
+
+## Điểm cần nhớ
+
+- Transfer learning reuse representation pretrained.
+- Feature extraction phù hợp dataset nhỏ/domain gần.
+- Fine-tuning cần LR nhỏ, early stopping và freeze strategy.
+- Tokenizer/preprocessing phải khớp pretrained model.
+- Không phải mọi bài toán cần fine-tune; RAG/prompting/baseline có thể tốt hơn.
+
+## Next chapter bridge
+
+Bạn đã hoàn thành Phase 4: neural networks, training techniques, CNN, RNN, attention, PyTorch, transfer learning. Phase 5 chuyển sang **NLP & Transformers** — nơi attention trở thành self-attention, tokenization trở thành subword IDs, và language modeling dẫn đến LLM.

@@ -1,0 +1,285 @@
+Recurrent Neural Networks (RNN) là kiến trúc cổ điển cho dữ liệu tuần tự: text, audio, time-series. Transformer đã thay thế RNN trong hầu hết NLP hiện đại, nhưng RNN/LSTM vẫn là bài học quan trọng: nó cho bạn thấy vấn đề **memory**, **long-range dependency**, **vanishing gradient**, và vì sao attention/transformer ra đời.
+
+## Why this matters
+
+Trước GPT/BERT, machine translation, speech recognition, sentiment analysis đều dùng RNN/LSTM/GRU. Nhiều hệ thống time-series nhỏ vẫn dùng RNN variants. Khi học RNN, bạn sẽ hiểu:
+
+- sequence được xử lý từng bước thế nào,
+- hidden state lưu “memory” ra sao,
+- vì sao gradient qua thời gian bị vanish,
+- vì sao LSTM cần gate,
+- vì sao attention giải quyết bottleneck.
+
+<Callout type="info" title="RNN là cầu nối tư duy tới Transformer">
+Transformer không xuất hiện từ hư không. Nó giải quyết các vấn đề của RNN: xử lý tuần tự chậm, memory bottleneck, khó học dependency xa. Hiểu RNN giúp bạn hiểu transformer sâu hơn.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích hidden state trong RNN.
+2. Theo dõi input/output shape của `nn.RNN`, `nn.LSTM`, `nn.GRU`.
+3. Hiểu vanishing/exploding gradient qua thời gian.
+4. Giải thích LSTM gates: forget/input/output.
+5. Phân biệt LSTM và GRU.
+6. Biết khi nào dùng bidirectional RNN.
+7. Hiểu Seq2Seq và beam search ở mức khái niệm.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Neural network forward/backward.
+- Gradient flow.
+- Tensor shape PyTorch.
+- Token sequence căn bản.
+
+## Core intuition: hidden state là memory
+
+RNN đọc sequence từng token/time step. Tại mỗi bước, nó nhận input hiện tại `x_t` và hidden state trước `h_{t-1}`:
+
+```text
+h_t = f(W_x x_t + W_h h_{t-1} + b)
+```
+
+Hidden state giống “bộ nhớ tóm tắt” những gì đã đọc trước đó.
+
+Ví dụ sentiment:
+
+```text
+"The movie was not ..."
+```
+
+Khi đến từ sau, hidden state cần nhớ từ `not` để hiểu sentiment.
+
+## RNN shape trong PyTorch
+
+```python
+import torch
+from torch import nn
+
+rnn = nn.RNN(input_size=32, hidden_size=64, batch_first=True)
+x = torch.randn(16, 20, 32)  # batch=16, seq_len=20, input_size=32
+out, h_n = rnn(x)
+
+print(out.shape)  # (16, 20, 64)
+print(h_n.shape)  # (1, 16, 64) -> num_layers, batch, hidden
+```
+
+`out` chứa hidden state ở mọi time step. `h_n` là hidden cuối cùng.
+
+## Worked example by hand: RNN update đơn giản
+
+Giả sử scalar RNN:
+
+```text
+h_t = tanh(0.5*x_t + 0.8*h_{t-1})
+h_0 = 0
+sequence x = [1, 2]
+```
+
+Step 1:
+
+```text
+h_1 = tanh(0.5*1 + 0.8*0) = tanh(0.5) ≈ 0.462
+```
+
+Step 2:
+
+```text
+h_2 = tanh(0.5*2 + 0.8*0.462)
+    = tanh(1 + 0.370)
+    = tanh(1.370) ≈ 0.879
+```
+
+Hidden state tích lũy thông tin từ quá khứ.
+
+## Vanishing gradient qua thời gian
+
+Backpropagation qua RNN gọi là BPTT (Backpropagation Through Time). Gradient từ cuối sequence phải đi ngược qua nhiều bước:
+
+```text
+gradient ≈ product of many W_h terms
+```
+
+Nếu các hệ số nhỏ hơn 1, gradient nhỏ dần. Nếu lớn hơn 1, gradient explode.
+
+<Callout type="danger" title="Long dependency là điểm yếu RNN cơ bản">
+RNN cơ bản rất khó nhớ thông tin từ hàng chục/hàng trăm bước trước. Đây là lý do LSTM/GRU ra đời, và sau đó attention/transformer thay thế trong NLP.
+</Callout>
+
+## LSTM
+
+LSTM thêm **cell state** `c_t` và gates để kiểm soát thông tin.
+
+Các gates:
+
+| Gate | Vai trò |
+|---|---|
+| Forget gate | quên phần nào của memory cũ |
+| Input gate | ghi thông tin mới nào vào memory |
+| Output gate | xuất phần nào của memory ra hidden state |
+
+```python
+lstm = nn.LSTM(input_size=32, hidden_size=64, num_layers=2, batch_first=True)
+out, (h_n, c_n) = lstm(x)
+
+print(out.shape)  # (16, 20, 64)
+print(h_n.shape)  # (2, 16, 64)
+print(c_n.shape)  # (2, 16, 64)
+```
+
+Cell state là đường truyền dài hạn giúp gradient chảy tốt hơn.
+
+## GRU
+
+GRU đơn giản hơn LSTM:
+
+- Không có cell state riêng.
+- Có update gate và reset gate.
+- Ít parameter hơn, nhanh hơn.
+
+```python
+gru = nn.GRU(input_size=32, hidden_size=64, batch_first=True)
+out, h_n = gru(x)
+```
+
+Trong nhiều task, GRU performance gần LSTM nhưng nhanh hơn.
+
+## Bidirectional RNN
+
+Bidirectional RNN đọc sequence hai chiều: trái sang phải và phải sang trái.
+
+```python
+bilstm = nn.LSTM(32, 64, batch_first=True, bidirectional=True)
+out, _ = bilstm(x)
+print(out.shape)  # (16, 20, 128) vì 2 chiều concat
+```
+
+Dùng khi bạn có toàn bộ sequence: classification, NER, tagging. Không dùng cho autoregressive generation vì khi sinh token, tương lai chưa biết.
+
+## Seq2Seq và beam search
+
+Seq2Seq dùng encoder RNN đọc source, decoder RNN sinh target.
+
+```text
+source sentence → encoder hidden/context → decoder → target sentence
+```
+
+Bottleneck: toàn bộ source bị nén vào một context vector. Câu dài làm mất thông tin.
+
+Beam search giữ top-k candidate sequences thay vì greedy:
+
+```text
+beam=3 → giữ 3 câu có score tốt nhất qua mỗi bước
+```
+
+## Implementation lab: LSTM classifier
+
+```python
+import torch
+from torch import nn
+
+class LSTMClassifier(nn.Module):
+    def __init__(self, vocab_size, embed_dim, hidden_dim, num_classes):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
+        self.lstm = nn.LSTM(embed_dim, hidden_dim, batch_first=True, bidirectional=True)
+        self.fc = nn.Linear(2 * hidden_dim, num_classes)
+
+    def forward(self, input_ids):
+        x = self.embedding(input_ids)       # (B, T, E)
+        out, (h_n, c_n) = self.lstm(x)      # out: (B, T, 2H)
+        last = out[:, -1, :]                # đơn giản: lấy bước cuối
+        return self.fc(last)
+
+model = LSTMClassifier(vocab_size=10000, embed_dim=128, hidden_dim=64, num_classes=2)
+input_ids = torch.randint(0, 10000, (32, 50))
+logits = model(input_ids)
+print(logits.shape)  # (32, 2)
+```
+
+Lưu ý: với padding, lấy `out[:, -1, :]` có thể lấy padding state. Production nên dùng sequence lengths hoặc attention pooling.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: nhầm batch_first">
+Nếu `batch_first=True`, input shape là `(batch, seq, feature)`. Nếu false, shape là `(seq, batch, feature)`. Nhầm shape là lỗi kinh điển.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: lấy hidden state ở padding token">
+Sequence batch thường padding về cùng length. Nếu lấy last timestep mà sequence thật ngắn hơn, bạn có thể lấy state của padding. Dùng packing hoặc mask/pooling.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: dùng bidirectional cho generation autoregressive">
+Bidirectional nhìn tương lai. Với generation token-by-token, điều đó là leakage. Chỉ dùng bidirectional cho tasks có toàn bộ input.
+</Callout>
+
+Checklist:
+
+1. Input shape có đúng `batch_first` không?
+2. Có padding mask/lengths không?
+3. Hidden output dimension có nhân 2 vì bidirectional không?
+4. Gradient có explode không? Có clipping không?
+5. Task có cần future context không?
+6. Sequence quá dài có khiến training chậm không?
+
+## Practice exercises
+
+1. Tính hidden state scalar RNN cho sequence `[1,1,1]` với công thức tự chọn.
+2. Viết GRUClassifier tương tự LSTMClassifier.
+3. Thêm gradient clipping vào training loop RNN.
+4. Giải thích vì sao bidirectional không dùng cho next-token generation.
+5. Dùng packed sequences trong PyTorch cho batch có variable lengths.
+
+## Knowledge check
+
+1. Hidden state lưu gì?
+2. BPTT là gì?
+3. LSTM có những gate nào?
+4. GRU khác LSTM ra sao?
+5. Bidirectional RNN làm output hidden dim thay đổi thế nào?
+6. Seq2Seq RNN gặp bottleneck gì?
+7. Beam search khác greedy decoding thế nào?
+
+## Answer key
+
+1. Tóm tắt thông tin quá khứ đã đọc.
+2. Backpropagation Through Time — lan gradient ngược qua các time steps.
+3. Forget, input, output gate.
+4. Ít gate hơn, không có cell state riêng, ít parameter hơn.
+5. Hidden dim thường nhân đôi vì concat forward/backward.
+6. Nén toàn source vào một context vector.
+7. Greedy giữ 1 candidate tốt nhất; beam giữ top-k candidates.
+
+## Mini-project: Sentiment LSTM baseline
+
+**Task:** Train LSTM sentiment classifier trên IMDB subset hoặc dataset tự tạo.
+
+**Deliverables:**
+
+- Tokenization + vocabulary.
+- Padding + attention mask/length handling.
+- LSTM/GRU classifier.
+- Accuracy/F1.
+- So sánh unidirectional vs bidirectional.
+
+**Success criteria:**
+
+- Không lấy hidden state padding sai.
+- Có gradient clipping.
+- Có confusion matrix.
+- Có phân tích lỗi 10 sample.
+
+## Điểm cần nhớ
+
+- RNN xử lý sequence từng bước, hidden state là memory.
+- RNN cơ bản khó học dependency xa vì vanishing gradient.
+- LSTM/GRU dùng gates để kiểm soát nhớ/quên.
+- Bidirectional tốt cho understanding, không dùng cho autoregressive generation.
+- Seq2Seq RNN bị bottleneck context vector, dẫn tới attention.
+
+## Next chapter bridge
+
+RNN cố nén quá khứ vào hidden state. Attention thay đổi cách nghĩ: thay vì nén mọi thứ, decoder có thể nhìn lại các state liên quan. Chương tiếp theo: **Attention Mechanism** — cầu nối trực tiếp tới Transformer.

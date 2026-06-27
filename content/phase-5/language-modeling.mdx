@@ -1,0 +1,111 @@
+Language modeling là nhiệm vụ dự đoán phân phối token. LLM hiện đại như GPT/Claude học bằng mục tiêu đơn giản: **dự đoán token tiếp theo**. Bài này covers autoregressive LM, masked LM, perplexity và cách decoding (temperature, top-k, top-p, beam search).
+
+## Next-token prediction
+
+Autoregressive language model học:
+
+```text
+P(x₁, x₂, ..., x_T) = Π_t P(x_t | x_<t)
+```
+
+Tức là mỗi bước dự đoán token tiếp theo từ các token trước.
+
+```python
+# GPT-style training target
+input_ids  = ["The", "cat", "sat"]
+target_ids = ["cat", "sat", "."]
+```
+
+Loss là cross-entropy giữa logits token và target next token.
+
+## Masked Language Modeling
+
+BERT dùng MLM: mask một số token và dự đoán token bị che.
+
+```text
+The [MASK] sat on the mat → cat
+```
+
+MLM nhìn hai chiều (trái + phải), tốt cho understanding tasks như classification/NER. Nhưng không tự nhiên cho generation token-by-token như GPT.
+
+## Perplexity
+
+Perplexity đo model "bối rối" bao nhiêu:
+
+```text
+perplexity = exp(cross_entropy_loss)
+```
+
+PPL thấp = model dự đoán token đúng tự tin hơn.
+
+```python
+import math
+loss = 2.0
+ppl = math.exp(loss)  # ~7.39
+```
+
+<Callout type="warning" title="So sánh perplexity phải cùng tokenizer/data">
+Perplexity phụ thuộc tokenizer và dataset. Không so sánh PPL giữa model dùng tokenizer khác hoặc corpus khác một cách trực tiếp.
+</Callout>
+
+## Decoding: greedy vs sampling
+
+Model output logits → softmax → probability token. Decoding chọn token tiếp theo.
+
+### Greedy
+
+Chọn token có xác suất cao nhất.
+
+- Deterministic.
+- Dễ lặp, ít sáng tạo.
+
+### Sampling
+
+Lấy mẫu theo distribution.
+
+- Đa dạng hơn.
+- Có thể sai/loạn nếu distribution quá phẳng.
+
+## Temperature, top-k, top-p
+
+### Temperature
+
+```text
+softmax(logits / T)
+```
+
+- `T < 1`: distribution sắc hơn, ít sáng tạo.
+- `T > 1`: distribution phẳng hơn, đa dạng hơn.
+
+### Top-k
+
+Chỉ sample trong top k token xác suất cao nhất.
+
+### Top-p / nucleus
+
+Chọn tập token nhỏ nhất có tổng xác suất ≥ p (vd 0.9), rồi sample trong đó.
+
+<Callout type="tip" title="Preset decoding thực tế">
+- Chat factual: temperature 0–0.3, top_p 0.8–1.0.
+- Creative writing: temperature 0.7–1.0.
+- Code generation: thường thấp hơn để ổn định.
+</Callout>
+
+## Beam search
+
+Beam search giữ `k` chuỗi tốt nhất tại mỗi bước. Phổ biến trong translation/summarization cổ điển, ít dùng cho chat LLM vì output dễ khô và thiếu đa dạng.
+
+```text
+beam=3: giữ 3 candidate sequence tốt nhất, mở rộng từng bước
+```
+
+## Điểm cần nhớ
+
+- Autoregressive LM học `P(next token | previous tokens)` — objective của GPT/Claude/LLaMA.
+- Masked LM (BERT) che token và dự đoán, tốt cho understanding hai chiều.
+- Perplexity = exp(cross-entropy); thấp hơn thường tốt hơn nhưng chỉ so cùng tokenizer/data.
+- Greedy deterministic nhưng dễ lặp; sampling đa dạng hơn.
+- Temperature điều chỉnh độ sắc distribution; top-k/top-p giới hạn vùng sample.
+- Beam search tốt cho seq2seq cổ điển, không phải mặc định tốt nhất cho chat.
+
+Bài tiếp: Key Pretrained Models — bản đồ BERT/GPT/Claude/Gemini/T5/LLaMA/Mistral/Qwen và khi dùng loại nào.

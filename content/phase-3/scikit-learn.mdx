@@ -1,0 +1,426 @@
+Scikit-Learn là “xưởng thực hành” của Machine Learning classic. Nó không chỉ là thư viện model; nó là một **hệ sinh thái workflow**: preprocessing, pipeline, cross-validation, hyperparameter search, metrics, persistence. Nếu bạn biết dùng sklearn đúng, bạn sẽ tránh được rất nhiều lỗi production như leakage, preprocessing lệch train/test, và model khó tái lập.
+
+Trong chương này, tôi sẽ giảng sklearn như cách tôi hướng dẫn sinh viên xây ML pipeline thật: không fit linh tinh, không copy-paste preprocessing ngoài model, không lưu model thiếu vectorizer, và luôn đánh giá có hệ thống.
+
+## Why this matters
+
+Bạn build spam classifier:
+
+```text
+raw text → TF-IDF → Logistic Regression → prediction
+```
+
+Nếu bạn chỉ lưu LogisticRegression mà quên TfidfVectorizer, production không thể biến text mới thành vector đúng. Nếu bạn fit vectorizer trên toàn bộ data trước CV, bạn leakage. Nếu bạn scale train và test bằng scaler khác nhau, prediction sai.
+
+Scikit-Learn Pipeline giải quyết các vấn đề này bằng cách đóng gói toàn bộ workflow:
+
+```text
+raw input → preprocessing → model
+```
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Hiểu API `fit`, `transform`, `predict`, `predict_proba`.
+2. Dùng transformers như StandardScaler, OneHotEncoder, TfidfVectorizer đúng cách.
+3. Xây Pipeline để tránh leakage.
+4. Dùng ColumnTransformer cho dữ liệu hỗn hợp numeric/categorical/text.
+5. Tune hyperparameters của pipeline bằng GridSearchCV.
+6. Lưu/nạp pipeline bằng joblib.
+7. Thiết kế evaluation workflow sạch.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Train/validation/test split.
+- Logistic Regression, RandomForest.
+- Hyperparameter tuning.
+- Pandas DataFrame.
+
+## Sklearn API mental model
+
+Sklearn có hai loại object chính:
+
+### Estimator
+
+Object có `.fit()` để học từ data.
+
+```python
+model.fit(X_train, y_train)
+```
+
+### Transformer
+
+Object học cách biến đổi data:
+
+```python
+scaler.fit(X_train)
+X_train_scaled = scaler.transform(X_train)
+```
+
+Có shortcut:
+
+```python
+X_train_scaled = scaler.fit_transform(X_train)
+```
+
+### Predictor
+
+Model đã fit có:
+
+```python
+y_pred = model.predict(X_test)
+y_prob = model.predict_proba(X_test)
+```
+
+<Callout type="warning" title="fit nghĩa là học từ data">
+Bất cứ object nào có `fit` đều học thông tin từ data: mean/std, vocabulary, categories, model weights. Vì vậy, `fit` trên test set là leakage hoặc inconsistency.
+</Callout>
+
+## Preprocessing
+
+### Numeric scaling
+
+```python
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_train)
+```
+
+StandardScaler:
+
+```text
+x_scaled = (x - mean_train) / std_train
+```
+
+Dùng cho logistic regression, SVM, KMeans, neural nets. Tree models ít cần scaling.
+
+### Categorical encoding
+
+```python
+from sklearn.preprocessing import OneHotEncoder
+
+encoder = OneHotEncoder(handle_unknown="ignore")
+X_cat = encoder.fit_transform(df[["country", "plan"]])
+```
+
+`handle_unknown="ignore"` rất quan trọng production: nếu user có country mới, model không crash.
+
+### Text vectorization
+
+```python
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2))
+X_text = vectorizer.fit_transform(texts_train)
+```
+
+Vectorizer học vocabulary từ train. Nếu fit trên toàn data, validation/test terms leak vào model.
+
+## Pipeline
+
+Pipeline nối nhiều bước thành một estimator duy nhất.
+
+```python
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+
+pipe = Pipeline([
+    ("scaler", StandardScaler()),
+    ("model", LogisticRegression(max_iter=1000)),
+])
+
+pipe.fit(X_train, y_train)
+pipe.predict(X_test)
+```
+
+Khi gọi `pipe.fit`:
+
+1. `scaler.fit_transform(X_train)`
+2. `model.fit(X_train_scaled, y_train)`
+
+Khi gọi `pipe.predict`:
+
+1. `scaler.transform(X_test)`
+2. `model.predict(X_test_scaled)`
+
+<Callout type="tip" title="Pipeline là vaccine chống leakage">
+Trong cross-validation, Pipeline đảm bảo scaler/vectorizer được fit lại chỉ trên train fold của từng fold. Đây là lý do mọi sklearn workflow nghiêm túc nên dùng Pipeline.
+</Callout>
+
+## ColumnTransformer
+
+Dữ liệu thật thường có nhiều loại cột:
+
+- Numeric: age, usage.
+- Categorical: country, plan.
+- Text: support_message.
+
+ColumnTransformer áp transformer khác nhau cho từng cột.
+
+```python
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+
+numeric_features = ["age", "monthly_usage"]
+categorical_features = ["country", "plan"]
+text_feature = "message"
+
+preprocess = ColumnTransformer([
+    ("num", StandardScaler(), numeric_features),
+    ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_features),
+    ("text", TfidfVectorizer(max_features=5000, ngram_range=(1, 2)), text_feature),
+])
+
+pipe = Pipeline([
+    ("prep", preprocess),
+    ("model", LogisticRegression(max_iter=1000)),
+])
+```
+
+## Worked example: mixed data pipeline
+
+Dataset nhỏ:
+
+```python
+import pandas as pd
+
+train_df = pd.DataFrame({
+    "age": [25, 40, 35, 22],
+    "monthly_usage": [10, 200, 50, 5],
+    "country": ["US", "VN", "US", "IN"],
+    "plan": ["free", "pro", "pro", "free"],
+    "message": [
+        "please refund my payment",
+        "how to deploy with api",
+        "charged twice refund",
+        "login issue reset password",
+    ],
+})
+y_train = [1, 0, 1, 0]  # 1 = billing/refund issue
+```
+
+Pipeline ở trên có thể fit trực tiếp DataFrame. Khi production có row mới:
+
+```python
+new_df = pd.DataFrame({
+    "age": [30],
+    "monthly_usage": [20],
+    "country": ["BR"],   # category chưa thấy
+    "plan": ["free"],
+    "message": ["I want a refund"],
+})
+
+pred = pipe.predict(new_df)
+```
+
+Nhờ `handle_unknown="ignore"`, country `BR` không crash.
+
+## Hyperparameter search với Pipeline
+
+Tên parameter trong pipeline dùng `step__param`.
+
+```python
+from sklearn.model_selection import GridSearchCV
+
+param_grid = {
+    "prep__text__ngram_range": [(1, 1), (1, 2)],
+    "prep__text__max_features": [1000, 5000],
+    "model__C": [0.1, 1, 10],
+}
+
+grid = GridSearchCV(
+    pipe,
+    param_grid,
+    cv=5,
+    scoring="f1",
+    n_jobs=-1,
+)
+
+grid.fit(train_df, y_train)
+print(grid.best_params_)
+```
+
+## Model persistence
+
+Lưu **toàn bộ pipeline**, không chỉ model cuối:
+
+```python
+import joblib
+
+joblib.dump(grid.best_estimator_, "intent_classifier.joblib")
+loaded = joblib.load("intent_classifier.joblib")
+loaded.predict(new_df)
+```
+
+<Callout type="danger" title="Không load joblib từ nguồn không tin cậy">
+joblib dùng pickle, có thể thực thi code khi load. Chỉ load artifact do pipeline build của bạn tạo ra. Với model serving, artifact nên đến từ CI/CD hoặc model registry đáng tin.
+</Callout>
+
+## Evaluation workflow sạch
+
+```python
+from sklearn.metrics import classification_report, confusion_matrix
+
+y_pred = best_model.predict(X_test)
+print(confusion_matrix(y_test, y_pred))
+print(classification_report(y_test, y_pred))
+```
+
+Với classifier có xác suất:
+
+```python
+proba = best_model.predict_proba(X_val)[:, 1]
+threshold = 0.35
+y_pred = (proba >= threshold).astype(int)
+```
+
+Tune threshold trên validation, sau đó evaluate trên test.
+
+## Implementation lab: full sklearn workflow
+
+```python
+import pandas as pd
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report
+
+# df có columns: age, usage, country, plan, message, label
+X = df.drop(columns=["label"])
+y = df["label"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.2,
+    stratify=y,
+    random_state=42,
+)
+
+preprocess = ColumnTransformer([
+    ("num", StandardScaler(), ["age", "usage"]),
+    ("cat", OneHotEncoder(handle_unknown="ignore"), ["country", "plan"]),
+    ("text", TfidfVectorizer(), "message"),
+])
+
+pipe = Pipeline([
+    ("prep", preprocess),
+    ("model", LogisticRegression(max_iter=1000)),
+])
+
+params = {
+    "prep__text__ngram_range": [(1, 1), (1, 2)],
+    "model__C": [0.1, 1, 10],
+}
+
+grid = GridSearchCV(pipe, params, scoring="f1", cv=5, n_jobs=-1)
+grid.fit(X_train, y_train)
+
+print(grid.best_params_)
+print(classification_report(y_test, grid.predict(X_test)))
+```
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: preprocessing ngoài Pipeline">
+Nếu bạn scale/vectorize trước CV, rất dễ leakage. Đưa preprocessing vào Pipeline để sklearn fit đúng từng fold.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: lưu model nhưng quên preprocessor">
+Production cần cùng scaler/vectorizer/vocabulary. Lưu toàn bộ Pipeline bằng joblib.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: category mới làm crash production">
+OneHotEncoder mặc định có thể lỗi khi gặp category chưa thấy. Dùng `handle_unknown="ignore"`.
+</Callout>
+
+Checklist:
+
+1. Preprocessing có nằm trong Pipeline không?
+2. Column names ở production có giống train không?
+3. Category mới có được handle không?
+4. Text vectorizer có được lưu cùng model không?
+5. GridSearchCV dùng `step__param` đúng không?
+6. Artifact có version data/code không?
+7. Test set có được evaluate sau cùng không?
+
+## Practice exercises
+
+1. Tạo Pipeline gồm StandardScaler + LogisticRegression cho numeric data.
+2. Tạo ColumnTransformer cho 2 numeric cột và 1 categorical cột.
+3. Thêm TfidfVectorizer cho cột text trong ColumnTransformer.
+4. Dùng GridSearchCV tune `model__C` và `prep__text__ngram_range`.
+5. Lưu pipeline bằng joblib, load lại, predict một sample mới.
+
+## Knowledge check
+
+1. `fit` khác `transform` thế nào?
+2. Vì sao Pipeline chống leakage?
+3. ColumnTransformer dùng khi nào?
+4. `model__C` nghĩa là gì trong GridSearchCV?
+5. Vì sao nên lưu toàn bộ pipeline?
+6. `handle_unknown="ignore"` giải quyết vấn đề gì?
+7. `predict_proba` dùng để làm gì?
+
+## Answer key
+
+1. `fit` học thông tin từ data; `transform` áp dụng biến đổi đã học.
+2. Vì preprocessing được fit riêng trên train fold trong CV, không nhìn validation fold.
+3. Khi data có nhiều loại cột cần transformer khác nhau.
+4. Parameter `C` của step tên `model`.
+5. Vì production cần cùng preprocessing/vocabulary/scaler với training.
+6. Category mới trong production không làm encoder crash.
+7. Lấy xác suất để tune threshold, ranking hoặc calibration.
+
+## Mini-project: Production-ready intent classifier
+
+**Task:** Build sklearn pipeline cho support intent classification.
+
+**Data:** Tự tạo hoặc dùng dataset public có cột:
+
+- `message` text
+- `country` categorical
+- `plan` categorical
+- `account_age_days` numeric
+- `label` intent
+
+**Deliverables:**
+
+- Full Pipeline + ColumnTransformer.
+- GridSearchCV.
+- Classification report trên test.
+- Saved `joblib` artifact.
+- Script `predict.py` load artifact và predict 3 samples mới.
+
+**Success criteria:**
+
+- Không preprocessing ngoài Pipeline.
+- Có `handle_unknown="ignore"`.
+- Có search params với `step__param`.
+- Artifact load lại predict được.
+- Có ghi chú về metric và threshold.
+
+## Điểm cần nhớ
+
+- Sklearn API xoay quanh `fit`, `transform`, `predict`.
+- `fit` học từ data, nên fit sai chỗ gây leakage.
+- Pipeline đóng gói preprocessing + model và là best practice.
+- ColumnTransformer xử lý numeric/categorical/text trong cùng pipeline.
+- GridSearchCV tune pipeline bằng `step__param`.
+- Lưu toàn bộ Pipeline, không chỉ estimator cuối.
+- `handle_unknown="ignore"` quan trọng cho categorical production.
+
+## Next chapter bridge
+
+Bạn đã hoàn thành Phase 3: ML fundamentals, linear/logistic models, trees/ensembles, unsupervised learning, tuning và sklearn workflows. Phase 4 sẽ chuyển từ ML classic sang **Deep Learning** — nơi model không chỉ học decision boundary mà còn học representation nhiều tầng qua neural networks.

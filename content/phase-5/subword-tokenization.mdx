@@ -1,0 +1,117 @@
+LLM không đọc text trực tiếp. Nó đọc **token IDs**. Tokenization là bước biến text thành chuỗi số. Subword tokenization là lý do model xử lý từ hiếm, multilingual và code tốt hơn word-level tokenizer. Bài này covers BPE, WordPiece, SentencePiece, special tokens và vocabulary tradeoffs.
+
+## Vì sao subword?
+
+Word-level tokenizer gặp vấn đề OOV (out-of-vocabulary): từ mới không có trong vocab. Character-level thì sequence quá dài. Subword cân bằng: từ phổ biến giữ nguyên, từ hiếm tách thành mảnh.
+
+```text
+"unbelievable" → ["un", "believ", "able"]
+"ChatGPT" → ["Chat", "G", "PT"]  (tùy tokenizer)
+```
+
+## Byte Pair Encoding (BPE)
+
+BPE bắt đầu từ ký tự/byte, rồi merge cặp xuất hiện nhiều nhất:
+
+```text
+l o w
+l o w e r
+n e w e s t
+
+merge: l+o -> lo, lo+w -> low, e+r -> er, ...
+```
+
+GPT family dùng BPE/byte-level BPE (tiktoken).
+
+```python
+import tiktoken
+enc = tiktoken.encoding_for_model("gpt-4")
+ids = enc.encode("Hello AI engineer")
+print(ids)
+print(enc.decode(ids))
+```
+
+## WordPiece
+
+WordPiece (BERT) giống BPE nhưng chọn merge tối đa likelihood của corpus. Token con thường đánh dấu bằng `##`:
+
+```text
+playing → play ##ing
+unaffordable → una ##ff ##ord ##able
+```
+
+```python
+from transformers import AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained("bert-base-uncased")
+print(tok.tokenize("unaffordable"))
+```
+
+## SentencePiece
+
+SentencePiece tokenizes text thô, không cần tách space trước. Nó dùng ký hiệu `▁` để biểu thị space. T5/LLaMA dùng SentencePiece hoặc biến thể.
+
+```python
+from transformers import AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained("t5-small")
+print(tok.tokenize("Hello world"))
+```
+
+<Callout type="info" title="Tokenizer là một phần của model">
+Không đổi tokenizer tùy tiện. Embedding matrix của model có hàng tương ứng với vocab tokenizer. Tokenizer khác → token IDs khác → model hiểu sai hoàn toàn.
+</Callout>
+
+## Special tokens
+
+| Token | Vai trò |
+|---|---|
+| `[CLS]` | đại diện câu trong BERT |
+| `[SEP]` | phân tách câu |
+| `[PAD]` | padding batch |
+| `[MASK]` | masked LM training |
+| `<bos>` | beginning of sequence |
+| `<eos>` | end of sequence |
+
+```python
+encoded = tok(
+    "Hello world",
+    padding=True,
+    truncation=True,
+    max_length=128,
+    return_tensors="pt",
+)
+print(encoded["input_ids"], encoded["attention_mask"])
+```
+
+`attention_mask` cho model biết token nào thật, token nào padding.
+
+## Vocabulary size tradeoff
+
+Vocab lớn:
+
+- Token sequence ngắn hơn.
+- Embedding matrix lớn hơn.
+- Ít split từ hiếm.
+
+Vocab nhỏ:
+
+- Model nhẹ hơn.
+- Sequence dài hơn.
+- Tốt hơn cho rare/multilingual nếu subword tốt.
+
+<Callout type="warning" title="Token count không bằng word count">
+Một từ có thể thành nhiều token. Tiếng Việt, code, emoji, URL thường tốn nhiều token. Khi tính cost LLM, luôn dùng tokenizer của provider (`tiktoken`, tokenizer HF), không ước lượng bằng số từ.
+</Callout>
+
+## Điểm cần nhớ
+
+- LLM đọc token IDs, không đọc raw text.
+- Subword cân bằng word-level và char-level, xử lý OOV tốt.
+- GPT dùng BPE/byte-level BPE; BERT dùng WordPiece; T5/LLaMA dùng SentencePiece/variant.
+- Special tokens có nghĩa riêng và ảnh hưởng input format.
+- `attention_mask` phân biệt token thật và padding.
+- Vocab size tradeoff giữa sequence length và model size.
+- Luôn tính token bằng tokenizer đúng model/provider.
+
+Bài tiếp: Transformer Architecture — nơi token IDs thành embeddings rồi đi qua self-attention Q/K/V.

@@ -1,0 +1,271 @@
+PyTorch là công cụ chính để biến ý tưởng deep learning thành model chạy được. Nó vừa gần toán (tensor, autograd), vừa linh hoạt cho research, vừa đủ mạnh cho production. Nếu bạn muốn fine-tune HuggingFace model, viết custom loss, debug GPU memory, hoặc build mini-GPT, bạn phải nắm PyTorch.
+
+## Why this matters
+
+LLM engineering không phải lúc nào cũng chỉ gọi API. Bạn sẽ gặp PyTorch khi:
+
+- fine-tune BERT/LLaMA với HuggingFace,
+- train reward model,
+- implement LoRA,
+- debug CUDA OOM,
+- write custom Dataset/DataLoader,
+- export model,
+- optimize inference.
+
+<Callout type="info" title="HuggingFace dùng PyTorch bên dưới">
+Ngay cả khi bạn gọi `Trainer`, phía dưới vẫn là PyTorch: tensors, modules, gradients, optimizers. Hiểu PyTorch giúp bạn không bị framework che mắt.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Tạo và thao tác tensor CPU/GPU.
+2. Hiểu `requires_grad`, computation graph và `backward()`.
+3. Viết model bằng `nn.Module`.
+4. Tạo Dataset/DataLoader custom.
+5. Viết training loop chuẩn.
+6. Dùng `model.train()`, `model.eval()`, `torch.no_grad()` đúng.
+7. Save/load `state_dict` và checkpoint.
+
+## Tensor basics
+
+```python
+import torch
+
+x = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+y = torch.zeros(2, 3)
+z = torch.randn(4, 5)
+
+print(x.shape, x.dtype, x.device)
+```
+
+GPU:
+
+```python
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+x = x.to(device)
+```
+
+<Callout type="warning" title="Tensor cùng device">
+Operation giữa tensor CPU và GPU sẽ lỗi. Khi thấy error kiểu “Expected all tensors to be on the same device”, kiểm tra `.device` của model và data.
+</Callout>
+
+## Autograd
+
+```python
+w = torch.tensor([2.0], requires_grad=True)
+x = torch.tensor([3.0])
+y = w * x
+loss = (y - 10) ** 2
+loss.backward()
+print(w.grad)
+```
+
+PyTorch xây computation graph khi operations liên quan tensor `requires_grad=True`. `backward()` tính gradient theo chain rule.
+
+## nn.Module
+
+```python
+from torch import nn
+
+class MLP(nn.Module):
+    def __init__(self, input_dim, hidden_dim, num_classes):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, num_classes),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+```
+
+Calling `model(x)` tự gọi `forward`.
+
+## Dataset and DataLoader
+
+```python
+from torch.utils.data import Dataset, DataLoader
+
+class TabularDataset(Dataset):
+    def __init__(self, X, y):
+        self.X = torch.tensor(X, dtype=torch.float32)
+        self.y = torch.tensor(y, dtype=torch.long)
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.y[idx]
+
+loader = DataLoader(TabularDataset(X_train, y_train), batch_size=32, shuffle=True)
+```
+
+DataLoader lo batching, shuffling, multiprocessing.
+
+## Training loop chuẩn
+
+```python
+model = MLP(input_dim=20, hidden_dim=64, num_classes=2).to(device)
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+loss_fn = nn.CrossEntropyLoss()
+
+for epoch in range(10):
+    model.train()
+    for xb, yb in train_loader:
+        xb, yb = xb.to(device), yb.to(device)
+
+        optimizer.zero_grad()
+        logits = model(xb)
+        loss = loss_fn(logits, yb)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for xb, yb in val_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            pred = model(xb).argmax(dim=1)
+            correct += (pred == yb).sum().item()
+            total += len(yb)
+    print(epoch, correct / total)
+```
+
+## Worked example: shape tracking
+
+Input batch:
+
+```text
+xb: (32, 20)
+Linear(20,64) → (32,64)
+ReLU → (32,64)
+Linear(64,2) → logits (32,2)
+labels: (32,)
+CrossEntropyLoss(logits, labels) → scalar
+```
+
+Nếu labels shape `(32,1)` hoặc dtype float, CrossEntropyLoss có thể lỗi. Labels cần `torch.long` shape `(batch,)` cho class indices.
+
+## Save and load
+
+Khuyến nghị lưu `state_dict`:
+
+```python
+torch.save(model.state_dict(), "model.pt")
+
+model = MLP(20, 64, 2)
+model.load_state_dict(torch.load("model.pt", map_location="cpu"))
+model.eval()
+```
+
+Checkpoint full:
+
+```python
+torch.save({
+    "model": model.state_dict(),
+    "optimizer": optimizer.state_dict(),
+    "epoch": epoch,
+}, "checkpoint.pt")
+```
+
+## Scheduler
+
+```python
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+
+for epoch in range(10):
+    train_one_epoch()
+    scheduler.step()
+```
+
+Warmup/cosine scheduler phổ biến trong transformer training.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: quên no_grad khi validation">
+Không dùng `torch.no_grad()` làm PyTorch lưu graph, tốn memory và chậm.
+</Callout>
+
+<Callout type="danger" title="Mistake 2: labels sai dtype">
+`nn.CrossEntropyLoss` cần labels là class index dtype `torch.long`, không phải one-hot float.
+</Callout>
+
+<Callout type="warning" title="Mistake 3: model và data khác device">
+Luôn `.to(device)` cho cả model và batch tensors.
+</Callout>
+
+Checklist:
+
+1. Model/data cùng device chưa?
+2. Label dtype/shape đúng loss chưa?
+3. Có `zero_grad()` không?
+4. Có `model.eval()` và `no_grad()` khi validation không?
+5. Loss có NaN không?
+6. Gradient norm có explode không?
+7. Save/load có cùng architecture không?
+
+## Practice exercises
+
+1. Tạo tensor `(3,4)`, chuyển GPU nếu có.
+2. Tính gradient của `(w*x - y)^2` với PyTorch.
+3. Viết Dataset cho list texts đã tokenized thành IDs.
+4. Viết training loop cho binary classifier.
+5. Save checkpoint gồm model + optimizer + epoch, load lại.
+
+## Knowledge check
+
+1. `requires_grad=True` làm gì?
+2. `loss.backward()` tính gì?
+3. Vì sao cần `optimizer.zero_grad()`?
+4. `model.train()` và `model.eval()` khác gì?
+5. `torch.no_grad()` dùng khi nào?
+6. `state_dict` là gì?
+7. DataLoader giúp gì?
+
+## Answer key
+
+1. Yêu cầu PyTorch track operations để tính gradient.
+2. Gradient của loss theo parameters trong graph.
+3. Vì gradient tích lũy mặc định.
+4. Bật/tắt behavior như dropout/batchnorm.
+5. Validation/inference để không lưu graph.
+6. Dict chứa tensor parameters/buffers của model.
+7. Batching, shuffling, multiprocessing data loading.
+
+## Mini-project: PyTorch training from scratch
+
+**Task:** Train MLP trên dataset classification tabular.
+
+**Deliverables:**
+
+- Custom Dataset/DataLoader.
+- MLP `nn.Module`.
+- Training loop + validation loop.
+- Save best checkpoint.
+- Plot train/val loss.
+
+**Success criteria:**
+
+- Device handling đúng.
+- `train/eval/no_grad` đúng.
+- Loss giảm.
+- Checkpoint load lại inference được.
+
+## Điểm cần nhớ
+
+- PyTorch tensor là nền của mọi model training.
+- Autograd tự tính gradient từ computation graph.
+- `nn.Module` tổ chức parameters và forward pass.
+- Dataset/DataLoader chuẩn hóa input pipeline.
+- Training loop chuẩn là kỹ năng bắt buộc.
+- Validation cần `eval()` + `no_grad()`.
+- Lưu `state_dict` để deploy/reload ổn định.
+
+## Next chapter bridge
+
+Bạn đã biết viết và train model. Nhưng trong AI hiện đại, hiếm khi train từ đầu. Chương tiếp theo: **Transfer Learning** — cách tận dụng pretrained model và fine-tune đúng cách.

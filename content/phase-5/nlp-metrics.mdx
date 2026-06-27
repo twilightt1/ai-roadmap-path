@@ -1,0 +1,96 @@
+NLP evaluation khó hơn ML tabular vì output là text tự do. Một câu trả lời có nhiều cách đúng. Bài này covers metrics classic (accuracy/F1), generation metrics (BLEU/ROUGE), semantic metrics (BERTScore), perplexity, exact match, và human evaluation.
+
+## Classification metrics
+
+Với classification/NER/intent, dùng metrics quen thuộc:
+
+- Accuracy khi class cân bằng.
+- Precision/Recall/F1 khi imbalance.
+- Macro F1 để không bỏ qua class nhỏ.
+
+```python
+from sklearn.metrics import classification_report
+print(classification_report(y_true, y_pred))
+```
+
+NER thường dùng entity-level F1, không chỉ token-level accuracy.
+
+## BLEU — machine translation
+
+BLEU đo overlap n-gram giữa output và reference. Tốt cho translation cổ điển, nhưng hạn chế với paraphrase.
+
+```python
+import evaluate
+bleu = evaluate.load("bleu")
+bleu.compute(predictions=["the cat is on the mat"], references=[["the cat sat on the mat"]])
+```
+
+## ROUGE — summarization
+
+ROUGE đo overlap giữa summary và reference:
+
+- ROUGE-1: unigram overlap.
+- ROUGE-2: bigram overlap.
+- ROUGE-L: longest common subsequence.
+
+ROUGE phổ biến cho summarization nhưng thưởng copy text nhiều, không đo factuality tốt.
+
+<Callout type="warning" title="ROUGE cao không đảm bảo đúng sự thật">
+Summary có thể overlap nhiều từ với reference nhưng vẫn hallucinate số liệu. Với LLM summarization production, cần thêm factuality/faithfulness evaluation hoặc human review.
+</Callout>
+
+## Perplexity
+
+Perplexity đánh giá language model next-token prediction. PPL thấp = model ít bối rối hơn. Dùng cho pretraining/fine-tuning LM, không trực tiếp đo chất lượng chat.
+
+## BERTScore
+
+BERTScore dùng contextual embeddings để đo semantic similarity giữa prediction và reference. Nó bắt paraphrase tốt hơn BLEU/ROUGE.
+
+```python
+bertscore = evaluate.load("bertscore")
+result = bertscore.compute(
+    predictions=["a cat sits on a mat"],
+    references=["the cat is on the mat"],
+    lang="en",
+)
+```
+
+## Exact Match (EM)
+
+EM yêu cầu output khớp chính xác reference. Dùng cho QA ngắn:
+
+```text
+pred: "Paris"
+ref:  "Paris"  → 1
+pred: "Paris, France"
+ref:  "Paris"  → 0 (dù đúng về nghĩa)
+```
+
+Thường dùng EM + F1 cho extractive QA.
+
+## Human evaluation
+
+Với open-ended generation, human eval vẫn là gold standard. Rubric thường gồm:
+
+- Correctness.
+- Helpfulness.
+- Faithfulness/groundedness.
+- Safety.
+- Style/format adherence.
+
+<Callout type="tip" title="LLM-as-judge cần kiểm soát bias">
+LLM-as-judge tiện và rẻ hơn human eval, nhưng có bias: thích câu dài, thích model cùng provider, nhạy prompt. Dùng pairwise comparison, blind model names, và calibration với human labels.
+</Callout>
+
+## Điểm cần nhớ
+
+- Classification/NER dùng precision/recall/F1; macro F1 cho imbalance.
+- BLEU tốt cho translation n-gram overlap nhưng kém với paraphrase.
+- ROUGE phổ biến cho summarization nhưng không đảm bảo factuality.
+- Perplexity đo LM objective, không trực tiếp đo chat quality.
+- BERTScore đo semantic similarity tốt hơn overlap metrics.
+- EM nghiêm ngặt, dùng cho QA ngắn.
+- Human eval/LLM-as-judge cần rubric rõ và kiểm soát bias.
+
+Bài tiếp: NLP Libraries — NLTK, spaCy, HuggingFace, sentence-transformers, tiktoken, evaluate.

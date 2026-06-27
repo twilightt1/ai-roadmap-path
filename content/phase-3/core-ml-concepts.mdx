@@ -1,0 +1,484 @@
+Machine Learning Fundamentals là nơi bạn học cách **suy nghĩ như một người xây model**, không chỉ như người gọi API. Nếu Phase 1 dạy bạn viết Python, Phase 2 dạy bạn toán nền, thì Phase 3 dạy bạn cách biến dữ liệu thành hệ thống dự đoán có thể đo lường, debug và cải thiện.
+
+Trong sản phẩm AI thực tế, bạn sẽ gặp rất nhiều bài toán không cần LLM lớn: phân loại ticket support, phát hiện churn, ranking lead sales, dự đoán user có convert không, phân nhóm user, hoặc đánh giá chất lượng response. Nếu bạn không hiểu train/validation/test, leakage, overfitting, metrics, bạn có thể build một model có demo rất đẹp nhưng fail hoàn toàn khi deploy.
+
+## Why this matters
+
+Hãy tưởng tượng bạn đang xây một hệ thống **AI customer support**. Một user gửi message:
+
+> "I was charged twice for my subscription. Please refund one payment."
+
+Bạn có nhiều lựa chọn:
+
+1. Dùng LLM đọc message và trả lời ngay.
+2. Dùng classifier nhỏ để xác định intent: `billing_refund`.
+3. Dùng router: message nhạy cảm về billing → chuyển human.
+4. Dùng RAG tìm policy refund rồi LLM soạn câu trả lời.
+
+Nếu bạn không hiểu ML fundamentals, bạn không biết:
+
+- Classifier intent có đáng tin không?
+- Accuracy 95% có đủ không?
+- Nếu model bỏ sót refund request thì hậu quả gì?
+- Data train có leakage từ test không?
+- Model overfit vào vài phrase trong training không?
+- Metric nào phù hợp: accuracy, recall, precision, F1?
+
+<Callout type="danger" title="Demo tốt không bằng model tốt">
+Một model có thể hoạt động tuyệt vời trên 20 ví dụ demo nhưng thất bại trên production vì data distribution khác, leakage, class imbalance hoặc metric sai. ML fundamentals giúp bạn phát hiện những vấn đề này trước khi người dùng phát hiện.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Phân biệt supervised, unsupervised và reinforcement learning bằng ví dụ AI product.
+2. Thiết kế train/validation/test split đúng, tránh data leakage.
+3. Giải thích overfitting, underfitting và bias-variance tradeoff bằng learning curves.
+4. Chọn metric phù hợp cho classification/regression, đặc biệt khi class imbalance.
+5. Dùng cross-validation để estimate performance ổn định hơn.
+6. Xây một evaluation workflow cơ bản cho model ML production.
+
+## Prerequisites
+
+Bạn nên nắm:
+
+- Python functions, lists, dicts, Pandas cơ bản.
+- Linear algebra: vector, dot product.
+- Probability basics: conditional probability.
+- Optimization: loss, gradient descent.
+
+Nếu chưa chắc, quay lại Phase 1 và Phase 2 trước khi học chương này.
+
+## Supervised, unsupervised, reinforcement learning
+
+### Supervised learning
+
+Supervised learning là học từ cặp `(input, label)`.
+
+```text
+x = email text
+ y = spam / not spam
+```
+
+Model học mapping:
+
+```text
+f(x) → y
+```
+
+Có hai nhóm lớn:
+
+| Bài toán | Target | Ví dụ |
+|---|---|---|
+| Classification | Nhãn rời rạc | spam/not spam, intent, sentiment |
+| Regression | Giá trị liên tục | giá nhà, latency, monthly spend |
+
+Ví dụ classification:
+
+```python
+X = [
+    "Win money now!!!",
+    "Meeting at 10am tomorrow",
+    "Your invoice is attached",
+]
+y = [1, 0, 0]  # 1=spam, 0=not spam
+```
+
+Ví dụ regression:
+
+```python
+X = [[100], [500], [1000]]  # number of tokens
+y = [0.001, 0.005, 0.010]  # API cost in dollars
+```
+
+### Unsupervised learning
+
+Unsupervised learning không có label. Model tìm cấu trúc:
+
+```text
+x only, no y
+```
+
+Ví dụ:
+
+- Cluster user theo behavior.
+- Cluster support tickets theo topic.
+- Giảm chiều embeddings để visualize.
+- Phát hiện anomaly trong traffic.
+
+### Reinforcement learning
+
+Reinforcement learning có agent, environment, action, reward.
+
+```text
+agent takes action → environment responds → reward
+```
+
+Trong LLM:
+
+- Model sinh response.
+- Reward model hoặc human preference đánh giá.
+- Policy được cập nhật để response tốt hơn.
+
+Đây là nền của RLHF/PPO/DPO ở các phase sau.
+
+<Callout type="info" title="AI Engineer cần hiểu cả ba mức">
+Bạn không cần tự train robot RL, nhưng phải biết: supervised cho classifier/reranker, unsupervised cho clustering/embedding analysis, reinforcement learning cho RLHF và agent training. Ba tư duy này xuất hiện liên tục trong AI systems.
+</Callout>
+
+## Dataset split: train, validation, test
+
+Một lỗi rất phổ biến của người mới là train model rồi đánh giá lại trên chính data train. Điều này giống như cho học sinh học đúng đề thi rồi bảo điểm cao chứng minh học sinh giỏi.
+
+Ta cần chia dữ liệu:
+
+| Split | Vai trò | Được dùng để cập nhật model? |
+|---|---|---|
+| Train | Học parameters | Có |
+| Validation | Chọn hyperparameters, threshold, early stopping | Không trực tiếp |
+| Test | Đánh giá cuối cùng | Không |
+
+```python
+from sklearn.model_selection import train_test_split
+
+X_train, X_temp, y_train, y_temp = train_test_split(
+    X,
+    y,
+    test_size=0.30,
+    random_state=42,
+    stratify=y,
+)
+
+X_val, X_test, y_val, y_test = train_test_split(
+    X_temp,
+    y_temp,
+    test_size=0.50,
+    random_state=42,
+    stratify=y_temp,
+)
+```
+
+`stratify=y` giữ tỷ lệ class tương tự giữa các split. Nếu spam chỉ chiếm 5%, không stratify có thể làm validation/test gần như không có spam.
+
+## Data leakage
+
+Data leakage là khi thông tin từ validation/test lọt vào training. Đây là một trong những lỗi nguy hiểm nhất vì nó làm metric đẹp giả tạo.
+
+### Ví dụ leakage đơn giản
+
+Sai:
+
+```python
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)  # SAI: fit trên toàn bộ data
+
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y)
+```
+
+Đúng:
+
+```python
+X_train, X_test, y_train, y_test = train_test_split(X, y)
+
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+```
+
+Tại sao? Vì mean/std của test data đã bị dùng để fit scaler nếu bạn scale trước khi split. Model vô tình được biết distribution test.
+
+<Callout type="danger" title="Leakage trong AI product rất tinh vi">
+Leakage không chỉ là scaler. Ví dụ: dùng feature `days_until_cancel` để dự đoán churn — nhưng feature này chỉ biết sau khi user đã cancel. Hoặc split random theo row trong khi cùng user có nhiều row ở cả train và test. Production fail vì test không còn độc lập.
+</Callout>
+
+## Overfitting và underfitting
+
+### Underfitting
+
+Model quá đơn giản, không học được pattern.
+
+```text
+train performance: poor
+val performance: poor
+```
+
+Ví dụ: dùng linear model cho quan hệ cực phi tuyến mà không có feature engineering.
+
+### Overfitting
+
+Model học thuộc training data, không generalize.
+
+```text
+train performance: excellent
+val performance: poor
+```
+
+Ví dụ: decision tree không giới hạn depth, học thuộc từng sample.
+
+### Good fit
+
+```text
+train performance: good
+val performance: good
+```
+
+Không cần train score hoàn hảo. Production model tốt là model generalize.
+
+## Bias-variance tradeoff
+
+Hãy tưởng tượng bạn bắn tên vào bia:
+
+- Bias cao: mũi tên lệch xa tâm theo một hướng. Model sai có hệ thống.
+- Variance cao: mũi tên rải lung tung. Model quá nhạy với data.
+
+| Trạng thái | Train error | Validation error | Diễn giải |
+|---|---:|---:|---|
+| High bias | Cao | Cao | Model quá đơn giản |
+| High variance | Thấp | Cao | Model overfit |
+| Good fit | Thấp vừa | Thấp vừa | Generalize tốt |
+
+Cách xử lý:
+
+| Vấn đề | Cách xử lý |
+|---|---|
+| High bias | model phức tạp hơn, thêm feature, train lâu hơn |
+| High variance | regularization, thêm data, augmentation, early stopping |
+
+## Cross-validation
+
+K-fold cross-validation chia data thành `k` fold. Mỗi lần dùng `k-1` fold train, 1 fold validation.
+
+```python
+from sklearn.model_selection import cross_val_score
+from sklearn.linear_model import LogisticRegression
+
+model = LogisticRegression(max_iter=1000)
+scores = cross_val_score(model, X, y, cv=5, scoring="f1")
+
+print(scores)
+print("mean:", scores.mean())
+print("std:", scores.std())
+```
+
+Nếu std cao, model performance không ổn định — có thể data ít, split nhạy, hoặc class imbalance.
+
+<Callout type="warning" title="Không phải data nào cũng split random được">
+Time-series phải split theo thời gian. User/session data nên split theo group. Nếu cùng user xuất hiện trong train và test, model có thể học đặc điểm user thay vì học pattern tổng quát.
+</Callout>
+
+## Evaluation metrics
+
+### Confusion matrix
+
+Với binary classification:
+
+| | Pred positive | Pred negative |
+|---|---:|---:|
+| Actual positive | TP | FN |
+| Actual negative | FP | TN |
+
+- TP: spam đúng là spam.
+- FP: email bình thường bị đánh spam.
+- FN: spam bị bỏ sót.
+- TN: email bình thường đúng.
+
+### Accuracy
+
+```text
+Accuracy = (TP + TN) / total
+```
+
+Accuracy tốt khi class cân bằng và cost FP/FN tương tự.
+
+### Precision
+
+```text
+Precision = TP / (TP + FP)
+```
+
+Trong những prediction positive, bao nhiêu là đúng?
+
+Quan trọng khi false positive đắt. Ví dụ: tự động ban user, tự động reject loan.
+
+### Recall
+
+```text
+Recall = TP / (TP + FN)
+```
+
+Trong tất cả actual positive, model bắt được bao nhiêu?
+
+Quan trọng khi false negative đắt. Ví dụ: fraud detection, bệnh nguy hiểm, urgent support ticket.
+
+### F1
+
+```text
+F1 = 2 * precision * recall / (precision + recall)
+```
+
+F1 cân bằng precision và recall. Dùng khi class imbalance và muốn 1 số tóm tắt.
+
+## Worked example by hand
+
+Giả sử model spam classifier trên 100 email:
+
+- TP = 18
+- FP = 2
+- FN = 7
+- TN = 73
+
+Tính:
+
+```text
+Accuracy = (18 + 73) / 100 = 0.91
+Precision = 18 / (18 + 2) = 0.90
+Recall = 18 / (18 + 7) = 0.72
+F1 = 2 * 0.90 * 0.72 / (0.90 + 0.72) = 0.80
+```
+
+Nhìn accuracy 91% có vẻ tốt, nhưng recall 72% nghĩa là 28% spam vẫn lọt. Nếu spam lọt gây hại lớn, bạn cần tune threshold để tăng recall.
+
+## Implementation lab
+
+Trong lab này, ta tạo dataset classification giả lập, train logistic regression, và đọc metrics.
+
+```python
+from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, confusion_matrix
+
+X, y = make_classification(
+    n_samples=2000,
+    n_features=20,
+    n_informative=5,
+    n_redundant=5,
+    weights=[0.9, 0.1],
+    random_state=42,
+)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.2,
+    stratify=y,
+    random_state=42,
+)
+
+model = LogisticRegression(max_iter=1000)
+model.fit(X_train, y_train)
+
+y_pred = model.predict(X_test)
+print(confusion_matrix(y_test, y_pred))
+print(classification_report(y_test, y_pred))
+```
+
+### Expected interpretation
+
+Vì class positive chỉ 10%, accuracy có thể cao ngay cả khi recall positive chưa tốt. Hãy tập trung vào:
+
+- `precision` của class 1.
+- `recall` của class 1.
+- `f1-score` của class 1.
+- Macro average nếu muốn công bằng giữa class.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: chỉ nhìn accuracy">
+Với class imbalance, accuracy có thể lừa. Luôn xem confusion matrix, precision, recall, F1 cho từng class.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: tune trên test set">
+Nếu bạn thử nhiều model và chọn cái tốt nhất trên test set, test set không còn là test nữa. Nó đã trở thành validation. Hãy giữ test cuối cùng, chỉ mở khi mọi quyết định đã xong.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: leakage theo user/time">
+Nếu dữ liệu là event theo user, split random theo row có thể làm cùng user xuất hiện ở train và test. Model học user-specific pattern, metric ảo. Dùng GroupKFold hoặc split theo user.
+</Callout>
+
+Checklist debug nhanh:
+
+1. Class distribution trong train/val/test có giống nhau không?
+2. Có feature nào chỉ biết sau khi target xảy ra không?
+3. Preprocessing có fit trên toàn data không?
+4. Train score và validation score có gap lớn không?
+5. Metric có phản ánh business cost không?
+6. Test set có bị dùng nhiều lần để chọn model không?
+
+## Practice exercises
+
+1. Với confusion matrix: TP=40, FP=10, FN=20, TN=130. Tính accuracy, precision, recall, F1.
+2. Cho bài toán fraud detection, false negative đắt hơn false positive. Bạn ưu tiên precision hay recall? Vì sao?
+3. Nêu 3 ví dụ data leakage trong một hệ thống AI support ticket.
+4. Viết code dùng `train_test_split` với `stratify=y` cho dataset imbalance.
+5. Vẽ learning curve giả định cho high bias và high variance; giải thích cách xử lý.
+
+## Knowledge check
+
+1. Train set dùng để làm gì?
+2. Validation set khác test set ở điểm nào?
+3. Vì sao accuracy không đủ khi class imbalance?
+4. Precision trả lời câu hỏi gì?
+5. Recall trả lời câu hỏi gì?
+6. Data leakage là gì?
+7. Khi train score cao nhưng validation score thấp, model đang bị gì?
+8. Cross-validation hữu ích khi nào?
+
+## Answer key
+
+1. Train set dùng để học parameters của model.
+2. Validation dùng để chọn model/hyperparameters; test dùng đánh giá cuối cùng, không dùng trong quá trình chọn.
+3. Vì majority-class baseline có thể accuracy cao nhưng bỏ sót minority class.
+4. Trong các prediction positive, bao nhiêu là positive thật.
+5. Trong các positive thật, model bắt được bao nhiêu.
+6. Leakage là thông tin từ validation/test hoặc tương lai lọt vào training/features.
+7. Overfitting/high variance.
+8. Khi data ít hoặc muốn estimate performance ổn định hơn nhiều split.
+
+Bài tập 1:
+
+```text
+Accuracy = (40+130)/200 = 0.85
+Precision = 40/(40+10) = 0.80
+Recall = 40/(40+20) = 0.667
+F1 ≈ 0.727
+```
+
+## Mini-project: Intent classifier evaluation
+
+**Task:** Build một intent classifier nhỏ cho support messages.
+
+**Dataset gợi ý:** Tạo 200 câu synthetic cho 4 intent: `billing`, `technical_issue`, `refund`, `general_question`. Hoặc dùng dataset public như banking77 subset.
+
+**Deliverables:**
+
+- Train/validation/test split.
+- Model baseline: TF-IDF + Logistic Regression.
+- Confusion matrix.
+- Classification report.
+- Nhận xét 5 lỗi model dự đoán sai.
+
+**Success criteria:**
+
+- Không có leakage.
+- Có `classification_report` đầy đủ.
+- Giải thích được intent nào khó phân biệt nhất.
+- Đề xuất 2 cách cải thiện model.
+
+## Điểm cần nhớ
+
+- ML không chỉ là train model; phần quan trọng là **đánh giá đúng**.
+- Supervised học từ `(x,y)`, unsupervised tìm cấu trúc, RL học qua reward.
+- Train/validation/test có vai trò khác nhau; test chỉ dùng cuối cùng.
+- Data leakage làm metric đẹp giả và là lỗi production nghiêm trọng.
+- Overfitting = train tốt, validation tệ; underfitting = cả hai tệ.
+- Bias-variance giúp chọn hướng cải thiện model.
+- Precision/recall/F1 quan trọng hơn accuracy khi class imbalance.
+
+## Next chapter bridge
+
+Bây giờ bạn đã biết cách nghĩ về model và metrics. Chương tiếp theo đi vào hai model supervised nền tảng nhất: **Linear Regression** và **Logistic Regression**. Đây là nơi bạn thấy rõ loss function, gradient, decision boundary và regularization hoạt động như thế nào trong một model thật.

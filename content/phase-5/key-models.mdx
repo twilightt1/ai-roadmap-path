@@ -1,0 +1,79 @@
+Không phải model nào cũng giống nhau. BERT, GPT, Claude, Gemini, T5, LLaMA, Mistral, Qwen khác nhau ở kiến trúc, dữ liệu, context, khả năng generation/understanding/multimodal. AI Engineer cần biết **chọn model đúng việc**, không chỉ chọn model nổi tiếng nhất.
+
+## Encoder-only: BERT
+
+BERT dùng transformer encoder, attention hai chiều. Tốt cho:
+
+- Text classification.
+- NER.
+- Extractive QA.
+- Sentence embedding (bi-encoder variants).
+
+```python
+from transformers import AutoModelForSequenceClassification
+model = AutoModelForSequenceClassification.from_pretrained("bert-base-uncased")
+```
+
+BERT không tối ưu cho free-form generation.
+
+## Decoder-only: GPT, Claude, LLaMA, Mistral, Qwen
+
+Decoder-only autoregressive dự đoán next token. Tốt cho:
+
+- Chat/generation.
+- Code generation.
+- Reasoning.
+- Tool calling (với API model hỗ trợ).
+
+GPT/Claude/Gemini API dùng cho production apps. LLaMA/Mistral/Qwen open-source dùng khi cần self-host, fine-tune, cost/control.
+
+<Callout type="tip" title="Open-source vs API">
+API model nhanh triển khai, chất lượng cao, không lo infra. Open-source cho privacy, fine-tuning sâu, cost control ở scale, nhưng cần serving infra (vLLM/TGI/GPU).
+</Callout>
+
+## Encoder-Decoder: T5
+
+T5 biến mọi task thành text-to-text:
+
+```text
+translate English to German: Hello → Hallo
+summarize: long text → summary
+classify sentiment: text → positive
+```
+
+Tốt cho seq2seq như translation/summarization, nhưng decoder-only LLM hiện nay linh hoạt hơn cho chat.
+
+## Multimodal: Gemini, GPT-4V/4o, Claude Vision
+
+Multimodal model nhận text + image/video/audio tùy provider. Dùng cho:
+
+- Image QA.
+- Document understanding.
+- Chart/table extraction.
+- Video/audio reasoning.
+
+<Callout type="warning" title="Multimodal cost và latency">
+Image/video input tốn token/compute hơn text. Thiết kế app cần downscale/crop, cache, và chỉ gửi phần hình cần thiết. Đừng gửi PDF scan 100 trang thẳng vào model nếu có pipeline OCR/RAG tốt hơn.
+</Callout>
+
+## Model selection by task
+
+| Task | Model type gợi ý |
+|---|---|
+| Classification nhanh/rẻ | BERT/logistic regression/fine-tuned small model |
+| Chat/general reasoning | GPT/Claude/Gemini decoder LLM |
+| Long document | Claude/Gemini long-context + RAG |
+| Self-host chat | LLaMA/Qwen/Mistral via vLLM |
+| Translation/summarization structured | T5/seq2seq hoặc LLM API |
+| Vision QA | GPT-4o/Claude Vision/Gemini |
+
+## Điểm cần nhớ
+
+- BERT encoder-only tốt cho understanding, không phải generation.
+- GPT/Claude/LLaMA decoder-only tốt cho generation/chat/reasoning.
+- T5 encoder-decoder biến mọi task thành text-to-text.
+- Open-source cho control/privacy/fine-tune; API cho speed/quality/no infra.
+- Multimodal mạnh nhưng cost/latency cao — tối ưu input.
+- Chọn model theo task, cost, latency, privacy, context window và deployment constraints.
+
+Bài tiếp: NLP Evaluation Metrics — BLEU/ROUGE/BERTScore/perplexity/human eval để biết model có thật sự tốt không.

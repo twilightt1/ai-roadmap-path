@@ -1,0 +1,246 @@
+Classical text representation là nền của NLP trước transformer: Bag of Words, TF-IDF, n-grams, one-hot. Dù nghe “cũ”, chúng vẫn cực kỳ quan trọng trong production: search keyword, BM25, hybrid RAG, baseline classification, explainable models.
+
+## Why this matters
+
+Một RAG system chỉ dùng vector search có thể miss exact keyword như error code `ORA-00942`, API name `getUserById`, hoặc policy ID `HR-17`. Keyword search classic bắt những thứ này rất tốt. Vì vậy production RAG thường dùng:
+
+```text
+BM25 / TF-IDF sparse search + dense embedding search + reranker
+```
+
+Bạn cần hiểu sparse representations để build hybrid retrieval tốt.
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích Bag of Words và hạn chế của nó.
+2. Tính TF-IDF trực giác và hiểu IDF.
+3. Dùng n-grams để capture phrase.
+4. Hiểu one-hot và vì sao nó không semantic.
+5. Phân biệt sparse vs dense vectors.
+6. Build TF-IDF + Logistic Regression baseline.
+7. Giải thích vai trò sparse search trong hybrid RAG.
+
+## Core intuition: đếm từ là baseline mạnh
+
+Nếu document nói nhiều từ “refund”, “invoice”, “charged”, có khả năng topic billing. BoW/TF-IDF tận dụng tín hiệu này mà không cần deep model.
+
+## Bag of Words
+
+BoW tạo vocabulary rồi đếm số lần mỗi từ xuất hiện.
+
+```python
+from sklearn.feature_extraction.text import CountVectorizer
+
+texts = [
+    "refund invoice payment",
+    "login password reset",
+    "invoice charged refund",
+]
+
+vec = CountVectorizer()
+X = vec.fit_transform(texts)
+print(vec.get_feature_names_out())
+print(X.toarray())
+```
+
+BoW bỏ thứ tự. “dog bites man” và “man bites dog” có vector giống nhau.
+
+<Callout type="warning" title="BoW mất ngữ cảnh">
+BoW không hiểu phủ định, thứ tự, synonym. `not good` và `good` đều có từ `good`. Vì vậy cần n-grams hoặc model semantic hơn.
+</Callout>
+
+## TF-IDF
+
+TF-IDF giảm trọng số từ phổ biến và tăng trọng số từ đặc trưng.
+
+```text
+TF-IDF(term, doc) = TF(term, doc) * IDF(term)
+IDF(term) = log(N / df(term))
+```
+
+Nếu từ xuất hiện trong mọi document (`the`, `and`), IDF thấp. Nếu từ hiếm nhưng xuất hiện trong document, TF-IDF cao.
+
+## Worked example by hand
+
+Corpus 3 docs:
+
+```text
+D1: refund invoice
+D2: refund payment
+D3: login password
+```
+
+Term `refund` xuất hiện trong 2 docs:
+
+```text
+df(refund)=2, N=3
+IDF(refund)=log(3/2)=0.405
+```
+
+Term `invoice` xuất hiện trong 1 doc:
+
+```text
+IDF(invoice)=log(3/1)=1.099
+```
+
+Trong D1, nếu TF cả hai là 1:
+
+```text
+TF-IDF(refund,D1)=0.405
+TF-IDF(invoice,D1)=1.099
+```
+
+`invoice` đặc trưng hơn `refund` vì hiếm hơn.
+
+## N-grams
+
+N-gram là chuỗi n tokens liên tiếp.
+
+| n | Tên | Ví dụ |
+|---|---|---|
+| 1 | unigram | `good` |
+| 2 | bigram | `not good` |
+| 3 | trigram | `not very good` |
+
+```python
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+vec = TfidfVectorizer(ngram_range=(1, 2), max_features=5000)
+X = vec.fit_transform(texts)
+```
+
+N-grams giúp capture phrase nhưng làm dimension tăng nhanh.
+
+## One-hot encoding
+
+One-hot biểu diễn mỗi token bằng vector có đúng một vị trí 1.
+
+```text
+vocab = [cat, dog, bank]
+cat  = [1,0,0]
+dog  = [0,1,0]
+bank = [0,0,1]
+```
+
+Vấn đề: mọi từ cách nhau như nhau. `cat` không gần `dog` hơn `bank`. Không có semantic similarity.
+
+## Sparse vs Dense
+
+| Representation | Example | Pros | Cons |
+|---|---|---|---|
+| Sparse | BoW/TF-IDF | exact match, explainable, fast | không semantic, high-dimensional |
+| Dense | embeddings | semantic similarity | khó explain, miss exact tokens |
+
+<Callout type="tip" title="Hybrid search là best practice RAG">
+Sparse search bắt exact terms như code/API/error IDs. Dense search bắt meaning/synonyms. Reranker chọn kết quả cuối. Đây là kiến trúc mạnh hơn chỉ vector search.
+</Callout>
+
+## Implementation lab: TF-IDF classifier
+
+```python
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
+
+texts = [
+    "refund my payment", "charged twice invoice", "cancel subscription refund",
+    "reset password login", "cannot access account", "two factor authentication issue",
+]
+labels = ["billing", "billing", "billing", "technical", "technical", "technical"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    texts, labels, test_size=0.33, random_state=42, stratify=labels
+)
+
+pipe = Pipeline([
+    ("tfidf", TfidfVectorizer(ngram_range=(1,2), min_df=1)),
+    ("clf", LogisticRegression(max_iter=1000)),
+])
+
+pipe.fit(X_train, y_train)
+print(classification_report(y_test, pipe.predict(X_test)))
+```
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: fit vectorizer trước split">
+Nếu vocabulary học từ test data, đó là leakage. Đưa vectorizer vào Pipeline.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: max_features quá thấp">
+Nếu giới hạn vocab quá thấp, bạn có thể mất terms quan trọng như product names/error codes.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: chỉ dense search trong enterprise docs">
+Enterprise docs có nhiều exact identifiers. Vector-only có thể miss. Sparse/hybrid search thường cần thiết.
+</Callout>
+
+Checklist:
+
+1. Vectorizer có trong Pipeline không?
+2. Có dùng n-grams cho phrase/phủ định không?
+3. `min_df/max_df` có loại bỏ quá nhiều term không?
+4. Có giữ error code/API names không?
+5. Có so sánh sparse vs dense retrieval chưa?
+
+## Practice exercises
+
+1. Tính IDF cho term xuất hiện trong 1/10 docs và 8/10 docs.
+2. Build CountVectorizer cho 5 câu và in vocabulary.
+3. So sánh unigram vs bigram cho sentiment `not good`.
+4. Train TF-IDF + LogisticRegression cho dataset spam nhỏ.
+5. Thiết kế hybrid search pipeline sparse+dense cho docs kỹ thuật.
+
+## Knowledge check
+
+1. BoW mất thông tin gì?
+2. IDF cao khi nào?
+3. N-gram giúp gì?
+4. One-hot có semantic similarity không?
+5. Sparse search mạnh ở loại query nào?
+6. Dense embedding mạnh ở loại query nào?
+7. Vì sao dùng Pipeline với TfidfVectorizer?
+
+## Answer key
+
+1. Thứ tự/ngữ cảnh.
+2. Term xuất hiện trong ít documents.
+3. Capture phrases và thứ tự ngắn.
+4. Không.
+5. Exact keyword, code, IDs, tên API.
+6. Semantic paraphrase/synonym.
+7. Tránh leakage và lưu preprocessing cùng model.
+
+## Mini-project: Hybrid retrieval prototype
+
+**Task:** Build mini search engine cho 100 documents.
+
+**Deliverables:**
+
+- TF-IDF search top-k.
+- Embedding cosine search top-k.
+- Simple hybrid score: `0.5*sparse + 0.5*dense`.
+- 10 query evaluation thủ công.
+
+**Success criteria:**
+
+- Có ví dụ query exact keyword sparse thắng.
+- Có ví dụ query semantic dense thắng.
+- Có nhận xét khi hybrid tốt hơn.
+
+## Điểm cần nhớ
+
+- BoW/TF-IDF vẫn là baseline và search component mạnh.
+- TF-IDF giảm trọng số từ phổ biến, tăng từ đặc trưng.
+- N-grams capture phrase nhưng tăng dimension.
+- One-hot không semantic.
+- Sparse và dense bổ sung cho nhau.
+- Hybrid search là pattern RAG production quan trọng.
+
+## Next chapter bridge
+
+Sparse representation không hiểu semantic similarity. Chương tiếp theo: **Word Embeddings** — cách biến từ/câu/document thành vector dense để `cat` gần `dog` hơn `bank`.

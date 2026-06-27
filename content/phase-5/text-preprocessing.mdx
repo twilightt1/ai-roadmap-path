@@ -1,0 +1,309 @@
+Text preprocessing là bước biến text thô thành input đáng tin cậy cho model. Trong NLP classic, preprocessing thường rất mạnh tay: lowercase, remove punctuation, remove stopwords, stemming. Trong transformer/LLM hiện đại, preprocessing cần tinh tế hơn: làm sạch lỗi hệ thống nhưng **không phá phân phối ngôn ngữ** mà tokenizer/model đã học.
+
+## Why this matters
+
+Bạn đang xây RAG từ PDF, website, ticket support, Slack logs. Text thô có:
+
+- encoding lỗi,
+- dấu xuống dòng vô nghĩa,
+- header/footer lặp,
+- email/phone/API key,
+- URL dài,
+- OCR lỗi,
+- emoji/ký tự đặc biệt,
+- nhiều ngôn ngữ.
+
+Nếu preprocessing kém, embedding kém, retrieval kém, LLM trả lời kém. Garbage in, garbage out.
+
+<Callout type="danger" title="Preprocessing là security boundary">
+Trước khi gửi text tới LLM API, bạn có thể cần mask PII/API keys. Đây không chỉ là NLP hygiene mà là bảo mật và compliance.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Phân biệt word/subword/character tokenization.
+2. Quyết định khi nào lowercase/remove punctuation/stopwords.
+3. Hiểu stemming vs lemmatization và khi nào dùng.
+4. Dùng sentence segmentation cho chunking RAG.
+5. Xử lý URL/email/hashtag/PII bằng regex đơn giản.
+6. Hiểu Unicode normalization và lỗi encoding.
+7. Thiết kế preprocessing pipeline không phá meaning.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Python string/regex cơ bản.
+- Tokenization concept.
+- RAG/chunking ở mức khái niệm.
+
+## Core intuition: làm sạch nhưng không làm mất nghĩa
+
+Preprocessing không phải “xóa càng nhiều càng tốt”. Mục tiêu là:
+
+```text
+remove noise, preserve signal
+```
+
+Ví dụ:
+
+```text
+"I LOVE this!!!" 
+```
+
+Nếu lowercase và xóa punctuation:
+
+```text
+"i love this"
+```
+
+Bạn mất tín hiệu cảm xúc mạnh từ uppercase và `!!!`.
+
+Với sentiment analysis, điều đó xấu. Với topic classification classic, có thể chấp nhận.
+
+## Tokenization
+
+Tokenization chia text thành đơn vị nhỏ.
+
+### Word tokenization
+
+```python
+text = "AI engineers build LLM apps."
+text.split()
+# ['AI', 'engineers', 'build', 'LLM', 'apps.']
+```
+
+Đơn giản nhưng xử lý punctuation kém.
+
+### Character tokenization
+
+```text
+"cat" → c, a, t
+```
+
+Không OOV nhưng sequence dài.
+
+### Subword tokenization
+
+```text
+"unbelievable" → "un", "believ", "able"
+```
+
+LLM hiện đại dùng subword. Chương 5.4 sẽ đi sâu.
+
+## Normalization decisions
+
+| Operation | Classic NLP | Transformer/LLM |
+|---|---|---|
+| Lowercase | thường dùng | tùy tokenizer/model |
+| Remove punctuation | có thể | thường không |
+| Remove stopwords | có thể | thường không |
+| Unicode normalize | nên | nên |
+| Whitespace cleanup | nên | nên |
+| PII masking | tùy data | rất nên với API |
+
+<Callout type="warning" title="Đừng áp preprocessing classic vào LLM một cách máy móc">
+Transformer tokenizer đã được train trên text tự nhiên với punctuation, casing, stopwords. Xóa bừa có thể làm text lệch khỏi distribution pretrained.
+</Callout>
+
+## Stemming vs Lemmatization
+
+Stemming cắt từ về gốc thô:
+
+```text
+studies → studi
+running → run
+```
+
+Lemmatization dùng từ điển/ngữ pháp:
+
+```text
+studies → study
+better → good
+```
+
+Stemming nhanh nhưng thô. Lemmatization chậm hơn nhưng chính xác hơn.
+
+Dùng cho:
+
+- search classic,
+- BoW/TF-IDF,
+- rule-based NLP.
+
+Không thường dùng cho transformer.
+
+## Sentence segmentation
+
+Chunking RAG tốt nên tôn trọng ranh giới câu/đoạn.
+
+```python
+import spacy
+
+nlp = spacy.load("en_core_web_sm")
+doc = nlp("Dr. Smith works at OpenAI. He builds models.")
+for sent in doc.sents:
+    print(sent.text)
+```
+
+Nếu chỉ split theo dấu chấm, `Dr.` làm sai. spaCy tốt hơn.
+
+## Regex for special tokens
+
+```python
+import re
+
+PII_PATTERNS = {
+    "EMAIL": r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b",
+    "URL": r"https?://\S+|www\.\S+",
+    "PHONE": r"\b(?:\+?\d[\d\-\s]{7,}\d)\b",
+}
+
+def mask_pii(text: str) -> str:
+    for name, pattern in PII_PATTERNS.items():
+        text = re.sub(pattern, f"<{name}>", text)
+    return text
+```
+
+<Callout type="tip" title="Mask thay vì xóa">
+Mask `<EMAIL>` tốt hơn xóa hoàn toàn vì giữ tín hiệu rằng text có email. Với support ticket, email xuất hiện có thể quan trọng.
+</Callout>
+
+## Unicode normalization
+
+```python
+import unicodedata
+
+s1 = "Café"
+s2 = "Cafe\u0301"  # e + combining accent
+
+print(s1 == s2)  # có thể False
+
+s1n = unicodedata.normalize("NFC", s1)
+s2n = unicodedata.normalize("NFC", s2)
+print(s1n == s2n)  # True
+```
+
+Luôn đọc/ghi text bằng UTF-8.
+
+## Implementation lab: safe preprocessing pipeline
+
+```python
+import re
+import unicodedata
+
+
+def normalize_unicode(text: str) -> str:
+    return unicodedata.normalize("NFC", text)
+
+
+def clean_whitespace(text: str) -> str:
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def mask_sensitive(text: str) -> str:
+    text = re.sub(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b", "<EMAIL>", text)
+    text = re.sub(r"https?://\S+|www\.\S+", "<URL>", text)
+    return text
+
+
+def preprocess_for_rag(text: str) -> str:
+    text = normalize_unicode(text)
+    text = mask_sensitive(text)
+    text = clean_whitespace(text)
+    return text
+
+sample = "Contact me at john@example.com\n\nVisit https://example.com   Café"
+print(preprocess_for_rag(sample))
+```
+
+Expected:
+
+```text
+Contact me at <EMAIL> Visit <URL> Café
+```
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: lowercase mọi thứ">
+Lowercase làm mất tín hiệu tên riêng, acronym, code identifier. Với NER/code/LLM prompts, hãy cẩn thận.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: remove stopwords cho transformer">
+Stopwords giúp transformer hiểu cấu trúc câu. Remove chúng thường không cần và có thể hại.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: quên mask secrets">
+Logs có thể chứa API keys, passwords, emails. Gửi thẳng vào LLM API có thể vi phạm security. Thêm secret/PII scanner trước ingestion.
+</Callout>
+
+Checklist:
+
+1. Encoding có UTF-8 không?
+2. Unicode đã normalize chưa?
+3. Có PII/secrets cần mask không?
+4. Có remove thông tin có ý nghĩa không?
+5. Chunking có phá câu/đoạn không?
+6. Pipeline preprocessing train/inference có giống nhau không?
+
+## Practice exercises
+
+1. Viết regex mask email và URL.
+2. So sánh output lowercase vs không lowercase cho NER examples.
+3. Dùng spaCy tách câu một paragraph có abbreviation.
+4. Tạo pipeline preprocessing cho RAG PDF text.
+5. Tìm 5 lỗi OCR phổ biến và đề xuất cách clean.
+
+## Knowledge check
+
+1. Preprocessing nên tối ưu điều gì?
+2. Khi nào remove stopwords hợp lý?
+3. Stemming khác lemmatization thế nào?
+4. Vì sao sentence segmentation quan trọng cho RAG?
+5. NFC normalization giải quyết vấn đề gì?
+6. Vì sao mask PII thay vì xóa?
+7. LLM hiện đại thường dùng tokenization loại nào?
+
+## Answer key
+
+1. Remove noise nhưng preserve signal.
+2. Classic BoW/TF-IDF khi stopwords không hữu ích; không mặc định cho transformer.
+3. Stemming cắt thô; lemmatization dùng ngữ pháp/từ điển.
+4. Chunk theo câu giữ meaning tốt hơn split ngẫu nhiên.
+5. Các biểu diễn Unicode khác nhau của cùng ký tự.
+6. Giữ tín hiệu loại thông tin mà không lộ giá trị thật.
+7. Subword tokenization.
+
+## Mini-project: RAG text cleaner
+
+**Task:** Build preprocessing pipeline cho 50 documents crawled/PDF extracted.
+
+**Deliverables:**
+
+- Raw vs cleaned examples.
+- PII masking.
+- Whitespace/header/footer cleanup.
+- Sentence segmentation/chunk-ready output.
+- Report 10 edge cases.
+
+**Success criteria:**
+
+- Không phá nội dung quan trọng.
+- Mask được email/URL/phone.
+- Output sạch để chunk/embed.
+- Có checklist cho production ingestion.
+
+## Điểm cần nhớ
+
+- Preprocessing đúng là giữ signal, bỏ noise.
+- Classic NLP và transformer có preprocessing khác nhau.
+- LLM không cần remove stopwords/punctuation mặc định.
+- Sentence segmentation quan trọng cho RAG chunking.
+- Unicode/encoding lỗi rất phổ biến trong multilingual data.
+- PII/secrets masking là yêu cầu production.
+
+## Next chapter bridge
+
+Sau khi text sạch, ta cần biểu diễn nó thành vector/features. Chương tiếp theo: **Classical Text Representation** — Bag of Words, TF-IDF, n-grams, sparse vectors và vì sao chúng vẫn quan trọng trong hybrid search.

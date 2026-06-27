@@ -1,0 +1,281 @@
+Word Embeddings là bước chuyển lớn từ NLP “đếm từ” sang NLP “hiểu nghĩa bằng hình học”. Thay vì biểu diễn từ bằng one-hot rời rạc, ta học vector dense sao cho các từ/câu/document có nghĩa gần nhau nằm gần nhau trong không gian vector. Đây là nền tảng của semantic search, recommendation, clustering, RAG và LLM embeddings.
+
+## Why this matters
+
+Trong RAG, user hỏi:
+
+```text
+How can I get my money back?
+```
+
+Document nói:
+
+```text
+Refunds are available within 30 days.
+```
+
+Sparse keyword search có thể miss vì query dùng “money back”, doc dùng “refunds”. Embedding search có thể bắt semantic similarity.
+
+<Callout type="info" title="Embedding là cầu nối text và vector database">
+Vector databases như Pinecone/Qdrant/pgvector lưu embeddings. Retrieval là tìm vector gần query vector. Không hiểu embeddings thì khó debug RAG.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích vì sao one-hot không đủ semantic.
+2. Hiểu Word2Vec CBOW và Skip-gram trực giác.
+3. Hiểu GloVe dùng co-occurrence statistics.
+4. Hiểu FastText dùng subword để xử lý OOV.
+5. Dùng cosine similarity để so sánh embeddings.
+6. Phân biệt static và contextual embeddings.
+7. Xây mini semantic search bằng sentence-transformers.
+
+## From one-hot to dense vectors
+
+One-hot:
+
+```text
+cat = [1,0,0]
+dog = [0,1,0]
+bank = [0,0,1]
+```
+
+Dot product giữa mọi từ khác nhau là 0. Không có khái niệm `cat` gần `dog`.
+
+Dense embedding:
+
+```text
+cat  = [0.21, -0.33, 0.71, ...]
+dog  = [0.19, -0.29, 0.68, ...]
+bank = [-0.52, 0.10, 0.03, ...]
+```
+
+Giờ cosine(`cat`,`dog`) có thể cao hơn cosine(`cat`,`bank`).
+
+## Distributional hypothesis
+
+Ý tưởng nền:
+
+```text
+A word is characterized by the company it keeps.
+```
+
+Từ xuất hiện trong context giống nhau thường có nghĩa giống nhau. `doctor` và `nurse` xuất hiện gần `hospital`, `patient`, `medicine`. Model học điều này từ corpus.
+
+## Word2Vec
+
+### CBOW
+
+CBOW dự đoán từ giữa từ context.
+
+```text
+context: "the ___ barked loudly"
+target: dog
+```
+
+### Skip-gram
+
+Skip-gram dự đoán context từ từ giữa.
+
+```text
+center: dog
+predict: the, barked, loudly
+```
+
+Skip-gram tốt hơn với từ hiếm; CBOW nhanh hơn.
+
+## Worked example: context window
+
+Câu:
+
+```text
+the cat sat on the mat
+```
+
+Window size 2, center `sat`:
+
+```text
+context = [cat, on]
+```
+
+Skip-gram tạo pairs:
+
+```text
+(sat → cat)
+(sat → on)
+```
+
+Qua hàng triệu câu, từ xuất hiện trong context tương tự có vectors gần nhau.
+
+## GloVe
+
+GloVe dùng ma trận co-occurrence toàn cục: từ `i` xuất hiện gần từ `j` bao nhiêu lần.
+
+Nó học vectors sao cho dot product phản ánh log co-occurrence.
+
+GloVe nổi tiếng với analogies:
+
+```text
+king - man + woman ≈ queen
+```
+
+Điều này cho thấy vector directions có thể encode relationships.
+
+## FastText
+
+FastText biểu diễn từ bằng character n-grams.
+
+```text
+playing → pla, lay, ayi, yin, ing, ...
+```
+
+Ưu điểm:
+
+- Xử lý từ chưa thấy.
+- Tốt cho morphology.
+- Tốt hơn với ngôn ngữ có nhiều biến thể từ.
+
+## Cosine similarity
+
+```python
+import numpy as np
+
+def cosine(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+```
+
+Nếu embeddings đã normalize, dot product bằng cosine:
+
+```python
+emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
+scores = emb @ query_emb
+```
+
+## Static vs contextual embeddings
+
+Static embedding: mỗi từ có một vector cố định.
+
+```text
+bank (river bank) = bank (bank account)
+```
+
+Contextual embedding: vector phụ thuộc câu.
+
+```text
+bank trong "river bank" khác bank trong "bank account"
+```
+
+BERT/GPT tạo contextual embeddings.
+
+<Callout type="warning" title="Word embedding không đủ cho RAG hiện đại">
+RAG thường dùng sentence/document embeddings, không phải word embeddings đơn lẻ. Nhưng word embeddings giúp hiểu nền tảng hình học semantic.
+</Callout>
+
+## Implementation lab: semantic search
+
+```python
+from sentence_transformers import SentenceTransformer
+import numpy as np
+
+texts = [
+    "Refunds are available within 30 days.",
+    "Reset your password from account settings.",
+    "Kubernetes pods can restart after crashes.",
+]
+query = "How can I get my money back?"
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+doc_emb = model.encode(texts, normalize_embeddings=True)
+query_emb = model.encode([query], normalize_embeddings=True)[0]
+
+scores = doc_emb @ query_emb
+for idx in np.argsort(scores)[::-1]:
+    print(scores[idx], texts[idx])
+```
+
+Expected: refund document top.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: so sánh embeddings chưa normalize bằng dot product">
+Dot product bị ảnh hưởng bởi vector norm. Nếu muốn cosine, normalize trước hoặc dùng cosine function.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: dùng embedding model không hợp domain/ngôn ngữ">
+English embedding model có thể kém với tiếng Việt hoặc code. Chọn multilingual/domain model nếu cần.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: tin embedding similarity là truth tuyệt đối">
+Embedding similarity là heuristic học từ data. Nó có thể bias, fail với numbers, negation, exact IDs. Kết hợp sparse/rerank/eval.
+</Callout>
+
+Checklist:
+
+1. Embeddings đã normalize chưa?
+2. Metric là cosine/dot/Euclidean có đúng không?
+3. Model có hỗ trợ ngôn ngữ/domain không?
+4. Query/document có cùng preprocessing không?
+5. Có eval retrieval top-k không?
+6. Có fallback sparse search không?
+
+## Practice exercises
+
+1. Tính cosine giữa `[1,0]` và `[1,1]`.
+2. Tạo 5 câu cùng topic và 5 câu khác topic, embed và kiểm tra similarity.
+3. So sánh sparse TF-IDF vs sentence embedding cho query paraphrase.
+4. Tìm một failure case của embedding search với exact code/API name.
+5. Visualize embeddings bằng UMAP.
+
+## Knowledge check
+
+1. Vì sao one-hot không semantic?
+2. Distributional hypothesis nói gì?
+3. CBOW khác Skip-gram thế nào?
+4. FastText xử lý OOV bằng gì?
+5. Cosine similarity đo gì?
+6. Static embedding có hạn chế gì?
+7. RAG thường dùng embedding ở mức nào?
+
+## Answer key
+
+1. Mọi token khác nhau đều orthogonal, không có distance meaningful.
+2. Từ xuất hiện trong context giống nhau có nghĩa giống nhau.
+3. CBOW predict center từ context; Skip-gram predict context từ center.
+4. Character/subword n-grams.
+5. Độ cùng hướng giữa hai vector.
+6. Một vector cố định cho mọi nghĩa của từ.
+7. Sentence/document/chunk embeddings.
+
+## Mini-project: Mini semantic search engine
+
+**Task:** Build semantic search cho 100 FAQ entries.
+
+**Deliverables:**
+
+- Embedding generation.
+- Cosine top-k retrieval.
+- 10 query test set.
+- Failure analysis.
+- So sánh với TF-IDF.
+
+**Success criteria:**
+
+- Query paraphrase retrieve đúng.
+- Có normalize embeddings.
+- Có nhận xét exact-match failure.
+- Có đề xuất hybrid search.
+
+## Điểm cần nhớ
+
+- Embeddings biến text thành vector dense có ngữ nghĩa.
+- Word2Vec/GloVe/FastText học từ context/co-occurrence.
+- Cosine similarity là phép đo chính cho semantic similarity.
+- Static embeddings không phân biệt nghĩa theo context.
+- Sentence/document embeddings là nền của RAG.
+- Embedding search cần eval và thường nên kết hợp sparse/rerank.
+
+## Next chapter bridge
+
+Embeddings bắt đầu bằng token vectors. Nhưng LLM không dùng word tokens trực tiếp — chúng dùng subword tokenization để biến text thành token IDs. Chương tiếp theo: **Subword Tokenization**.

@@ -1,0 +1,340 @@
+Convolutional Neural Networks (CNN) là kiến trúc đã tạo ra cuộc cách mạng thị giác máy tính hiện đại. Dù Vision Transformers đang rất mạnh, CNN vẫn là nền tảng để hiểu cách model học visual features: cạnh, góc, texture, object parts, rồi object. CNN cũng vẫn được dùng rộng rãi trong production vì nhanh, ổn định, dễ transfer learning.
+
+## Why this matters
+
+Nếu bạn build AI product có ảnh — upload hóa đơn, classify lỗi sản phẩm, kiểm tra ảnh profile, OCR document, detect object trong camera — bạn sẽ gặp CNN hoặc backbone vision. Ngay cả khi dùng API vision model, hiểu CNN giúp bạn biết:
+
+- Vì sao ảnh cần resize/normalize.
+- Vì sao model pretrained ImageNet transfer tốt.
+- Vì sao data augmentation quan trọng.
+- Vì sao ResNet train được sâu.
+- Khi nào CNN đủ, khi nào cần ViT/multimodal LLM.
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích convolution bằng kernel trượt trên ảnh.
+2. Theo dõi shape qua Conv2d, padding, stride, pooling.
+3. Hiểu pooling làm gì và vì sao giảm kích thước.
+4. Phân biệt LeNet, AlexNet, VGG, ResNet ở ý tưởng chính.
+5. Dùng pretrained ResNet để transfer learning.
+6. Thiết kế data augmentation hợp lý cho vision task.
+7. Debug lỗi shape/channel phổ biến trong CNN.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Tensor shape trong PyTorch.
+- MLP, activation, BatchNorm, residual.
+- Train/validation/test split.
+
+## Core intuition: convolution là feature detector cục bộ
+
+Ảnh có cấu trúc không gian. Pixel gần nhau liên quan mạnh hơn pixel xa. Convolution tận dụng giả định này bằng kernel nhỏ, ví dụ `3x3`, trượt qua ảnh để phát hiện pattern cục bộ.
+
+Một kernel có thể học phát hiện:
+
+- cạnh ngang,
+- cạnh dọc,
+- góc,
+- texture,
+- mắt/mũi/bánh xe ở layer sâu hơn.
+
+Điểm quan trọng: cùng kernel dùng lại ở mọi vị trí. Nếu kernel phát hiện cạnh, cạnh có thể xuất hiện ở góc trái hoặc góc phải ảnh.
+
+<Callout type="info" title="Locality + weight sharing">
+CNN mạnh vì hai ý tưởng: locality (pattern ảnh là cục bộ) và weight sharing (cùng filter áp mọi vị trí). Nhờ vậy CNN ít parameter hơn MLP rất nhiều và generalize tốt hơn cho ảnh.
+</Callout>
+
+## Formal definition: Conv2d shape
+
+PyTorch image tensor thường có shape:
+
+```text
+(batch, channels, height, width)
+```
+
+Ví dụ batch 32 ảnh RGB 224x224:
+
+```text
+(32, 3, 224, 224)
+```
+
+Conv2d:
+
+```python
+import torch
+from torch import nn
+
+conv = nn.Conv2d(
+    in_channels=3,
+    out_channels=16,
+    kernel_size=3,
+    stride=1,
+    padding=1,
+)
+
+x = torch.randn(32, 3, 224, 224)
+y = conv(x)
+print(y.shape)  # (32, 16, 224, 224)
+```
+
+Output height/width:
+
+```text
+out = floor((in + 2*padding - kernel_size) / stride) + 1
+```
+
+Với `in=224`, `padding=1`, `kernel=3`, `stride=1`:
+
+```text
+out = floor((224 + 2 - 3)/1) + 1 = 224
+```
+
+Padding giữ size; stride > 1 giảm size.
+
+## Worked example by hand: 3x3 convolution
+
+Input 4x4 một channel:
+
+```text
+1 2 0 1
+3 1 2 2
+0 1 3 1
+2 2 1 0
+```
+
+Kernel 2x2:
+
+```text
+1 0
+0 1
+```
+
+Tại vị trí top-left, patch:
+
+```text
+1 2
+3 1
+```
+
+Dot với kernel:
+
+```text
+1*1 + 2*0 + 3*0 + 1*1 = 2
+```
+
+Kernel trượt sang phải, xuống dưới, tạo output feature map. Mỗi output pixel là dot product giữa kernel và patch input.
+
+## Pooling
+
+Pooling giảm kích thước không gian, giữ tín hiệu chính.
+
+```python
+pool = nn.MaxPool2d(kernel_size=2, stride=2)
+x = torch.randn(32, 16, 224, 224)
+y = pool(x)
+print(y.shape)  # (32, 16, 112, 112)
+```
+
+MaxPool lấy giá trị lớn nhất trong vùng. AveragePool lấy trung bình. GlobalAveragePooling biến mỗi channel thành một số.
+
+<Callout type="tip" title="Pooling tạo invariance nhỏ">
+Nếu object dịch nhẹ vài pixel, max pooling giúp representation ít thay đổi hơn. Nhưng pooling quá mạnh có thể mất thông tin vị trí.
+</Callout>
+
+## CNN architecture evolution
+
+| Model | Ý tưởng chính | Bài học |
+|---|---|---|
+| LeNet | Conv + pooling cho digit | CNN work cho image |
+| AlexNet | ReLU, GPU, dropout | deep CNN scale được |
+| VGG | nhiều conv 3x3 | đơn giản nhưng nhiều parameter |
+| ResNet | residual connections | train rất sâu |
+
+### ResNet block
+
+```text
+x → Conv → BN → ReLU → Conv → BN → +x → ReLU
+```
+
+Residual giúp model học `F(x)` thay vì toàn bộ mapping. Nếu layer không cần thay đổi gì, nó có thể học gần zero và truyền `x` qua.
+
+## Implementation lab: simple CNN for image classification
+
+```python
+import torch
+from torch import nn
+
+class SmallCNN(nn.Module):
+    def __init__(self, num_classes=10):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+        )
+        self.classifier = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(64, num_classes),
+        )
+
+    def forward(self, x):
+        x = self.features(x)
+        return self.classifier(x)
+
+model = SmallCNN(num_classes=5)
+x = torch.randn(8, 3, 128, 128)
+logits = model(x)
+print(logits.shape)  # (8, 5)
+```
+
+`AdaptiveAvgPool2d((1,1))` giúp model nhận nhiều input sizes khác nhau hơn vì nó luôn đưa feature map về 1x1.
+
+## Transfer learning với ResNet
+
+Dataset nhỏ? Dùng pretrained model.
+
+```python
+import torchvision.models as models
+from torch import nn
+
+model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+
+for p in model.parameters():
+    p.requires_grad = False
+
+model.fc = nn.Linear(model.fc.in_features, 5)
+```
+
+Training strategy:
+
+1. Freeze backbone, train head.
+2. Unfreeze layer cuối, fine-tune LR nhỏ.
+3. Nếu domain khác ImageNet nhiều, unfreeze nhiều hơn.
+
+## Data augmentation
+
+Vision model dễ overfit nếu data ít. Augmentation tạo biến thể hợp lý:
+
+```python
+from torchvision import transforms
+
+train_tfms = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                          std=[0.229, 0.224, 0.225]),
+])
+```
+
+<Callout type="warning" title="Augmentation phải hợp domain">
+Random horizontal flip hợp ảnh chó/mèo, nhưng có thể sai với X-ray, chữ viết, biển báo giao thông. Augmentation không hợp domain có thể tạo label sai.
+</Callout>
+
+## Common mistakes & debugging checklist
+
+<Callout type="danger" title="Mistake 1: channel order sai">
+PyTorch dùng `(batch, channel, height, width)`. Nhiều thư viện ảnh dùng `(height, width, channel)`. Nếu quên transpose, Conv2d sẽ lỗi hoặc học sai.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: normalize sai mean/std">
+Pretrained ImageNet models kỳ vọng normalization ImageNet. Nếu bạn không normalize đúng, performance giảm mạnh.
+</Callout>
+
+<Callout type="warning" title="Mistake 3: train từ đầu với dataset nhỏ">
+CNN train từ đầu cần nhiều data. Với vài trăm/vài nghìn ảnh, transfer learning thường tốt hơn rất nhiều.
+</Callout>
+
+Checklist:
+
+1. Input shape có `(B,C,H,W)` không?
+2. Số channel input có khớp Conv2d không?
+3. Transform train và val có khác đúng không? Val không random augmentation.
+4. Normalize có đúng pretrained weights không?
+5. Model đang `train()` khi train và `eval()` khi validation không?
+6. Dataset có class imbalance không?
+7. Augmentation có giữ label đúng không?
+
+## Practice exercises
+
+1. Tính output size cho Conv2d input 64, kernel 3, padding 1, stride 2.
+2. Viết CNN nhận ảnh grayscale `(1,28,28)` và output 10 classes.
+3. Thay MaxPool bằng stride=2 convolution, so sánh shape.
+4. Fine-tune ResNet18 cho 3 classes bằng cách freeze backbone.
+5. Thiết kế augmentation cho dataset ảnh hóa đơn — augmentation nào không nên dùng?
+
+## Knowledge check
+
+1. Convolution khác fully-connected ở điểm nào?
+2. Padding dùng để làm gì?
+3. Stride lớn hơn 1 có tác dụng gì?
+4. MaxPool làm gì?
+5. ResNet giải quyết vấn đề gì?
+6. Vì sao transfer learning hữu ích?
+7. PyTorch image tensor shape chuẩn là gì?
+
+## Answer key
+
+1. Convolution dùng kernel cục bộ chia sẻ weight; fully-connected nối mọi input với mọi output.
+2. Giữ/điều chỉnh kích thước output, bảo toàn biên.
+3. Giảm spatial size.
+4. Lấy giá trị max trong vùng, giảm size và tăng robustness nhỏ.
+5. Giúp train mạng sâu bằng residual path cho gradient.
+6. Pretrained model đã học visual features tổng quát, cần ít data hơn.
+7. `(batch, channels, height, width)`.
+
+Bài tập 1:
+
+```text
+out = floor((64 + 2*1 - 3)/2) + 1
+    = floor(63/2) + 1 = 31 + 1 = 32
+```
+
+## Mini-project: Custom image classifier
+
+**Task:** Fine-tune ResNet18 trên dataset 3–5 class ảnh.
+
+**Dataset gợi ý:** cats/dogs, product defect, flowers, food images.
+
+**Deliverables:**
+
+- Train/val split.
+- Data augmentation train, deterministic val transform.
+- Frozen-backbone baseline.
+- Fine-tune last block experiment.
+- Accuracy + confusion matrix.
+- 10 misclassified images analysis.
+
+**Success criteria:**
+
+- Input normalization đúng pretrained weights.
+- Không random augmentation ở validation.
+- Có so sánh freeze vs fine-tune.
+- Có phân tích lỗi bằng ảnh thật.
+
+## Điểm cần nhớ
+
+- CNN tận dụng locality và weight sharing.
+- Conv2d output size phụ thuộc kernel, stride, padding.
+- Pooling giảm spatial size và tạo robustness.
+- ResNet dùng residual để train mạng sâu.
+- Transfer learning là default cho dataset nhỏ.
+- Data augmentation phải phù hợp domain.
+- Debug CNN bắt đầu từ shape `(B,C,H,W)` và normalization.
+
+## Next chapter bridge
+
+CNN xử lý ảnh bằng locality trong không gian 2D. Nhưng dữ liệu sequence — text, audio, time-series — có cấu trúc theo thời gian. Chương tiếp theo: **Recurrent Neural Networks (RNN)** — kiến trúc sequence trước khi transformer thống trị.

@@ -1,0 +1,436 @@
+Hyperparameter tuning là nghệ thuật và khoa học của việc chọn cấu hình model. Nếu parameter là thứ model học từ data, thì hyperparameter là thứ **bạn quyết định trước**: learning rate, max depth, regularization, batch size, number of trees. Chọn sai, model tốt có thể thành tệ; chọn đúng, baseline đơn giản có thể outperform model phức tạp.
+
+Trong chương này, tôi muốn bạn học cách tune có hệ thống: không đoán mò, không tune trên test set, biết khi nào dùng grid/random/Bayesian search, biết đọc validation curves, và biết dừng khi cải thiện không còn đáng cost.
+
+## Why this matters
+
+Bạn có một churn model. Version A dùng RandomForest:
+
+```text
+max_depth=None, min_samples_leaf=1 → train F1 0.99, val F1 0.62
+```
+
+Version B:
+
+```text
+max_depth=8, min_samples_leaf=20 → train F1 0.78, val F1 0.75
+```
+
+Nếu chỉ nhìn train score, bạn chọn A. Nếu hiểu tuning, bạn chọn B vì nó generalize tốt hơn.
+
+Trong LLM fine-tuning, hyperparameter còn quan trọng hơn:
+
+- learning rate quá cao → model quên kiến thức.
+- batch size quá nhỏ → training noisy.
+- LoRA rank quá thấp → underfit.
+- epochs quá nhiều → overfit data nhỏ.
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Phân biệt parameter và hyperparameter.
+2. Thiết kế search space hợp lý cho model ML.
+3. Dùng GridSearchCV và RandomizedSearchCV đúng cách.
+4. Hiểu Bayesian optimization/Optuna và khi nào dùng.
+5. Áp dụng early stopping để tiết kiệm compute và tránh overfit.
+6. Tránh tuning trên test set.
+7. Log và so sánh experiments có hệ thống.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Train/validation/test split.
+- Metrics phù hợp bài toán.
+- Overfitting/underfitting.
+- Scikit-learn estimator API.
+
+## Parameter vs Hyperparameter
+
+| Loại | Ví dụ | Ai học/chọn? |
+|---|---|---|
+| Parameter | weights trong logistic regression, split thresholds trong tree | model học từ data |
+| Hyperparameter | learning rate, regularization strength, max depth, k clusters | bạn chọn trước training |
+
+Ví dụ:
+
+```python
+from sklearn.ensemble import RandomForestClassifier
+
+model = RandomForestClassifier(
+    n_estimators=300,      # hyperparameter
+    max_depth=8,           # hyperparameter
+    min_samples_leaf=10,   # hyperparameter
+)
+```
+
+Sau `.fit()`, từng tree bên trong có split threshold/leaf values — đó là parameters học được.
+
+## Search space design
+
+Trước khi chọn thuật toán search, hãy thiết kế search space tốt. Search space tệ làm mọi phương pháp tệ.
+
+Ví dụ RandomForest:
+
+```python
+param_grid = {
+    "n_estimators": [100, 300, 500],
+    "max_depth": [None, 5, 10, 20],
+    "min_samples_leaf": [1, 5, 20],
+    "max_features": ["sqrt", "log2", None],
+}
+```
+
+Ví dụ Logistic Regression:
+
+```python
+param_grid = {
+    "C": [0.01, 0.1, 1, 10, 100],
+    "penalty": ["l2"],
+}
+```
+
+<Callout type="tip" title="Dùng log scale cho tham số dạng magnitude">
+Learning rate, regularization `C`, weight decay thường trải qua nhiều bậc độ lớn. Hãy search `[1e-4, 1e-3, 1e-2, 1e-1]` thay vì `[0.1, 0.2, 0.3]`.
+</Callout>
+
+## Grid Search
+
+Grid search thử mọi tổ hợp.
+
+```python
+from sklearn.model_selection import GridSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+
+pipe = Pipeline([
+    ("scaler", StandardScaler()),
+    ("model", LogisticRegression(max_iter=1000)),
+])
+
+param_grid = {
+    "model__C": [0.01, 0.1, 1, 10],
+}
+
+grid = GridSearchCV(
+    pipe,
+    param_grid,
+    cv=5,
+    scoring="f1",
+    n_jobs=-1,
+)
+grid.fit(X_train, y_train)
+
+print(grid.best_params_)
+print(grid.best_score_)
+```
+
+Ưu điểm:
+
+- Đơn giản.
+- Exhaustive trong grid.
+- Dễ giải thích.
+
+Nhược điểm:
+
+- Tổ hợp tăng rất nhanh.
+- Lãng phí nếu nhiều hyperparameter không quan trọng.
+
+## Worked example by hand: grid size
+
+Giả sử bạn tune:
+
+```text
+learning_rate: 4 values
+max_depth: 5 values
+min_samples_leaf: 3 values
+subsample: 3 values
+```
+
+Số tổ hợp:
+
+```text
+4 * 5 * 3 * 3 = 180
+```
+
+Nếu CV=5, bạn train:
+
+```text
+180 * 5 = 900 models
+```
+
+Nếu mỗi model mất 30 giây:
+
+```text
+900 * 30s = 27,000s = 7.5 giờ
+```
+
+Grid search không còn “rẻ”.
+
+## Random Search
+
+Random search sample ngẫu nhiên từ distribution. Nó thường hiệu quả hơn grid khi chỉ vài hyperparameter thật sự quan trọng.
+
+```python
+from sklearn.model_selection import RandomizedSearchCV
+from scipy.stats import randint, loguniform
+
+param_dist = {
+    "model__C": loguniform(1e-3, 1e2),
+}
+
+search = RandomizedSearchCV(
+    pipe,
+    param_dist,
+    n_iter=30,
+    cv=5,
+    scoring="f1",
+    random_state=42,
+    n_jobs=-1,
+)
+search.fit(X_train, y_train)
+```
+
+<Callout type="info" title="Random search có thể tốt hơn grid">
+Nếu chỉ learning rate quan trọng, grid search có thể lãng phí hàng trăm lần thử vào các dimension ít quan trọng. Random search thử nhiều giá trị khác nhau trên mỗi dimension hơn.
+</Callout>
+
+## Bayesian Optimization với Optuna
+
+Bayesian optimization dùng kết quả trial trước để chọn trial sau thông minh hơn.
+
+```python
+import optuna
+from sklearn.model_selection import cross_val_score
+from sklearn.ensemble import RandomForestClassifier
+
+def objective(trial):
+    n_estimators = trial.suggest_int("n_estimators", 100, 800)
+    max_depth = trial.suggest_int("max_depth", 3, 20)
+    min_samples_leaf = trial.suggest_int("min_samples_leaf", 1, 30)
+
+    model = RandomForestClassifier(
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        min_samples_leaf=min_samples_leaf,
+        random_state=42,
+        n_jobs=-1,
+    )
+
+    scores = cross_val_score(model, X_train, y_train, cv=3, scoring="f1")
+    return scores.mean()
+
+study = optuna.create_study(direction="maximize")
+study.optimize(objective, n_trials=50)
+print(study.best_params)
+```
+
+Optuna có pruning: dừng trial kém sớm. Rất hữu ích với neural network/LLM fine-tuning tốn compute.
+
+## Early stopping
+
+Early stopping dừng training khi validation không cải thiện.
+
+```python
+best_score = -float("inf")
+patience = 5
+bad_epochs = 0
+
+for epoch in range(100):
+    train_one_epoch()
+    val_score = evaluate()
+
+    if val_score > best_score:
+        best_score = val_score
+        bad_epochs = 0
+        save_checkpoint()
+    else:
+        bad_epochs += 1
+        if bad_epochs >= patience:
+            break
+```
+
+Với boosting:
+
+```python
+xgb.fit(
+    X_train,
+    y_train,
+    eval_set=[(X_val, y_val)],
+    verbose=False,
+)
+```
+
+Tùy version XGBoost, early stopping truyền qua constructor/callback.
+
+<Callout type="warning" title="Early stopping cần validation đúng">
+Nếu validation bị leakage hoặc không đại diện production, early stopping sẽ chọn sai thời điểm. Validation set phải phản ánh deployment distribution.
+</Callout>
+
+## Tuning workflow giáo sư khuyên dùng
+
+1. **Định nghĩa metric trước** dựa trên business cost.
+2. **Tạo baseline** đơn giản.
+3. **Chọn search space nhỏ nhưng hợp lý**.
+4. **Random search trước**, grid refinement sau nếu cần.
+5. **Log mọi trial**: params, score, seed, data version.
+6. **Kiểm tra overfit** bằng train vs val score.
+7. **Chọn model trên validation/CV**.
+8. **Đánh giá test một lần cuối**.
+
+<Callout type="danger" title="Test set không phải leaderboard nội bộ">
+Nếu team chạy test set mỗi ngày để chọn model, test set đã bị overfit bởi quá trình quyết định của team. Hãy tạo validation/leaderboard nội bộ riêng và giữ test cuối cùng thật sự sạch.
+</Callout>
+
+## Implementation lab: RandomizedSearchCV
+
+```python
+from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report
+from scipy.stats import randint
+
+X, y = make_classification(
+    n_samples=3000,
+    n_features=20,
+    n_informative=8,
+    weights=[0.85, 0.15],
+    random_state=42,
+)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.2,
+    stratify=y,
+    random_state=42,
+)
+
+param_dist = {
+    "n_estimators": randint(100, 600),
+    "max_depth": randint(3, 20),
+    "min_samples_leaf": randint(1, 30),
+}
+
+search = RandomizedSearchCV(
+    RandomForestClassifier(random_state=42, n_jobs=-1),
+    param_dist,
+    n_iter=30,
+    scoring="f1",
+    cv=3,
+    random_state=42,
+    n_jobs=-1,
+)
+
+search.fit(X_train, y_train)
+print(search.best_params_)
+print(search.best_score_)
+
+y_pred = search.best_estimator_.predict(X_test)
+print(classification_report(y_test, y_pred))
+```
+
+Expected interpretation:
+
+- `best_score_` là CV score trên train folds.
+- Test score là đánh giá cuối.
+- Nếu test thấp hơn CV nhiều, có distribution issue hoặc overfit selection.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: search space quá rộng">
+Nếu search quá rộng, phần lớn trial vô nghĩa. Bắt đầu bằng range hợp lý từ kinh nghiệm/model docs, rồi mở rộng nếu thấy best ở biên.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: không fixed random seed">
+Không set seed làm kết quả dao động, khó so sánh trial. Luôn set `random_state` ở split/model/search khi có thể.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: optimize metric sai">
+Nếu business cần recall fraud cao mà bạn optimize accuracy, tuning sẽ chọn model sai. Metric phải đến từ cost thực tế.
+</Callout>
+
+Checklist:
+
+1. Metric đã phù hợp business chưa?
+2. Search space có log scale cho tham số magnitude không?
+3. Best params có nằm sát biên search space không?
+4. CV std có cao không?
+5. Có overfit validation do thử quá nhiều không?
+6. Test set đã được giữ riêng chưa?
+7. Trial có được log để tái lập không?
+
+## Practice exercises
+
+1. Một grid có 5 giá trị LR, 4 giá trị depth, 3 giá trị dropout, CV=5. Tổng bao nhiêu model train?
+2. Vì sao random search thường tốt hơn grid search khi có nhiều hyperparameter?
+3. Thiết kế search space cho LogisticRegression `C` và RandomForest `max_depth`.
+4. Viết Optuna objective cho `KNeighborsClassifier` tune `n_neighbors`.
+5. Giải thích vì sao early stopping vừa regularization vừa tiết kiệm compute.
+
+## Knowledge check
+
+1. Hyperparameter khác parameter thế nào?
+2. Grid search có nhược điểm chính gì?
+3. Khi nào nên dùng loguniform?
+4. Bayesian optimization dùng thông tin gì để chọn trial tiếp theo?
+5. Early stopping theo dõi metric nào?
+6. Vì sao không tune trên test set?
+7. Nếu best hyperparameter nằm ở biên search range, bạn nên làm gì?
+
+## Answer key
+
+1. Parameter học từ data; hyperparameter do ta chọn trước training.
+2. Combinatorial explosion, tốn compute.
+3. Với tham số trải qua nhiều bậc độ lớn như LR, C, weight decay.
+4. Kết quả các trial trước.
+5. Validation metric/loss.
+6. Vì test sẽ trở thành validation, metric cuối bị optimistic.
+7. Mở rộng range theo hướng đó và chạy thêm search.
+
+Bài tập 1:
+
+```text
+5 * 4 * 3 * 5 = 300 model trainings
+```
+
+## Mini-project: Tuning leaderboard
+
+**Task:** Tạo một mini leaderboard tuning cho classifier.
+
+**Dataset:** `make_classification` hoặc dataset churn/spam.
+
+**Models:** LogisticRegression, RandomForest, GradientBoosting/XGBoost nếu có.
+
+**Deliverables:**
+
+- Search space cho từng model.
+- RandomizedSearchCV hoặc Optuna trials.
+- Bảng top 10 trials: model, params, CV score, test score.
+- Nhận xét model nào tốt nhất và vì sao.
+
+**Success criteria:**
+
+- Test set chỉ dùng cuối.
+- Có seed.
+- Có metric phù hợp imbalance.
+- Có phân tích overfit/underfit.
+- Có decision cuối cùng dựa trên validation/CV + test một lần.
+
+## Điểm cần nhớ
+
+- Tuning là chọn hyperparameters có hệ thống, không đoán mò.
+- Search space quan trọng hơn thuật toán search.
+- Grid search đơn giản nhưng dễ nổ tổ hợp.
+- Random search là baseline tuning rất mạnh.
+- Bayesian optimization/Optuna dùng history để thử thông minh hơn.
+- Early stopping dừng khi validation không cải thiện.
+- Không tune trên test set.
+- Log mọi experiment để reproducible.
+
+## Next chapter bridge
+
+Sau khi tune model, bạn cần đưa mọi thứ vào pipeline sạch: preprocessing, training, cross-validation, persistence. Chương tiếp theo: **Scikit-Learn** — framework giúp bạn đóng gói toàn bộ workflow ML classic một cách production-friendly.

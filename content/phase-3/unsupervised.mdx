@@ -1,0 +1,365 @@
+Unsupervised Learning là học khi **không có nhãn**. Trong AI production, điều này xảy ra rất thường xuyên: bạn có hàng triệu user logs nhưng không có label churn; hàng nghìn documents nhưng không biết topic; hàng triệu embeddings nhưng không biết cluster nào có vấn đề.
+
+Chương này giúp bạn hiểu clustering và dimensionality reduction không phải là “model phụ”, mà là công cụ để khám phá dữ liệu, debug RAG, phát hiện anomaly, và hiểu representation mà model đang tạo ra.
+
+## Why this matters
+
+Bạn đang xây một hệ thống RAG cho công ty. Bạn embed 50,000 chunks từ docs nội bộ. Retrieval đôi khi trả kết quả sai. Bạn cần trả lời:
+
+- Các documents có cluster rõ theo domain không?
+- Có chunks outlier do OCR lỗi không?
+- Query của user nằm gần cluster relevant không?
+- Có nhóm docs trùng lặp không?
+- Có topic nào thiếu data không?
+
+Không có label. Bạn cần unsupervised tools: K-Means, DBSCAN, PCA, UMAP.
+
+<Callout type="tip" title="Unsupervised learning là kính hiển vi dữ liệu">
+Supervised learning trả lời “dự đoán đúng không?”. Unsupervised learning giúp bạn hỏi “data của tôi có cấu trúc gì?”. Trong AI systems, khám phá cấu trúc thường là bước đầu để sửa retrieval, cải thiện dataset và phát hiện lỗi pipeline.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích clustering là gì và khi nào dùng.
+2. Hiểu K-Means hoạt động qua centroid và distance.
+3. Hiểu DBSCAN dựa trên mật độ và phát hiện noise.
+4. Giải thích PCA như tìm hướng variance lớn nhất.
+5. Phân biệt PCA với t-SNE/UMAP cho visualization.
+6. Xây workflow visualize embeddings cho RAG/debugging.
+7. Biết các hạn chế và bẫy khi diễn giải cluster plot.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Vector, distance, cosine similarity.
+- NumPy/Pandas/sklearn cơ bản.
+- Train/test split không quan trọng ở unsupervised exploration, nhưng vẫn cần validation bằng downstream task.
+
+## Clustering là gì?
+
+Clustering gom các điểm tương tự vào cùng nhóm. Input chỉ có `X`, không có `y`.
+
+```text
+X = embeddings/documents/users
+output = cluster labels
+```
+
+Ví dụ:
+
+| Data | Cluster có thể là |
+|---|---|
+| Support tickets | billing, login, refund, technical |
+| User behavior | power users, dormant users, trial users |
+| Documents | HR, finance, engineering, sales |
+| Embeddings | semantic topics |
+
+## K-Means intuition
+
+K-Means giả định mỗi cluster có một center gọi là centroid. Mỗi điểm thuộc cluster có centroid gần nhất.
+
+Thuật toán:
+
+1. Chọn `k` centroid ban đầu.
+2. Gán mỗi điểm vào centroid gần nhất.
+3. Cập nhật centroid = mean các điểm trong cluster.
+4. Lặp lại bước 2–3 đến khi ổn định.
+
+```python
+from sklearn.cluster import KMeans
+
+kmeans = KMeans(n_clusters=5, random_state=42, n_init="auto")
+labels = kmeans.fit_predict(X)
+centroids = kmeans.cluster_centers_
+```
+
+## Worked example by hand: 1D K-Means
+
+Data 1D:
+
+```text
+[1, 2, 3, 10, 11, 12]
+```
+
+Chọn `k=2`, centroid ban đầu:
+
+```text
+c1 = 1, c2 = 12
+```
+
+Gán điểm:
+
+```text
+1,2,3 gần c1
+10,11,12 gần c2
+```
+
+Cập nhật centroid:
+
+```text
+c1 = mean(1,2,3) = 2
+c2 = mean(10,11,12) = 11
+```
+
+Lặp lại, assignment không đổi. Cluster cuối:
+
+```text
+Cluster A: [1,2,3]
+Cluster B: [10,11,12]
+```
+
+Trực giác: K-Means tìm các “đám mây tròn” quanh centroid.
+
+<Callout type="warning" title="K-Means không biết hình dạng phức tạp">
+K-Means thích cluster dạng cầu/hình tròn và kích thước tương tự. Nếu cluster hình vòng cung, mật độ khác nhau, hoặc có nhiều outlier, K-Means có thể chia sai.
+</Callout>
+
+## Chọn số cluster k
+
+Không có đáp án hoàn hảo. Một số heuristics:
+
+### Elbow method
+
+Chạy K-Means nhiều `k`, đo inertia (tổng khoảng cách tới centroid). Chọn điểm “gấp khuỷu”.
+
+```python
+inertias = []
+for k in range(2, 15):
+    km = KMeans(n_clusters=k, random_state=42, n_init="auto")
+    km.fit(X)
+    inertias.append(km.inertia_)
+```
+
+### Silhouette score
+
+Đo điểm gần cluster mình hơn cluster khác bao nhiêu.
+
+```python
+from sklearn.metrics import silhouette_score
+
+score = silhouette_score(X, labels)
+```
+
+Score gần 1 tốt, gần 0 overlap, âm nghĩa là nhiều điểm có thể thuộc cluster khác.
+
+## DBSCAN intuition
+
+DBSCAN không cần chọn `k`. Nó tìm vùng mật độ cao.
+
+Tham số:
+
+- `eps`: bán kính neighborhood.
+- `min_samples`: số điểm tối thiểu để một điểm là core point.
+
+Output:
+
+- Cluster labels.
+- Label `-1` cho noise/outlier.
+
+```python
+from sklearn.cluster import DBSCAN
+
+clusterer = DBSCAN(eps=0.5, min_samples=5)
+labels = clusterer.fit_predict(X_scaled)
+```
+
+DBSCAN tốt cho:
+
+- Cluster hình dạng bất kỳ.
+- Outlier/anomaly detection.
+- Không biết số cluster.
+
+Nhược điểm:
+
+- Khó chọn `eps`.
+- Kém với high-dimensional sparse data.
+- Nếu mật độ cluster khác nhau, một `eps` không đủ.
+
+<Callout type="danger" title="High-dimensional distance bị kém ý nghĩa">
+Trong high-dimensional space, khoảng cách giữa điểm có xu hướng giống nhau hơn. DBSCAN/KMeans trên embedding 1536 chiều có thể kém. Thường giảm chiều bằng PCA/UMAP trước để visualize hoặc cluster cẩn thận.
+</Callout>
+
+## PCA intuition
+
+PCA tìm trục mới giữ variance lớn nhất.
+
+Hãy tưởng tượng data 2D nằm dọc theo một đường chéo. PCA tìm hướng đường chéo đó là component 1, hướng vuông góc là component 2.
+
+```python
+from sklearn.decomposition import PCA
+
+pca = PCA(n_components=2)
+X_2d = pca.fit_transform(X_scaled)
+print(pca.explained_variance_ratio_)
+```
+
+Nếu component 1 giữ 80% variance và component 2 giữ 15%, bạn giữ 95% thông tin trong 2 chiều.
+
+### Formal view
+
+PCA tìm orthogonal directions `v_1, v_2, ...` sao cho variance của projection `Xv` lớn nhất.
+
+Liên hệ Phase 2:
+
+- PCA = eigenvectors của covariance matrix.
+- Hoặc SVD của centered data matrix.
+
+## t-SNE và UMAP
+
+PCA tuyến tính. t-SNE/UMAP phi tuyến, thường đẹp hơn cho visualization embeddings.
+
+### t-SNE
+
+Tốt để thấy local neighborhoods. Nhưng:
+
+- Chậm với data lớn.
+- Khoảng cách global không đáng tin.
+- Nhạy `perplexity`.
+
+### UMAP
+
+Nhanh hơn t-SNE, giữ global structure tốt hơn phần nào.
+
+```python
+import umap
+
+reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42)
+X_umap = reducer.fit_transform(embeddings)
+```
+
+<Callout type="warning" title="Plot đẹp không đồng nghĩa model đúng">
+UMAP/t-SNE tạo visualization để khám phá, không phải bằng chứng cuối cùng. Hai cluster cách xa trên plot không nhất thiết cách xa trong original space. Đừng over-interpret.
+</Callout>
+
+## Implementation lab: visualize document embeddings
+
+```python
+from sentence_transformers import SentenceTransformer
+from sklearn.cluster import KMeans
+import umap
+import matplotlib.pyplot as plt
+
+texts = [
+    "How do I reset my password?",
+    "I cannot login to my account.",
+    "Please refund my payment.",
+    "Why was I charged twice?",
+    "How to deploy Docker on Kubernetes?",
+    "My pod is crash looping in Kubernetes.",
+]
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+emb = model.encode(texts, normalize_embeddings=True)
+
+labels = KMeans(n_clusters=3, random_state=42, n_init="auto").fit_predict(emb)
+
+xy = umap.UMAP(n_neighbors=3, min_dist=0.1, random_state=42).fit_transform(emb)
+
+plt.scatter(xy[:, 0], xy[:, 1], c=labels)
+for i, text in enumerate(texts):
+    plt.annotate(str(i), (xy[i, 0], xy[i, 1]))
+plt.show()
+```
+
+Expected interpretation:
+
+- Login/password texts nên gần nhau.
+- Refund/billing texts nên gần nhau.
+- Kubernetes texts nên gần nhau.
+
+Nếu không, embedding model có thể không phù hợp domain, hoặc dataset quá nhỏ/noisy.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: cluster trước khi scale">
+K-Means/DBSCAN dùng distance. Feature scale khác nhau làm feature lớn thống trị. Với numeric tabular, scale trước. Với normalized embeddings, cosine/dot thường phù hợp hơn Euclidean thô.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: ép mọi thứ vào cluster">
+K-Means luôn gán mọi điểm vào một cluster, kể cả outlier. Nếu bạn cần phát hiện noise, dùng DBSCAN/HDBSCAN hoặc anomaly detection.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: đặt tên cluster theo vài ví dụ đẹp">
+Bạn nhìn 5 sample trong cluster và đặt tên “billing”, nhưng cluster có thể pha nhiều topic. Luôn sample nhiều điểm, xem centroid/neighbors, và kiểm tra downstream.
+</Callout>
+
+Checklist:
+
+1. Data đã scale/normalize đúng chưa?
+2. Distance metric phù hợp không: Euclidean hay cosine?
+3. Có outlier không?
+4. K có được chọn bằng domain + metric không?
+5. Visualization có bị over-interpreted không?
+6. Cluster có được đánh giá bằng downstream task hoặc human review không?
+
+## Practice exercises
+
+1. Chạy K-Means với `k=2..10`, vẽ inertia và chọn elbow.
+2. Với data 2D có shape vòng tròn, K-Means hay DBSCAN phù hợp hơn? Vì sao?
+3. Dùng PCA giảm 100 chiều xuống 10 chiều, in explained variance ratio cumulative.
+4. Lấy 100 câu support ticket, embed bằng sentence-transformers, visualize bằng UMAP.
+5. Chọn 1 cluster và viết mô tả topic của cluster dựa trên 20 sample ngẫu nhiên.
+
+## Knowledge check
+
+1. K-Means cần chọn hyperparameter chính nào?
+2. DBSCAN label `-1` nghĩa là gì?
+3. PCA tối đa hóa đại lượng nào?
+4. t-SNE/UMAP chủ yếu dùng cho mục đích gì?
+5. Vì sao scaling quan trọng cho clustering?
+6. Cosine similarity thường hợp với loại data nào?
+7. Cluster label có phải ground truth không?
+
+## Answer key
+
+1. Số cluster `k`.
+2. Noise/outlier.
+3. Variance của projection.
+4. Visualization/exploration high-dimensional data.
+5. Vì distance bị feature scale lớn thống trị.
+6. Text/document embeddings đã normalize hoặc semantic vector.
+7. Không. Cluster là giả thuyết cấu trúc, cần kiểm tra bằng domain/human/downstream.
+
+## Mini-project: RAG embedding audit
+
+**Task:** Audit một knowledge base nhỏ bằng embeddings.
+
+**Input:** 100–500 text chunks từ docs hoặc tự tạo từ 5 topic khác nhau.
+
+**Steps:**
+
+1. Embed chunks bằng `sentence-transformers`.
+2. Normalize embeddings.
+3. Cluster bằng K-Means hoặc HDBSCAN/DBSCAN.
+4. Visualize bằng UMAP.
+5. Inspect 10 chunks mỗi cluster.
+6. Ghi nhận outliers/duplicates/topic gaps.
+
+**Deliverables:**
+
+- Plot UMAP.
+- Cluster summary table.
+- 5 vấn đề data quality phát hiện.
+- Đề xuất cải thiện chunking/metadata/retrieval.
+
+**Success criteria:**
+
+- Không over-interpret plot.
+- Có sample-based cluster naming.
+- Có nhận xét outlier/noise.
+- Có liên hệ tới RAG retrieval quality.
+
+## Điểm cần nhớ
+
+- Unsupervised learning giúp khám phá data khi không có label.
+- K-Means tìm centroid và cần chọn `k`; tốt cho cluster dạng cầu.
+- DBSCAN dựa trên mật độ, phát hiện noise, không cần `k` nhưng nhạy `eps`.
+- PCA giảm chiều tuyến tính, giữ variance lớn nhất.
+- t-SNE/UMAP dùng để visualize, không phải bằng chứng cuối cùng.
+- Với embeddings/RAG, unsupervised tools giúp debug cluster, outlier, duplicate và topic coverage.
+
+## Next chapter bridge
+
+Sau khi hiểu model và data, câu hỏi tiếp theo là: chọn hyperparameters thế nào? `k`, `max_depth`, `learning_rate`, `C`, `batch_size` — tất cả đều ảnh hưởng model. Chương tiếp theo: **Hyperparameter Tuning** — cách tìm configuration tốt mà không đoán mò.

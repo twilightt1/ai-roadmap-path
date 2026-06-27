@@ -1,0 +1,138 @@
+NLP production không chỉ là thuật toán — bạn cần biết thư viện nào dùng cho việc gì. Bài này map các tool chính: NLTK, spaCy, HuggingFace Transformers/Datasets, sentence-transformers, tiktoken, evaluate — và khi nào chọn cái nào.
+
+## NLTK
+
+NLTK là thư viện classic NLP cho học thuật/giáo dục:
+
+- Tokenization.
+- Stopwords.
+- Stemming/lemmatization.
+- Corpora.
+
+```python
+import nltk
+from nltk.tokenize import word_tokenize
+
+nltk.download("punkt")
+word_tokenize("Hello, world!")
+```
+
+NLTK tốt để học NLP classic, nhưng production thường dùng spaCy/HF.
+
+## spaCy
+
+spaCy hướng production: nhanh, pipeline rõ ràng, hỗ trợ NER/POS/dependency parsing.
+
+```python
+import spacy
+nlp = spacy.load("en_core_web_sm")
+doc = nlp("OpenAI is based in San Francisco.")
+
+for ent in doc.ents:
+    print(ent.text, ent.label_)
+```
+
+<Callout type="tip" title="spaCy cho preprocessing production">
+Nếu cần sentence segmentation, NER, rule-based matcher tốc độ cao trong API, spaCy rất phù hợp. Nó nhẹ hơn transformer lớn và dễ deploy.
+</Callout>
+
+## HuggingFace Transformers
+
+Transformers là chuẩn để dùng model pretrained:
+
+```python
+from transformers import pipeline
+
+clf = pipeline("sentiment-analysis")
+clf("I love this roadmap!")
+```
+
+Dùng API thấp hơn khi fine-tune:
+
+```python
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+tok = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased")
+```
+
+## HuggingFace Datasets
+
+Datasets load và xử lý dataset lớn hiệu quả:
+
+```python
+from datasets import load_dataset
+
+ds = load_dataset("imdb")
+print(ds["train"][0])
+
+def tokenize(batch):
+    return tok(batch["text"], truncation=True)
+
+ds_tok = ds.map(tokenize, batched=True)
+```
+
+## sentence-transformers
+
+Thư viện tạo sentence/document embeddings dễ dàng:
+
+```python
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+embeddings = model.encode(texts, normalize_embeddings=True)
+```
+
+Dùng cho semantic search, clustering, RAG prototype.
+
+## tiktoken
+
+`tiktoken` là tokenizer OpenAI, dùng để đếm token/cost:
+
+```python
+import tiktoken
+enc = tiktoken.encoding_for_model("gpt-4")
+num_tokens = len(enc.encode(prompt))
+```
+
+<Callout type="warning" title="Đếm token trước khi gọi API">
+Đếm token để tránh vượt context window và ước tính cost. Với multi-provider, mỗi provider/model tokenizer khác nhau — đừng dùng tokenizer OpenAI để ước tính Claude/Gemini một cách tuyệt đối.
+</Callout>
+
+## evaluate
+
+HuggingFace `evaluate` load metrics chuẩn:
+
+```python
+import evaluate
+
+f1 = evaluate.load("f1")
+rouge = evaluate.load("rouge")
+bertscore = evaluate.load("bertscore")
+```
+
+Tốt cho evaluation pipeline reproducible.
+
+## Chọn thư viện nào?
+
+| Nhu cầu | Tool |
+|---|---|
+| Học classic NLP | NLTK |
+| NER/parsing production nhẹ | spaCy |
+| Pretrained transformer/fine-tune | HuggingFace Transformers |
+| Dataset lớn | HuggingFace Datasets |
+| Sentence embedding/RAG prototype | sentence-transformers |
+| Đếm token OpenAI | tiktoken |
+| Metrics chuẩn | evaluate |
+
+## Điểm cần nhớ
+
+- NLTK tốt để học, không phải lựa chọn production chính.
+- spaCy nhanh, production-friendly cho NER/POS/sentence segmentation.
+- HuggingFace Transformers là chuẩn dùng/fine-tune pretrained models.
+- Datasets giúp load/map dataset lớn hiệu quả.
+- sentence-transformers tạo embedding nhanh cho semantic search/RAG.
+- tiktoken giúp đếm token/cost OpenAI.
+- evaluate chuẩn hóa metrics như F1/ROUGE/BERTScore.
+
+Tổng kết Phase 5: bạn đã hiểu text preprocessing, sparse/dense representation, embeddings, tokenization, transformer architecture, language modeling, model families, metrics và tooling. Đây là nền trực tiếp để bước vào Phase 6 — Large Language Models & AI Engineering.

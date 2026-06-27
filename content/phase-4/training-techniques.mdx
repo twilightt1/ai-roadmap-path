@@ -1,0 +1,306 @@
+Training một neural network sâu không chỉ là “thêm layer rồi chạy optimizer”. Khi mạng sâu hơn, bạn gặp nhiều vấn đề: activation scale thay đổi qua từng layer, gradient vanish/explode, overfitting, training không ổn định, validation dao động. Các kỹ thuật như BatchNorm, LayerNorm, Dropout, Residual Connections và Gradient Clipping là lý do mạng hiện đại có thể train được hàng chục, hàng trăm, thậm chí hàng nghìn layer.
+
+## Why this matters
+
+Hãy tưởng tượng bạn fine-tune một transformer classifier. Training loss giảm vài bước đầu rồi đột nhiên NaN. Hoặc validation accuracy dao động mạnh. Hoặc model train rất tốt nhưng deploy thì tệ. Những lỗi này thường không nằm ở “model quá yếu”, mà nằm ở **training dynamics**.
+
+Các kỹ thuật trong chương này trả lời các câu hỏi thực tế:
+
+- Làm sao giữ activation scale ổn định?
+- Làm sao chống overfit khi data ít?
+- Làm sao gradient đi qua mạng sâu?
+- Làm sao tránh gradient explode?
+- Khi nào dùng BatchNorm, khi nào dùng LayerNorm?
+
+<Callout type="info" title="Training techniques là kỹ năng debug">
+Khi bạn đọc paper/model code, bạn sẽ thấy LayerNorm, Dropout, Residual, Clip Grad Norm ở khắp nơi. Nếu chỉ biết gọi model mà không hiểu chúng, bạn sẽ rất khó debug fine-tuning hoặc tự thiết kế architecture.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích BatchNorm và LayerNorm khác nhau ở trục chuẩn hóa.
+2. Hiểu vì sao transformer dùng LayerNorm thay vì BatchNorm.
+3. Dùng Dropout đúng lúc và hiểu khác biệt giữa train/eval mode.
+4. Giải thích residual connection giúp gradient flow như thế nào.
+5. Áp dụng gradient clipping để tránh exploding gradients.
+6. Nhận biết lỗi thường gặp liên quan `model.train()` và `model.eval()`.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Forward/backward pass.
+- Gradient descent.
+- PyTorch `nn.Module` cơ bản.
+- Overfitting/regularization.
+
+## Core intuition: training sâu cần kiểm soát scale
+
+Mỗi layer biến đổi input. Nếu qua nhiều layer, distribution của activation thay đổi liên tục, layer sau phải học trên input luôn đổi. Điều này làm optimization khó.
+
+Normalization giúp chuẩn hóa activation để các layer sau nhận input ổn định hơn. Residual giúp gradient có đường đi tắt. Dropout làm model bớt phụ thuộc vào neuron cụ thể. Clipping chặn gradient quá lớn.
+
+## Batch Normalization
+
+BatchNorm chuẩn hóa theo batch cho từng feature/channel.
+
+Với input shape `(batch, features)`, BatchNorm tính mean/variance theo batch:
+
+```text
+x_hat = (x - mean_batch) / sqrt(var_batch + eps)
+y = gamma * x_hat + beta
+```
+
+`gamma` và `beta` là parameters học được để model vẫn có thể chọn scale/shift phù hợp.
+
+```python
+import torch
+from torch import nn
+
+bn = nn.BatchNorm1d(128)
+x = torch.randn(32, 128)  # batch=32, features=128
+y = bn(x)
+```
+
+Trong CNN:
+
+```python
+nn.BatchNorm2d(num_channels)
+```
+
+BatchNorm rất phổ biến trong CNN vì batch size thường đủ lớn và feature map ổn định.
+
+<Callout type="warning" title="BatchNorm phụ thuộc batch size">
+BatchNorm dùng statistics của batch. Batch nhỏ làm statistics nhiễu. Với batch size 1 hoặc sequence length thay đổi, BatchNorm có thể gây bất ổn. Đây là lý do transformer chủ yếu dùng LayerNorm.
+</Callout>
+
+## Layer Normalization
+
+LayerNorm chuẩn hóa theo feature dimension của **mỗi sample**, không phụ thuộc batch.
+
+Với input `(batch, hidden_dim)`, LayerNorm tính mean/variance trên `hidden_dim` cho từng sample.
+
+```python
+ln = nn.LayerNorm(128)
+x = torch.randn(32, 128)
+y = ln(x)
+```
+
+Với transformer input `(batch, seq_len, hidden_dim)`, LayerNorm thường áp trên `hidden_dim`:
+
+```python
+ln = nn.LayerNorm(hidden_dim)
+y = ln(x)  # x shape: (batch, seq_len, hidden_dim)
+```
+
+### BatchNorm vs LayerNorm
+
+| Kỹ thuật | Chuẩn hóa theo | Phụ thuộc batch? | Dùng phổ biến |
+|---|---|---|---|
+| BatchNorm | batch statistics | Có | CNN |
+| LayerNorm | feature của từng sample | Không | Transformer, RNN |
+
+## Worked example by hand: LayerNorm đơn giản
+
+Giả sử một token có hidden vector:
+
+```text
+x = [1, 2, 3]
+```
+
+Mean:
+
+```text
+mean = (1 + 2 + 3) / 3 = 2
+```
+
+Variance:
+
+```text
+var = ((1-2)^2 + (2-2)^2 + (3-2)^2) / 3 = 2/3
+```
+
+Normalize:
+
+```text
+x_hat = [(1-2)/sqrt(2/3), 0, (3-2)/sqrt(2/3)]
+      ≈ [-1.225, 0, 1.225]
+```
+
+Sau đó nhân `gamma` và cộng `beta`.
+
+## Dropout
+
+Dropout tắt ngẫu nhiên một phần neuron khi training.
+
+```python
+drop = nn.Dropout(p=0.1)
+y = drop(x)
+```
+
+Trong training, khoảng 10% phần tử bị đặt thành 0. Trong eval, dropout tắt.
+
+```python
+model.train()  # bật dropout
+model.eval()   # tắt dropout
+```
+
+<Callout type="danger" title="Quên model.eval() khi đánh giá">
+Nếu validation/inference mà quên `model.eval()`, dropout vẫn random và BatchNorm vẫn dùng batch statistics. Metrics sẽ dao động và inference không ổn định. Đây là lỗi production rất phổ biến.
+</Callout>
+
+## Residual Connections
+
+Residual connection cộng input vào output của sublayer:
+
+```text
+y = x + F(x)
+```
+
+Nếu `F(x)` chưa học được gì, model vẫn có thể truyền `x` qua. Gradient cũng có đường đi trực tiếp về layer trước.
+
+```python
+class ResidualMLP(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim, dim),
+            nn.ReLU(),
+            nn.Linear(dim, dim),
+        )
+
+    def forward(self, x):
+        return x + self.net(x)
+```
+
+Transformer block hiện đại dùng residual quanh attention và feed-forward:
+
+```text
+x = x + Attention(LayerNorm(x))
+x = x + MLP(LayerNorm(x))
+```
+
+## Gradient Clipping
+
+Gradient explode làm update quá lớn, loss NaN. Clipping giới hạn norm gradient:
+
+```python
+loss.backward()
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+optimizer.step()
+```
+
+Clipping đặc biệt hữu ích trong RNN và transformer fine-tuning.
+
+## Implementation lab: stable training block
+
+```python
+import torch
+from torch import nn
+
+class StableBlock(nn.Module):
+    def __init__(self, dim, dropout=0.1):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.ffn = nn.Sequential(
+            nn.Linear(dim, 4 * dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(4 * dim, dim),
+        )
+
+    def forward(self, x):
+        return x + self.ffn(self.norm(x))
+
+x = torch.randn(8, 16, 64)  # batch, seq_len, hidden_dim
+block = StableBlock(64)
+y = block(x)
+print(y.shape)  # same as x
+```
+
+Expected interpretation: residual giữ shape không đổi, LayerNorm chuẩn hóa hidden dimension, Dropout chỉ hoạt động khi `block.train()`.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: dùng BatchNorm với batch quá nhỏ">
+BatchNorm batch size nhỏ dễ noise. Nếu batch nhỏ hoặc sequence model, thử LayerNorm/GroupNorm.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: dropout quá cao">
+Dropout 0.5 có thể hợp model nhỏ/classic, nhưng với transformer fine-tuning thường 0.1 hoặc thấp hơn. Dropout quá cao làm underfit.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: clip gradient sau optimizer.step()">
+Clipping phải xảy ra sau `loss.backward()` và trước `optimizer.step()`. Nếu clip sau step thì đã quá muộn.
+</Callout>
+
+Checklist:
+
+1. Model đang ở `train()` hay `eval()` đúng chưa?
+2. Validation có dùng `torch.no_grad()` chưa?
+3. Batch size có đủ cho BatchNorm không?
+4. Dropout rate có quá cao không?
+5. Residual input/output shape có khớp không?
+6. Gradient norm có quá lớn không?
+7. Clipping đặt đúng vị trí chưa?
+
+## Practice exercises
+
+1. Với vector `[2,4,6]`, tính mean/variance và LayerNorm output chưa có gamma/beta.
+2. Viết block `x + MLP(LayerNorm(x))` trong PyTorch.
+3. Chạy cùng input qua Dropout ở train mode và eval mode, so sánh output.
+4. Thêm gradient clipping vào training loop MLP ở chương trước.
+5. Giải thích vì sao BatchNorm khó dùng trong autoregressive transformer.
+
+## Knowledge check
+
+1. BatchNorm chuẩn hóa theo trục nào?
+2. LayerNorm khác BatchNorm ở điểm quan trọng nào?
+3. Dropout bật/tắt theo mode nào?
+4. Residual connection giúp gì cho gradient?
+5. Gradient clipping đặt ở đâu trong training loop?
+6. Vì sao transformer dùng LayerNorm nhiều?
+7. Quên `model.eval()` gây hậu quả gì?
+
+## Answer key
+
+1. Theo batch statistics cho từng feature/channel.
+2. LayerNorm chuẩn hóa theo feature của từng sample, không phụ thuộc batch.
+3. Bật khi `model.train()`, tắt khi `model.eval()`.
+4. Tạo đường đi tắt cho gradient và identity mapping.
+5. Sau `loss.backward()` và trước `optimizer.step()`.
+6. Vì sequence/batch thay đổi, batch size có thể nhỏ, LayerNorm ổn định hơn.
+7. Dropout/BatchNorm hoạt động sai, metrics/inference không ổn định.
+
+## Mini-project: Stabilize a deep MLP
+
+**Task:** Train deep MLP trên `make_moons` hoặc MNIST subset với và không có LayerNorm/Dropout/Residual.
+
+**Deliverables:**
+
+- Baseline deep MLP.
+- Version thêm LayerNorm.
+- Version thêm residual.
+- Training/validation loss curves.
+- Nhận xét convergence và overfitting.
+
+**Success criteria:**
+
+- Có so sánh ít nhất 2 architecture.
+- Có plot hoặc log loss.
+- Có giải thích kỹ thuật nào giúp ổn định hơn.
+
+## Điểm cần nhớ
+
+- Training mạng sâu cần kiểm soát scale và gradient flow.
+- BatchNorm mạnh trong CNN nhưng phụ thuộc batch.
+- LayerNorm không phụ thuộc batch và là chuẩn trong transformer.
+- Dropout chống overfit nhưng phải tắt khi eval.
+- Residual connection giúp gradient và identity path.
+- Gradient clipping tránh exploding gradient.
+
+## Next chapter bridge
+
+Bây giờ bạn đã hiểu các kỹ thuật train mạng sâu. Chương tiếp theo áp dụng chúng vào kiến trúc vision kinh điển: **Convolutional Neural Networks (CNN)** — nơi convolution, pooling, BatchNorm và residual tạo nên ResNet và các backbone thị giác hiện đại.

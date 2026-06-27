@@ -1,0 +1,129 @@
+Transformer là kiến trúc đứng sau BERT, GPT, Claude, Gemini, LLaMA. Ý tưởng cốt lõi: mỗi token tự quyết định nên chú ý tới token nào khác bằng self-attention. Bài này đi từ Q/K/V, attention score, multi-head, positional encoding tới encoder/decoder và causal masking.
+
+## Vì sao Transformer thay RNN
+
+RNN xử lý tuần tự, khó song song hóa và khó học dependency xa. Transformer xử lý toàn sequence song song bằng attention:
+
+```text
+mọi token ↔ mọi token khác
+```
+
+Ưu điểm:
+
+- Parallel trên GPU.
+- Long-range dependency tốt.
+- Scale tốt lên data/model lớn.
+
+## Self-attention
+
+Mỗi token tạo 3 vector:
+
+- Query (Q): tôi đang tìm gì?
+- Key (K): tôi có thông tin gì để người khác tìm?
+- Value (V): thông tin thực sự truyền đi.
+
+Attention:
+
+```text
+Attention(Q,K,V) = softmax(QKᵀ / √d_k) V
+```
+
+```python
+import torch
+import torch.nn.functional as F
+
+Q = torch.randn(2, 4, 64)  # batch, seq, dim
+K = torch.randn(2, 4, 64)
+V = torch.randn(2, 4, 64)
+
+scores = Q @ K.transpose(-2, -1) / (64 ** 0.5)  # (2,4,4)
+weights = F.softmax(scores, dim=-1)
+out = weights @ V                               # (2,4,64)
+```
+
+<Callout type="info" title="√d_k để ổn định softmax">
+Dot product dimension lớn có variance lớn, làm softmax quá sắc (gradient nhỏ). Chia `√d_k` giữ scale ổn định. Đây là chi tiết nhỏ nhưng cực quan trọng.
+</Callout>
+
+## Multi-head attention
+
+Thay vì 1 attention, model dùng nhiều head song song. Mỗi head học quan hệ khác nhau: cú pháp, coreference, vị trí, semantic.
+
+```text
+head_i = Attention(QW_i^Q, KW_i^K, VW_i^V)
+output = concat(heads) W^O
+```
+
+Multi-head cho model nhìn nhiều "góc" của sequence cùng lúc.
+
+## Positional encoding
+
+Self-attention tự nó không biết thứ tự token. Cần thêm thông tin vị trí:
+
+- Sinusoidal positional encoding (Transformer gốc).
+- Learned positional embedding.
+- RoPE (rotary positional embedding) — dùng nhiều trong LLaMA.
+- ALiBi — bias theo khoảng cách.
+
+```text
+token_embedding + position_embedding → input transformer
+```
+
+## Transformer block
+
+Một block điển hình:
+
+```text
+x = x + MultiHeadAttention(LayerNorm(x))
+x = x + FeedForward(LayerNorm(x))
+```
+
+Feed-forward sublayer là MLP áp độc lập cho từng token:
+
+```python
+ffn = nn.Sequential(
+    nn.Linear(d_model, 4 * d_model),
+    nn.GELU(),
+    nn.Linear(4 * d_model, d_model),
+)
+```
+
+Residual + LayerNorm giúp train sâu ổn định.
+
+## Encoder, Decoder, Encoder-Decoder
+
+| Kiến trúc | Ví dụ | Dùng cho |
+|---|---|---|
+| Encoder-only | BERT | classification, NER, retrieval |
+| Decoder-only | GPT, LLaMA, Claude | generation, chat |
+| Encoder-Decoder | T5 | translation, summarization seq2seq |
+
+Encoder attention nhìn toàn bộ sequence hai chiều. Decoder dùng causal mask để token chỉ nhìn quá khứ.
+
+## Causal masking
+
+Trong generation, token hiện tại không được nhìn token tương lai. Causal mask che phần tam giác trên:
+
+```python
+seq = 4
+mask = torch.triu(torch.ones(seq, seq), diagonal=1).bool()
+scores = scores.masked_fill(mask, float("-inf"))
+weights = F.softmax(scores, dim=-1)
+```
+
+<Callout type="danger" title="Leak future token = training sai">
+Nếu decoder nhìn được token tương lai, model cheat khi training và fail khi generation. Causal mask là bắt buộc cho autoregressive LM.
+</Callout>
+
+## Điểm cần nhớ
+
+- Transformer thay recurrence bằng self-attention, song song tốt và học long-range dependency.
+- Q/K/V: query tìm, key được tìm, value truyền thông tin.
+- Attention score = `softmax(QKᵀ/√d_k)V`.
+- Multi-head attention học nhiều loại quan hệ song song.
+- Positional encoding thêm thông tin thứ tự token.
+- Transformer block = attention + feed-forward + residual + LayerNorm.
+- Encoder-only cho understanding, decoder-only cho generation, encoder-decoder cho seq2seq.
+- Causal mask ngăn decoder nhìn tương lai.
+
+Bài tiếp: Language Modeling — objective next-token prediction, masked LM, perplexity và các chiến lược decoding.

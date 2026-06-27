@@ -1,0 +1,265 @@
+Attention là một trong những ý tưởng quan trọng nhất của deep learning hiện đại. Nó bắt đầu như một cải tiến cho Seq2Seq RNN, rồi trở thành trái tim của Transformer và LLM. Trực giác rất đơn giản: khi xử lý một phần tử, model nên được phép **nhìn vào những phần liên quan** thay vì nén toàn bộ thông tin vào một vector.
+
+## Why this matters
+
+Trong translation, khi dịch từ “cat”, model nên chú ý tới từ “cat” trong câu nguồn. Trong RAG, khi trả lời câu hỏi, model nên chú ý tới đoạn context liên quan. Trong transformer, mỗi token chú ý tới token khác để hiểu quan hệ ngữ nghĩa/cú pháp.
+
+Attention giúp giải quyết:
+
+- bottleneck context vector của Seq2Seq,
+- long-range dependency,
+- khả năng giải thích alignment,
+- nền tảng self-attention của Transformer.
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích attention như soft retrieval.
+2. Tính attention weights từ scores bằng softmax.
+3. Phân biệt additive và dot-product attention.
+4. Hiểu Bahdanau attention trong Seq2Seq.
+5. Implement scaled dot-product attention đơn giản.
+6. Liên hệ attention trước transformer với Q/K/V self-attention.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- RNN/Seq2Seq bottleneck.
+- Dot product, softmax.
+- Tensor shape cơ bản.
+
+## Core intuition: soft retrieval
+
+Attention giống như bạn có một câu hỏi (query) và một danh sách memory. Bạn tính mỗi memory liên quan bao nhiêu, rồi lấy trung bình có trọng số.
+
+```text
+query → scores with memories → softmax weights → weighted sum of values
+```
+
+Nếu một memory quan trọng, weight cao. Nếu không liên quan, weight thấp.
+
+<Callout type="info" title="Attention không chọn cứng một vị trí">
+Attention là soft: nó có thể phân bổ 70% vào token A, 20% vào token B, 10% vào token C. Điều này differentiable nên train được bằng gradient descent.
+</Callout>
+
+## Formal definition
+
+Cho query `q`, keys `k_i`, values `v_i`:
+
+```text
+score_i = similarity(q, k_i)
+α_i = softmax(score_i)
+context = Σ α_i v_i
+```
+
+Trong dot-product attention:
+
+```text
+score_i = q^T k_i
+```
+
+Scaled dot-product:
+
+```text
+score_i = q^T k_i / sqrt(d_k)
+```
+
+## Worked example by hand
+
+Giả sử scores giữa query và 3 tokens là:
+
+```text
+scores = [2.0, 1.0, 0.0]
+```
+
+Softmax:
+
+```text
+e^2 = 7.389, e^1 = 2.718, e^0 = 1
+sum = 11.107
+weights = [0.665, 0.245, 0.090]
+```
+
+Nếu values là scalar:
+
+```text
+values = [10, 20, 30]
+context = 0.665*10 + 0.245*20 + 0.090*30
+        = 6.65 + 4.90 + 2.70 = 14.25
+```
+
+Context gần value đầu tiên nhất vì score đầu cao nhất.
+
+## Additive vs Dot-product Attention
+
+### Additive attention
+
+Bahdanau attention dùng MLP nhỏ:
+
+```text
+score(s, h_i) = v^T tanh(W_s s + W_h h_i)
+```
+
+Nó linh hoạt nhưng chậm hơn.
+
+### Dot-product attention
+
+Luong attention dùng dot product:
+
+```text
+score(s, h_i) = s^T h_i
+```
+
+Nhanh hơn và dẫn đến QK attention trong transformer.
+
+## Bahdanau attention trong Seq2Seq
+
+Pipeline:
+
+1. Encoder RNN tạo hidden states `h_1 ... h_T`.
+2. Decoder state hiện tại `s_t` làm query.
+3. Tính score giữa `s_t` và từng `h_i`.
+4. Softmax thành attention weights.
+5. Context là weighted sum encoder states.
+6. Decoder dùng context để sinh token.
+
+```text
+source hidden states: h1 h2 h3 h4
+current decoder state: s_t
+attention weights: 0.05 0.10 0.80 0.05
+context ≈ mostly h3
+```
+
+## Implementation lab: dot-product attention
+
+```python
+import torch
+import torch.nn.functional as F
+
+batch = 2
+seq_len = 5
+hidden = 8
+
+query = torch.randn(batch, hidden)          # decoder state
+keys = torch.randn(batch, seq_len, hidden)  # encoder states
+values = keys                               # often same in simple attention
+
+# scores: (batch, seq_len)
+scores = torch.bmm(keys, query.unsqueeze(-1)).squeeze(-1)
+weights = F.softmax(scores, dim=-1)
+
+# context: (batch, hidden)
+context = torch.bmm(weights.unsqueeze(1), values).squeeze(1)
+
+print(weights.shape, context.shape)
+```
+
+Expected:
+
+```text
+weights shape: (batch, seq_len)
+context shape: (batch, hidden)
+```
+
+## From attention to self-attention
+
+Seq2Seq attention: decoder query attends encoder states.
+
+Transformer self-attention: every token creates query/key/value and attends to tokens in the same sequence.
+
+```text
+Token i query → all token keys → weights → weighted sum values
+```
+
+Q/K/V is just a generalized attention interface:
+
+- Query: what I seek.
+- Key: what I contain for matching.
+- Value: what information I pass if attended to.
+
+<Callout type="tip" title="Attention matrix là relation graph">
+Self-attention creates a matrix `(seq_len, seq_len)`. Each row says: token này chú ý tới các token khác bao nhiêu. Bạn có thể xem nó như một graph mềm giữa tokens.
+</Callout>
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: softmax sai dimension">
+Attention weights phải sum to 1 trên dimension keys/sequence. Nếu softmax theo batch/hidden sai, model học vô nghĩa.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: quên mask padding">
+Nếu sequence có padding, attention có thể chú ý vào PAD token. Cần mask scores của PAD thành `-inf` trước softmax.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: quên causal mask trong decoder">
+Với generation, token không được nhìn tương lai. Quên causal mask làm training cheat và inference fail.
+</Callout>
+
+Checklist:
+
+1. Scores shape có `(batch, query_len, key_len)` không?
+2. Softmax dùng `dim=-1` trên key dimension chưa?
+3. Padding mask đã áp trước softmax chưa?
+4. Causal mask có cần không?
+5. Scale `sqrt(d_k)` có dùng cho dot-product lớn không?
+6. Weights có sum to 1 không?
+
+## Practice exercises
+
+1. Tính softmax cho scores `[1,2,3]` và context với values `[10,0,-10]`.
+2. Implement attention có padding mask.
+3. Giải thích additive attention khác dot-product attention.
+4. Vẽ attention alignment cho câu dịch đơn giản.
+5. Từ implementation dot-product, mở rộng query shape thành `(batch, query_len, hidden)`.
+
+## Knowledge check
+
+1. Attention giải quyết bottleneck nào của Seq2Seq?
+2. Attention weights được tạo bằng hàm gì?
+3. Context vector là gì?
+4. Query, key, value nghĩa là gì?
+5. Vì sao cần padding mask?
+6. Vì sao scaled dot-product chia `sqrt(d_k)`?
+7. Self-attention khác Seq2Seq attention thế nào?
+
+## Answer key
+
+1. Bottleneck nén toàn input vào một context vector duy nhất.
+2. Softmax trên scores.
+3. Weighted sum của values/encoder states.
+4. Query tìm thông tin, key dùng để match, value là thông tin truyền đi.
+5. Để model không chú ý vào PAD token.
+6. Giữ score scale ổn định, tránh softmax quá sắc.
+7. Self-attention tokens trong cùng sequence chú ý lẫn nhau; Seq2Seq attention decoder chú ý encoder states.
+
+## Mini-project: Attention visualizer
+
+**Task:** Implement scaled dot-product attention và visualize attention weights.
+
+**Deliverables:**
+
+- Function `attention(Q,K,V,mask=None)`.
+- Test shape với random tensors.
+- Heatmap attention matrix cho một sequence nhỏ.
+- Demo padding mask làm weight PAD gần 0.
+
+**Success criteria:**
+
+- Weights sum to 1 trên key dimension.
+- Mask hoạt động đúng.
+- Có giải thích một row attention matrix.
+
+## Điểm cần nhớ
+
+- Attention là soft retrieval differentiable.
+- Scores → softmax weights → weighted sum values.
+- Additive attention linh hoạt; dot-product nhanh.
+- Bahdanau attention giúp decoder nhìn lại encoder states.
+- Padding/causal mask là bắt buộc trong nhiều setting.
+- Self-attention của Transformer là extension của cùng ý tưởng Q/K/V.
+
+## Next chapter bridge
+
+Attention cho bạn ý tưởng. Nhưng để xây model thực tế, bạn cần framework. Chương tiếp theo: **PyTorch** — nơi bạn sẽ viết tensor, module, dataset, dataloader và training loop để biến ý tưởng thành code chạy được.
