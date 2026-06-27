@@ -1,0 +1,160 @@
+Trong AI, bạn liên tục đọc/ghi file: nạp dataset, lưu model checkpoint, đọc cấu hình JSON, ghi log. Bài này covers text I/O với context manager, CSV, JSON, pickle, và quản lý đường dẫn hiện đại bằng `pathlib`.
+
+## Đọc/ghi text với context manager
+
+```python
+# Ghi
+with open("output.txt", "w", encoding="utf-8") as f:
+    f.write("Hello\n")
+    f.write("World\n")
+
+# Đọc toàn bộ
+with open("output.txt", "r", encoding="utf-8") as f:
+    content = f.read()        # "Hello\nWorld\n"
+
+# Đọc từng dòng (memory hiệu quả cho file lớn)
+with open("large.txt", "r", encoding="utf-8") as f:
+    for line in f:
+        process(line.strip())
+```
+
+`with` là **context manager** — tự động đóng file khi thoát khối, kể cả khi có exception. Đây là cách an toàn và nên dùng thay cho `open()` không có `with`.
+
+<Callout type="warning" title="Luôn chỉ định encoding">
+Luôn truyền `encoding="utf-8"` khi mở file text. Nếu không, Python dùng encoding mặc định của OS (Windows thường là cp1252) — gây bug ký tự khi chạy trên máy khác. Trong AI, dataset thường chứa nhiều ngôn ngữ nên utf-8 là bắt buộc.
+</Callout>
+
+## Đọc/ghi CSV
+
+```python
+import csv
+
+# Ghi
+rows = [
+    {"model": "gpt-4", "score": 0.92},
+    {"model": "claude", "score": 0.88},
+]
+with open("results.csv", "w", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=["model", "score"])
+    writer.writeheader()
+    writer.writerows(rows)
+
+# Đọc
+with open("results.csv", "r", encoding="utf-8") as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        print(row["model"], row["score"])
+```
+
+`DictReader`/`DictWriter` dùng header làm key — tiện hơn `csv.reader` (trả list).
+
+<Callout type="info" title="Pandas thay CSV thuần khi cần xử lý">
+Khi dataset lớn hoặc cần lọc/nhóm dữ liệu, dùng `pandas.read_csv()` thay vì `csv` module. Nhưng `csv` module nhẹ, không dependency, hợp lý cho file nhỏ hoặc log file.
+</Callout>
+
+## JSON — format cấu hình và API
+
+```python
+import json
+
+config = {"model": "gpt-4", "params": {"temp": 0.7, "top_p": 0.9}}
+
+# Ghi (indent cho dễ đọc)
+with open("config.json", "w", encoding="utf-8") as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+
+# Đọc
+with open("config.json", "r", encoding="utf-8") as f:
+    cfg = json.load(f)
+
+# Chuỗi JSON (khi gửi qua HTTP / API)
+json_str = json.dumps(config)          # dict -> string
+back = json.loads(json_str)            # string -> dict
+```
+
+JSON là format trao đổi chuẩn cho LLM API (message array, function call response đều JSON). `ensure_ascii=False` giữ ký tự unicode nguyên dạng thay vì escape `\uXXXX`.
+
+## Pickle — serialize object Python
+
+```python
+import pickle
+
+# Lưu object bất kỳ
+model = {"weights": [0.1, 0.2, 0.3], "vocab": {"hello": 0}}
+with open("model.pkl", "wb") as f:           # binary mode
+    pickle.dump(model, f)
+
+# Nạp
+with open("model.pkl", "rb") as f:
+    loaded = pickle.load(f)
+```
+
+Pickle lưu **bất kỳ object Python nào** (kể cả class instance, function) thành binary. Thường dùng để lưu scikit-learn model (`joblib` — bản tối ưu pickle), dict phức tạp.
+
+<Callout type="danger" title="Bảo mật pickle">
+**Không bao giờ** `pickle.load` file từ nguồn không tin cậy. Pickle có thể thực thi code tùy ý khi load — là vector tấn công. Chỉ load file do chính bạn tạo. Đối với model AI, ưu tiên format an toàn hơn: `torch.save` (cũng dùng pickle nhưng cho tensor), hoặc `safetensors` (an toàn, không chạy code).
+</Callout>
+
+## pathlib — quản lý đường dẫn hiện đại
+
+Thay vì nối chuỗi bằng `os.path.join`, dùng `pathlib.Path`:
+
+```python
+from pathlib import Path
+
+# Tạo path — dùng / để nối (rất tự nhiên)
+data_dir = Path("data") / "raw" / "train.jsonl"
+print(data_dir)          # data/raw/train.jsonl
+
+# Thông tin path
+data_dir.name            # "train.jsonl"
+data_dir.stem            # "train"
+data_dir.suffix          # ".jsonl"
+data_dir.parent          # data/raw
+
+# Tạo thư mục
+Path("outputs/checkpoints").mkdir(parents=True, exist_ok=True)
+
+# Kiểm tra tồn tại
+data_dir.exists()        # True/False
+data_dir.is_file()
+
+# List file theo pattern
+for p in Path("data").glob("*.jsonl"):
+    print(p)
+# Đệ quy
+for p in Path("data").rglob("*.json"):
+    print(p)
+```
+
+<Callout type="tip" title="Path tương thích cross-platform">
+`Path` dùng separator đúng cho OS (`\` trên Windows, `/` trên Linux) — code chạy được ở mọi nơi. Nói không với `f"data/{name}.json"` nối tay bằng chuỗi.
+</Callout>
+
+## Đọc nhiều file theo batch pattern
+
+Pattern phổ biến khi nạp dataset rải rác nhiều file:
+
+```python
+from pathlib import Path
+import json
+
+def load_dataset(data_dir: str):
+    docs = []
+    for p in sorted(Path(data_dir).glob("*.jsonl")):
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                docs.append(json.loads(line))
+    return docs
+```
+
+## Điểm cần nhớ
+
+- Luôn dùng `with open(...) as f` (context manager) — tự đóng file an toàn.
+- **Luôn truyền `encoding="utf-8"`** cho text I/O — tránh bug encoding cross-platform.
+- `csv.DictReader`/`DictWriter` tiện hơn reader thường (dùng header làm key).
+- `json.dump`/`load` cho file, `json.dumps`/`loads` cho chuỗi — `ensure_ascii=False` giữ unicode.
+- **Pickle mạnh nhưng nguy hiểm** — không load file không tin cậy. Ưu tiên `safetensors` cho model.
+- `pathlib.Path` + `/` + `glob()` là cách quản lý path hiện đại, cross-platform.
+
+Bài tiếp: **Error handling & debugging** — `try/except`, custom exception, `logging`, và `pdb`/`breakpoint()` để săn bug trong AI pipeline phức tạp.

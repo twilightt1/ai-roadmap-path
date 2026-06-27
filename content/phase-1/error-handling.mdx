@@ -1,0 +1,211 @@
+AI pipeline phức tạp: gọi API (có thể rate-limit), đọc data (có thể sai format), train model (có thể NaN loss). Code có khả năng **chịu lỗi** (resilient) và **dễ debug** là khác biệt giữa demo và production. Bài này covers try/except, custom exception, logging, và công cụ debug.
+
+## try / except / finally
+
+```python
+try:
+    response = call_llm(prompt)
+except Exception as e:
+    print(f"Failed: {e}")
+else:
+    # chạy nếu không có exception
+    save(response)
+finally:
+    # luôn chạy, kể cả khi có exception
+    cleanup()
+```
+
+- `else`: chạy khi `try` thành công (không có exception).
+- `finally`: luôn chạy — dùng để dọn dẹp (đóng file, release GPU).
+
+### Bắt nhiều exception
+
+```python
+try:
+    data = json.loads(response)
+except json.JSONDecodeError:
+    print("Response không phải JSON hợp lệ")
+except (ConnectionError, TimeoutError) as e:
+    print(f"Lỗi mạng: {e}")
+except Exception:
+    # catch-all cuối cùng — chỉ dùng khi thật sự cần
+    raise   # re-raise sau khi (có thể) log
+```
+
+<Callout type="warning" title="Đừng bắt Exception trần">
+`except Exception:` nuốt **mọi** lỗi, kể cả bug logic (TypeError, KeyError do code sai). Đây là antipattern — che giấu bug thay vì sửa. Nguyên tắc: bắt **cụ thể** exception bạn biết cách xử lý. Nếu phải catch-all, luôn `raise` lại để không nuốt.
+</Callout>
+
+## Raise exception
+
+```python
+def divide(a, b):
+    if b == 0:
+        raise ValueError("b không được bằng 0")
+    return a / b
+
+# Re-raise với context
+try:
+    process(batch)
+except KeyError as e:
+    raise RuntimeError(f"Batch thiếu field {e}") from e
+```
+
+`from e` chuỗi exception — giữ traceback gốc, giúp debug dễ hơn.
+
+## Custom exception
+
+Tạo class exception riêng cho domain của bạn:
+
+```python
+class LLMError(Exception):
+    """Lỗi chung khi gọi LLM."""
+    pass
+
+class RateLimitError(LLMError):
+    """Vượt quá rate limit."""
+    def __init__(self, retry_after: float):
+        self.retry_after = retry_after
+        super().__init__(f"Rate limited, retry sau {retry_after}s")
+
+class TokenLimitError(LLMError):
+    """Vượt context window."""
+    pass
+
+# Sử dụng
+try:
+    response = call_api(prompt)
+except RateLimitError as e:
+    time.sleep(e.retry_after)
+    response = call_api(prompt)
+except TokenLimitError:
+    response = summarize_then_call(prompt)
+except LLMError:
+    response = DEFAULT_MESSAGE
+```
+
+<Callout type="tip" title="Hệ thống exception phân cấp">
+Kế thừa exception tạo **phân cấp**: `RateLimitError`/`TokenLimitError` là subclass của `LLMError`. Như vậy bạn có thể bắt cụ thể (`except RateLimitError`) hoặc bắt chung (`except LLMError`). Đây là cách SDK OpenAI/Anthropic thiết kế.
+</Callout>
+
+## logging — thay print
+
+`print()` tốt cho debug nhanh, nhưng trong production bạn cần **level** (DEBUG/INFO/WARNING/ERROR) và ghi ra file:
+
+```python
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler("app.log"),
+        logging.StreamHandler(),   # cũng in ra console
+    ],
+)
+logger = logging.getLogger(__name__)
+
+logger.debug("Chi tiết biến nội bộ")     # tắt khi level=INFO
+logger.info(f"Epoch {epoch}: loss={loss:.4f}")
+logger.warning("Cache miss rate cao")
+logger.error(f"API fail: {e}", exc_info=True)   # exc_info in traceback
+```
+
+| Level | Khi nào dùng |
+|---|---|
+| DEBUG | Chi tiết để gỡ lỗi (giá trị biến, shape tensor) |
+| INFO | Sự kiện bình thường (bắt đầu epoch, lưu checkpoint) |
+| WARNING | Điều bất thường nhưng không fatal (cache miss, fallback) |
+| ERROR | Lỗi nhưng app tiếp tục chạy (API fail, retry) |
+| CRITICAL | Lỗi nghiêm trọng, app không thể tiếp tục |
+
+<Callout type="info" title="exc_info=True cho traceback">
+Khi log exception, luôn thêm `exc_info=True` (hoặc `logger.exception(...)`). Nó đính kèm **toàn bộ traceback** — không có thì bạn chỉ biết "có lỗi" mà không biết ở dòng nào.
+</Callout>
+
+## pdb và breakpoint()
+
+### breakpoint() — debugger tương tác
+
+Đặt `breakpoint()` ở đâu đó trong code, chạy lại — Python sẽ dừng tại đó:
+
+```python
+def train_step(batch):
+    out = model(batch)
+    loss = criterion(out, labels)
+    if loss.item() != loss.item():   # NaN check
+        breakpoint()                 # dừng đây, khảo sát biến
+    loss.backward()
+```
+
+Trong prompt pdb:
+
+| Lệnh | Tác dụng |
+|---|---|
+| `n` | next — chạy dòng tiếp, không vào hàm |
+| `s` | step — vào trong hàm |
+| `c` | continue — chạy tới breakpoint tiếp |
+| `p var` | print biến |
+| `l` | list code quanh vị trí hiện tại |
+| `q` | quit |
+
+### Post-mortem debug
+
+Khi script crash, muốn dò xem trạng thái tại dòng lỗi:
+
+```python
+import pdb, traceback
+try:
+    main()
+except:
+    traceback.print_exc()
+    pdb.post_mortem()      # dò ngay tại dòng gây exception
+```
+
+## Đọc traceback
+
+```
+Traceback (most recent call last):
+  File "train.py", line 45, in <module>
+    loss = model(batch)
+  File "model.py", line 20, in __call__
+    return self.forward(x)
+  File "model.py", line 12, in forward
+    return self.layer2(self.layer1(x))
+TypeError: Cannot call 'Tensor' object
+```
+
+Đọc từ **dưới lên**: dòng cuối là loại lỗi; các dòng trên là **call stack** từ ngoài vào trong. Dòng có tên file + số dòng là nơi cần nhìn. Trong AI, traceback thường sâu (PyTorch/LangChain gọi nhiều lớp), nên tập trung vào **dòng code của bạn** xuất hiện trong stack.
+
+## Pattern: retry với backoff
+
+Kết hợp mọi thứ — xử lý lỗi API tạm thời:
+
+```python
+import time, random, logging
+
+logger = logging.getLogger(__name__)
+
+def call_with_retry(fn, max_retries=5, base_delay=1.0):
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except RateLimitError as e:
+            delay = base_delay * (2 ** attempt) + random.random()  # jitter
+            logger.warning(f"Rate limited, retry {attempt+1} sau {delay:.1f}s")
+            time.sleep(delay)
+        except TokenLimitError:
+            raise   # không retry được, lỗi logic
+    raise LLMError(f"Thất bại sau {max_retries} lần retry")
+```
+
+## Điểm cần nhớ
+
+- `try/except/finally`; `else` chạy khi thành công, `finally` luôn chạy (dọn dẹp).
+- **Bắt cụ thể** exception, đừng `except Exception:` nuốt hết — hoặc nếu phải, `raise` lại.
+- Tạo **custom exception phân c��p** (subclass `Exception`) để xử lý theo từng loại lỗi LLM.
+- Dùng `logging` (có level + file) thay `print` trong production; `exc_info=True` để có traceback.
+- `breakpoint()` mở debugger tương tác; `pdb.post_mortem()` dò sau khi crash.
+- Đọc traceback **từ dưới lên**: dòng cuối = loại lỗi, các dòng trên = call stack.
+
+Bài tiếp: **Performance & memory** — generator, `itertools`, profiling (`cProfile`), vectorization — để code AI chạy nhanh và không tốn RAM vô ích.

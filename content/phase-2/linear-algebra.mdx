@@ -1,0 +1,215 @@
+Linear algebra là **ngôn ngữ** của AI. Mọi embedding, weight, attention score đều là vector/ma trận. Khi bạn hiểu cosine similarity, bạn hiểu **cách semantic search hoạt động**; khi hiểu eigenvalues, bạn hiểu PCA. Bài này đi từ vector đến SVD, gắn mỗi khái niệm với ứng dụng AI thật.
+
+## Vector
+
+Vector là **danh sách số có thứ tự**, có thể hiểu hai cách:
+
+- **Đại số**: `v = [3, 4]` — 2 số.
+- **Hình học**: mũi tên từ gốc, có hướng và độ dài.
+
+```python
+import numpy as np
+
+v = np.array([3, 4])
+w = np.array([1, 0])
+
+# Cộng vector (hình học: nối đầu mũi tên)
+v + w               # [4, 4]
+
+# Nhân vô hướng (kéo dài/thu ngắn)
+2 * v               # [6, 8]
+```
+
+### Dot product — phép toán cốt lõi
+
+```python
+v = np.array([3, 4])
+w = np.array([1, 0])
+
+np.dot(v, w)        # 3
+v @ w               # 3 (Python 3.5+)
+```
+
+**Công thức**: `v · w = Σ vᵢ wᵢ = |v| |w| cos(θ)`
+
+Ý nghĩa hình học: dot product đo **độ "cùng hướng"**. Nếu `θ=0` (cùng hướng) → max; `θ=90°` (vuông góc) → 0; `θ=180°` (ngược hướng) → min (âm).
+
+<Callout type="info" title="Dot product ở đâu trong AI?">
+- **Attention**: `Q · K` (query dot key) tính độ liên quan giữa token.
+- **Embedding similarity**: `emb_a · emb_b` đo độ giống nhau.
+- **Logit của linear layer**: `W·x + b`.
+</Callout>
+
+## Norm — độ dài vector
+
+```python
+v = np.array([3, 4])
+
+np.linalg.norm(v)            # 5.0  (L2 mặc định)
+np.linalg.norm(v, ord=1)     # 7    (L1: |3|+|4|)
+np.linalg.norm(v, ord=np.inf)# 4    (L∞: max(|3|,|4|))
+```
+
+| Norm | Công thức | Đặc điểm |
+|---|---|---|
+| **L1** | `Σ |vᵢ|` | Th.promote sparsity (dùng cho L1 regularization) |
+| **L2** | `√(Σ vᵢ²)` | Mượt, phổ biến nhất |
+| **L∞** | `max(|vᵢ|)` | Chỉ phần tử lớn nhất |
+
+**Chuẩn hóa (normalize)** về vector đơn vị (độ dài = 1):
+
+```python
+v = np.array([3, 4])
+v_unit = v / np.linalg.norm(v)     # [0.6, 0.8], norm = 1
+```
+
+## Cosine similarity — cách embedding hoạt động
+
+Đây là **phép đo độ giống** phổ biến nhất trong AI:
+
+```
+cos(θ) = (v · w) / (|v| |w|)
+```
+
+Kết quả từ **-1 đến 1**:
+- `1` = cùng hướng (rất giống)
+- `0` = vuông góc (không liên quan)
+- `-1` = ngược hướng
+
+```python
+def cosine_sim(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+emb_doc = np.array([0.2, 0.8, 0.1, 0.5])
+emb_query = np.array([0.3, 0.7, 0.2, 0.4])
+
+cosine_sim(emb_query, emb_doc)   # ~0.95 → rất giống
+```
+
+<Callout type="tip" title="Vì sao cosine chứ không phải Euclidean?">
+Cosine similarity **bất biến với độ lớn** — chỉ quan tâm hướng, không quan tâm độ dài. Trong NLP, văn bản dài có embedding "độ lớn" khác văn bản ngắn, nhưng có thể cùng chủ đề. Cosine bỏ qua độ lớn, so sánh **hướng** (chủ đề) → hợp lý hơn cho semantic search.
+</Callout>
+
+Quy trình RAG thực tế: embed query + tất cả chunk, tính cosine similarity với mỗi chunk, lấy top-K chunk giống nhất đưa vào LLM.
+
+## Ma trận
+
+Ma trận là **mảng 2D số**. Mỗi dòng/cột là vector.
+
+```python
+A = np.array([[1, 2],
+              [3, 4]])
+B = np.array([[5, 6],
+              [7, 8]])
+
+A + B               # cộng element-wise
+A.T                 # transpose (đảo dòng/cột)
+```
+
+### Nhân ma trận — KHÔNG phải element-wise
+
+```python
+A = np.array([[1, 2],
+              [3, 4]])      # shape (2,2)
+B = np.array([[5, 6],
+              [7, 8]])      # shape (2,2)
+
+A @ B          # matmul, shape (2,2)
+# [[1*5+2*7, 1*6+2*8],
+#  [3*5+4*7, 3*6+4*8]]
+# = [[19, 22], [43, 50]]
+
+A * B          # element-wise (Hadamard) — KHÁC!
+# [[5, 12], [21, 32]]
+```
+
+**Quy tắc shape**: `(m,n) @ (n,p) = (m,p)`. Số cột của A phải = số dòng của B.
+
+<Callout type="danger" title="@ vs * — bug kinh điển">
+`@` = nhân ma trận (transform); `*` = nhân element-wise. Trong AI, `W @ x` là linear transform (weight áp cho input); `mask * x` là gating element. Nhầm 2 cái này là bug rất khó tìm vì code vẫn chạy, chỉ ra kết quả sai.
+</Callout>
+
+## Ma trận đơn vị, nghịch đảo, định thức
+
+```python
+A = np.array([[4, 7],
+              [2, 6]])
+
+np.linalg.inv(A)        # A⁻¹: sao cho A @ A⁻¹ = I
+np.linalg.det(A)        # định thức
+np.eye(2)               # I (đơn vị)
+```
+
+- **I (đơn vị)**: ma trận mà `A @ I = A` (như số 1 cho phép nhân).
+- **A⁻¹ (nghịch đảo)**: "chia" ma trận. Chỉ tồn tại nếu `det(A) ≠ 0`.
+- **Định thức**: về hình học, biểu diễn thể tích biến đổi. `det=0` → ma trận "phẳng" (rank thiếu), không nghịch đảo được.
+
+<Callout type="warning" title="Đừng tính nghịch đảo để giải hệ">
+Trong code thật, hiếm khi cần `inv(A)`. Để giải `Ax = b`, dùng `np.linalg.solve(A, b)` — ổn định số hơn nhiều. `inv` chỉ cho hiểu khái niệm.
+</Callout>
+
+## Rank — bậc ma trận
+
+Rank = số vector dòng (hoặc cột) **độc lập tuyến tính**. Đo "thông tin thực sự" trong ma trận:
+
+```python
+A = np.array([[1, 2, 3],
+              [2, 4, 6]])     # dòng 2 = 2×dòng 1
+np.linalg.matrix_rank(A)      # 1 (chỉ 1 thông tin độc lập)
+```
+
+Rank thấp → ma trận dư thừa, có thể nén. Đây là nền tảng của **dimensionality reduction** (PCA, SVD).
+
+## Eigenvalues và eigenvectors — tại sao quan trọng cho PCA
+
+Cho ma trận `A`, eigenvector `v` là hướng **không đổi** khi nhân với `A` (chỉ bị co giãn):
+
+```
+A v = λ v      (λ là eigenvalue)
+```
+
+```python
+A = np.array([[2, 0],
+              [0, 3]])
+eigenvalues, eigenvectors = np.linalg.eig(A)
+# eigenvalues: [2, 3]
+# eigenvectors: [[1,0],[0,1]] (trục tọa độ)
+```
+
+<Callout type="info" title="PCA dùng eigenvector">
+PCA tìm các hướng **phương sai lớn nhất** trong data. Các hướng đó chính là eigenvector của ma trận hiệp phương sai. Eigenvalue lớn = hướng chứa nhiều thông tin → giữ lại; nhỏ → bỏ (giảm chiều). Trong AI, PCA giảm 1000 chiều embedding xuống 50 mà giữ phần lớn thông tin.
+</Callout>
+
+## SVD — Singular Value Decomposition
+
+SVD phân tách **mọi ma trận** (kể cả không vuông) thành 3 phần:
+
+```
+A = U Σ Vᵀ
+```
+
+- `U`, `Vᵀ`: ma trận trực giao (xoay).
+- `Σ`: ma trận đường chéo chứa **singular values** (sắp xếp giảm dần).
+
+```python
+A = np.random.rand(5, 3)      # ma trận 5×3
+U, S, Vt = np.linalg.svd(A)
+# U: (5,5), S: (3,), Vt: (3,3)
+```
+
+<Callout type="tip" title="SVD cho nén dữ liệu">
+Singular value lớn = "hướng" chứa nhiều thông tin. Giữ top-k singular value, bỏ phần còn lại → xấp xỉ ma trận gốc bằng ma trận thấp hạng. Đây là cách **LSA** (Latent Semantic Analysis) và nhiều hệ gợi ý hoạt động. Trong AI hiện đại, SVD cũng dùng để **xấp xỉ ma trận weight** (model compression).
+</Callout>
+
+## Điểm cần nhớ
+
+- **Vector** = danh sách số; dot product `v·w = |v||w|cos(θ)` đo độ cùng hướng.
+- **Norm** L1 (sparsity), L2 (mượt), L∞; normalize = chia cho norm để độ dài = 1.
+- **Cosine similarity** = dot product chuẩn hóa → đo độ giống hướng (bỏ qua độ lớn) — nền tảng semantic search/RAG.
+- **`@` = matmul**, `*` = element-wise — đừng nhầm, đây là bug kinh điển.
+- Ma trận nghịch đảo chỉ tồn tại khi `det ≠ 0`; giải hệ `Ax=b` dùng `solve`, không dùng `inv`.
+- **Rank** = thông tin độc lập thực sự; rank thấp → nén được.
+- **Eigenvalues/eigenvectors** của ma trận hiệp phương sai = nền tảng PCA (giảm chiều giữ thông tin).
+- **SVD** phân tách mọi ma trận, giữ top-k singular value để nén/xấp xỉ hạng thấp.
+
+Bài tiếp: **Calculus** — đạo hàm, gradient, và chain rule — cách backpropagation "lan truyền" gradient ngược qua mạng.

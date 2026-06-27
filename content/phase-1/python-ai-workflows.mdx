@@ -1,0 +1,200 @@
+Có Python nền tảng rồi, bạn cần bộ công cụ **hàng ngày** của người làm AI: Jupyter/Colab để khám phá, `tqdm` theo dõi training, `argparse` cho CLI script, `dotenv` quản lý API key an toàn, và seeding để tái lập. Bài này lướt qua các công cụ này — không sâu, nhưng quan trọng để làm việc hiệu quả.
+
+## Jupyter notebooks
+
+Jupyter là môi trường tương tác: chia code thành **cell**, chạy từng cell, kết quả (kể cả biểu đồ) hiện ngay bên dưới. Lý tưởng để khám phá data, thử ý tưởng:
+
+```python
+# Cell 1: nạp data
+import pandas as pd
+df = pd.read_csv("train.csv")
+
+# Cell 2: khám phá
+df.describe()
+
+# Cell 3: vẽ
+import matplotlib.pyplot as plt
+plt.hist(df["loss"])
+plt.show()
+```
+
+### Magic commands
+
+```python
+%time model.fit(X, y)        # đo thời gian 1 lệnh
+%%time                       # đo cả cell
+for x in data:
+    process(x)
+
+%load_ext autoreload
+%autoreload 2                # tự reload module khi sửa file .py (rất tiện)
+```
+
+<Callout type="warning" title="Notebook không phải production">
+Notebook tuyệt vời cho khám phá nhưng **không** cho production: state cell phụ thuộc thứ tự chạy, khó test, khó version. Nguyên tắc: khi notebook ổn → trích logic ra file `.py` thuần, có test + lint.
+</Callout>
+
+## Google Colab — GPU miễn phí
+
+Colab là Jupyter trên cloud, có GPU miễn phí (T4) và cài package được:
+
+```python
+# Colab cell — cài package
+!pip install transformers datasets
+
+# Kiểm tra GPU
+import torch
+print(torch.cuda.is_available())   # True
+print(torch.cuda.get_device_name(0))
+
+# Mount Google Drive để lưu data
+from google.colab import drive
+drive.mount("/content/drive")
+```
+
+<Callout type="tip" title="Colab cho fine-tuning">
+Khi fine-tune model nhỏ (LoRA LLaMA, distilBERT), Colab free GPU đủ. Cho training lớn, cần GPU đàng hoàng (A100/H100) — thuê RunPod/Lambda hoặc dùng SageMaker.
+</Callout>
+
+## tqdm — thanh tiến trình
+
+Training lặp hàng nghìn epoch; không có tiến trình thì biết đang tới đâu. `tqdm` hiển thị progress bar:
+
+```python
+from tqdm import tqdm
+
+for epoch in tqdm(range(100), desc="Training"):
+    loss = train_step()
+
+# Training: 45%|████▌     | 45/100 [00:30<00:36,  1.5it/s]
+```
+
+Với DataLoader (PyTorch):
+
+```python
+from tqdm import tqdm
+for batch in tqdm(dataloader, total=len(dataloader)):
+    out = model(batch)
+```
+
+<Callout type="info" title="tqdm trong notebook">
+Trong Jupyter, dùng `from tqdm.notebook import tqdm` (widget đẹp hơn). Trong script console, `from tqdm import tqdm` (thanh ASCII).
+</Callout>
+
+## argparse — CLI cho script
+
+```python
+import argparse
+
+def main():
+    parser = argparse.ArgumentParser(description="Train model")
+    parser.add_argument("--data", type=str, required=True, help="Đường dẫn data")
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--debug", action="store_true")
+    args = parser.parse_args()
+
+    print(f"Train {args.data} for {args.epochs} epochs, lr={args.lr}")
+
+if __name__ == "__main__":
+    main()
+```
+
+Chạy:
+```bash
+python train.py --data data.csv --epochs 50 --lr 0.0005 --debug
+```
+
+<Callout type="tip" title="Khi config phức tạp, dùng YAML/hydra">
+`argparse` tốt cho vài tham số. Khi có config phức tạp (training LLM), dùng file YAML + `hydra` để compose config theo tầng (default + experiment override). Nhưng cho script AI đơn giản, `argparse` đủ.
+</Callout>
+
+## dotenv — quản lý API key (CRITICAL)
+
+**Không bao giờ** hardcode API key trong code. Dùng file `.env` + `python-dotenv`:
+
+```
+# .env (KHÔNG commit file này)
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+DATABASE_URL=postgresql://...
+```
+
+```python
+# .env.example (commit file này làm template)
+OPENAI_API_KEY=your-key-here
+```
+
+```python
+import os
+from dotenv import load_dotenv
+
+load_dotenv()                          # nạp .env vào env vars
+api_key = os.getenv("OPENAI_API_KEY")  # lấy
+
+client = openai.OpenAI(api_key=api_key)
+```
+
+```python
+# .gitignore
+.env
+```
+
+<Callout type="danger" title="Rò rỉ API key = mất tiền">
+Hardcode key trong code rồi push GitHub = bot quét key trong vài giây, chiếm tài khoản, tốn hàng nghìn đô. **Luôn**: `.env` + `.gitignore` + `.env.example`. Nếu lỡ commit key — revoke ngay trên dashboard, tạo key mới. Git history vẫn còn key cũ.
+</Callout>
+
+## Seeding — tái lập kết quả
+
+AI dùng random nhiều (khởi tạo weight, shuffle data, dropout). Không seed → mỗi lần chạy kết quả khác. Seed để **tái lập**:
+
+```python
+import random
+import numpy as np
+import torch
+
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)   # GPU
+
+set_seed(42)
+```
+
+<Callout type="warning" title="Seeding không đảm bảo 100%">
+Dù seed, một số op (ví dụ GPU non-deterministic conv) vẫn có thể khác nhẹ. Để hoàn toàn tái lập, cần thêm: `torch.backends.cudnn.deterministic = True`, `torch.use_deterministic_algorithms(True)` — nhưng chậm hơn. Cho dev/debug, seed cơ bản đủ.
+</Callout>
+
+## Lưu/nạp model
+
+```python
+# Scikit-learn — joblib (tối ưu pickle cho numpy)
+import joblib
+joblib.dump(model, "model.joblib")
+model = joblib.load("model.joblib")
+
+# PyTorch
+torch.save(model.state_dict(), "model.pt")          # chỉ weight
+model.load_state_dict(torch.load("model.pt"))
+
+# Toàn bộ (model + cấu trúc) — cẩn thận pickle risk
+torch.save(model, "model_full.pt")
+model = torch.load("model_full.pt")
+```
+
+<Callout type="info" title="state_dict vs toàn bộ">
+Ưu tiên `state_dict` (chỉ weight): nhẹ, không phụ thuộc định nghĩa class khi load. Khi load `toàn bộ`, môi trường phải có cùng code class — dễ vỡ khi deploy. Cho production, xét `safetensors` (an toàn, không chạy code) hoặc ONNX.
+</Callout>
+
+## Điểm cần nhớ
+
+- **Jupyter/Colab** để khám phá & thử; khi ổn → trích ra `.py` thuần có test cho production.
+- Colab free GPU (T4) đủ fine-tune model nhỏ; lớn hơn cần thuê GPU.
+- `tqdm` cho progress bar training; dùng biến thể `notebook` trong Jupyter.
+- `argparse` cho CLI script; config phức tạp thì YAML/hydra.
+- **`.env` + `python-dotenv`** quản lý API key; `.env` vào `.gitignore`, `.env.example` làm template. Hardcode key = rủi ro mất tiền.
+- **Seed** (`random`+`numpy`+`torch`) để tái lập; không seed thì mỗi lần kết quả khác.
+- Lưu model: `joblib` (sklearn), `state_dict` (PyTorch, ưu tiên); toàn bộ model dễ vễ khi deploy.
+
+Bài cuối của Phase 1: **Async Python** — thứ mà **hầu hết roadmap bỏ qua** nhưng cực kỳ quan trọng cho AI API (gọi song song nhiều LLM, streaming response).

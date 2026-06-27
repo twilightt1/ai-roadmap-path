@@ -1,0 +1,177 @@
+Hàm là khối xây dựng cơ bản của mọi chương trình Python — và trong AI, bạn sẽ viết/gọi hàm liên tục: preprocess data, train step, gọi API, parse response. Bài này涵盖 định nghĩa hàm, các kiểu tham số (đặc biệt `*args`/`**kwargs` mà **mọi AI SDK đều dùng**), và các idiom phổ biến.
+
+## Định nghĩa hàm
+
+```python
+def greet(name):
+    return f"Hello, {name}!"
+
+print(greet("Claude"))   # Hello, Claude!
+```
+
+Hàm dùng `def`, có thể không có `return` (trả `None` ngầm). Khi gặp `return`, hàm thoát ngay.
+
+```python
+def is_positive(x):
+    if x > 0:
+        return True
+    return False
+```
+
+<Callout type="tip" title="Hàm là first-class object">
+Trong Python, hàm là object — có thể gán cho biến, truyền vào hàm khác, trả về từ hàm. Đây là nền tảng của decorator và higher-order function mà các framework AI dùng rất nhiều (vd: callback trong training loop).
+</Callout>
+
+## Tham số: positional, keyword, default
+
+```python
+def create_prompt(system, user, temperature=0.7):
+    return {"system": system, "user": user, "temp": temperature}
+
+# Positional — theo thứ tự
+create_prompt("You are helpful", "Hi", 0.5)
+
+# Keyword — rõ ràng, không phụ thuộc thứ tự
+create_prompt(user="Hi", system="You are helpful", temperature=0.5)
+
+# Mix — positional trước, keyword sau
+create_prompt("You are helpful", "Hi", temperature=0.5)
+```
+
+<Callout type="warning" title="Quy tắc thứ tự tham số">
+Thứ tự phải là: positional → default/keyword → *args → **kwargs. Đặt sai sẽ SyntaxError:
+
+```python
+def f(a, b=2, *args, **kwargs): ...   # OK
+def f(a, *args, b=2): ...             # SAI (default sau *args cần keyword)
+```
+</Callout>
+
+## *args và **kwargs — linh hồn của AI SDK
+
+Đây là thứ bạn **bắt buộc** hiểu vì OpenAI/LangChain SDK dùng đầy:
+
+```python
+def call_llm(prompt, *args, **kwargs):
+    # args: tuple các positional thừa
+    # kwargs: dict các keyword thừa
+    model = kwargs.get("model", "gpt-4")
+    temperature = kwargs.get("temperature", 0.7)
+    print(f"Calling {model} with temp={temperature}")
+    print(f"Extra positional: {args}")
+    print(f"Extra kwargs: {kwargs}")
+
+call_llm("Hello", "extra1", "extra2", model="claude", top_p=0.9)
+# Calling claude with temp=0.7
+# Extra positional: ('extra1', 'extra2')
+# Extra kwargs: {'top_p': 0.9}
+```
+
+### Chuyển tiếp args/kwargs (forwarding)
+
+Khi wrap một hàm khác, ta thường "truyền nguyên" args/kwargs xuống:
+
+```python
+def logged_chat(**kwargs):
+    print(f"[LOG] calling with {kwargs}")
+    return openai_client.chat.completions.create(**kwargs)
+
+logged_chat(model="gpt-4", messages=[...], temperature=0.5)
+# kwargs = {"model": "gpt-4", "messages": [...], "temperature": 0.5}
+# create() nhận đúng các keyword đó
+```
+
+<Callout type="info" title="Vì sao SDK dùng **kwargs">
+API LLM có nhiều tham số tùy chọn (model, temperature, top_p, max_tokens, stream, tools...). Dùng `**kwargs` cho phép thêm parameter mới mà **không phá** code cũ — API forward thẳng xuống HTTP request. Đây là lý do `openai.ChatCompletion.create(**kwargs)` linh hoạt đến vậy.
+</Callout>
+
+## Giá trị trả về và unpacking
+
+Hàm có thể trả nhiều giá trị (thực ra là trả 1 tuple):
+
+```python
+def train_step():
+    loss = 0.5
+    accuracy = 0.9
+    return loss, accuracy     # tuple (0.5, 0.9)
+
+loss, acc = train_step()      # unpacking
+loss, _ = train_step()        # bỏ qua cái thứ 2
+```
+
+Unpacking cũng dùng cho list/dict:
+
+```python
+first, *rest = [1, 2, 3, 4]   # first=1, rest=[2,3,4]
+config = {"model": "gpt-4", "temp": 0.7}
+model, temp = config.values()
+```
+
+## Lambda — hàm ẩn danh
+
+Lambda là hàm 1 dòng, không có `def`. Dùng cho thao tác nhỏ, thường làm tham số cho `key=`:
+
+```python
+sort_by_loss = sorted(results, key=lambda r: r["loss"])
+# tương đương:
+def get_loss(r):
+    return r["loss"]
+sorted(results, key=get_loss)
+```
+
+<Callout type="warning" title="Đừng lạm dụng lambda">
+Lambda chỉ là 1 biểu thức, không có statement, khó debug. Nếu logic phức tạp hơn 1 dòng — viết `def` bình thường. PEP 8 và cộng đồng khuyến nghị như vậy.
+</Callout>
+
+## Type hints — quan trọng cho code AI production
+
+Type hint không bắt buộc nhưng **rất nên** dùng trong code production:
+
+```python
+from typing import Optional
+
+def embed(text: str, model: str = "text-embedding-3-small") -> list[float]:
+    ...
+
+def search(query: str, k: int = 5) -> list[dict]:
+    ...
+
+def get_model(name: Optional[str] = None) -> str:
+    return name or "gpt-4"
+```
+
+Lợi ích: IDE gợi ý đúng, `mypy`/`pyright` bắt lỗi sớm, teammate dễ đọc. Trong AI, type hint cho embedding (`list[float]`), message list (`list[dict]`) giúp tránh nhầm type rất nhiều.
+
+## Docstring
+
+```python
+def chunk_text(text: str, chunk_size: int = 512) -> list[str]:
+    """Chia văn bản thành các chunk có kích thước gần nhau.
+
+    Args:
+        text: Văn bản đầu vào.
+        chunk_size: Số ký tự tối đa mỗi chunk.
+
+    Returns:
+        Danh sách các chunk string.
+
+    Raises:
+        ValueError: Nếu chunk_size <= 0.
+    """
+    if chunk_size <= 0:
+        raise ValueError("chunk_size phải dương")
+    return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+```
+
+Docstring chuẩn (Google/Sphinx style) giúp IDE + công cụ sinh tài liệu tự động.
+
+## Điểm cần nhớ
+
+- `*args` thu thập positional thừa thành **tuple**; `**kwargs` thu thập keyword thừa thành **dict**.
+- Dùng `**kwargs` để **forward** tham số xuống SDK: `client.create(**kwargs)` — đây là pattern cốt lõi khi wrap LLM API.
+- Thứ tự tham số: positional → default → `*args` → `**kwargs`.
+- Hàm trả nhiều giá trị = trả 1 tuple, unpack bằng `a, b = fn()`.
+- **Type hint** + **docstring** là bắt buộc cho code AI production — bắt lỗi sớm, tự sinh tài liệu.
+- Lambda chỉ cho 1 biểu thức đơn giản; logic phức tạp thì viết `def`.
+
+Bài sau chúng ta chuyển sang **OOP** — nơi `class`, `@property`, và abstract class (`ABC`) trở nên quan trọng vì LangChain/LlamaIndex xây toàn bộ kiến trúc dựa trên đó.

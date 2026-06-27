@@ -1,0 +1,244 @@
+Python là ngôn ngữ **de facto** của AI/ML. Gần như mọi thư viện quan trọng — NumPy, Pandas, PyTorch, HuggingFace Transformers, LangChain — đều viết bằng Python. Bài này đi từ nền tảng ngữ pháp đến những điểm tinh tế (mutable vs immutable) mà bạn **bắt buộc** phải nắm vững khi xây dựng AI pipeline.
+
+## Kiểu dữ liệu và biến
+
+Python là ngôn ngữ **dynamic typing**: biến không khai báo kiểu, kiểu được suy ra từ giá trị gán.
+
+```python
+count = 10           # int
+price = 19.99        # float
+name = "Claude"      # str
+enabled = True       # bool
+result = None        # NoneType
+```
+
+Các kiểu cơ bản:
+
+| Kiểu | Ví dụ | Dùng cho |
+|---|---|---|
+| `int` | `42` | Số nguyên, đếm, index |
+| `float` | `3.14` | Số thực, loss, metrics |
+| `str` | `"hello"` | Văn bản, prompt |
+| `bool` | `True` | Cờ điều kiện |
+| `NoneType` | `None` | "Chưa có giá trị" |
+
+### Kiểm tra và chuyển kiểu
+
+```python
+x = "3.14"
+print(type(x))            # <class 'str'>
+print(isinstance(x, str)) # True
+
+n = int("42")             # 42 (int)
+f = float("3.14")         # 3.14 (float)
+s = str(42)               # "42"
+b = bool(0)               # False — 0, "", [], {} đều falsy
+```
+
+<Callout type="tip" title="isinstance vs type()">
+Trong code thật, ưu tiên `isinstance(x, int)` thay vì `type(x) == int`. `isinstance` tôn trọng kế thừa (subclass cũng khớp), còn `type() ==` thì không — quan trọng khi làm việc với NumPy/PyTorch vì tensor của chúng là subclass của nhiều kiểu.
+</Callout>
+
+## Mutable vs Immutable — điểm sống của AI pipeline
+
+Đây là khái niệm **nhiều người bỏ qua** rồi sa vào bug khó tìm. Một số kiểu là **immutable** (không đổi được sau khi tạo), số khác là **mutable** (đổi được).
+
+- **Immutable**: `int`, `float`, `str`, `bool`, `tuple`
+- **Mutable**: `list`, `dict`, `set`
+
+```python
+# str là immutable — "thay đổi" thực ra tạo object mới
+s = "hello"
+s = s + " world"   # object mới, s trỏ tới nó
+
+# list là mutable — sửa tại chỗ
+nums = [1, 2, 3]
+nums.append(4)     # cùng object, giờ là [1,2,3,4]
+```
+
+### Cạm bẫy tham chiếu
+
+```python
+def add_item(lst, item):
+    lst.append(item)
+    return lst
+
+data = [1, 2]
+result = add_item(data, 3)
+
+print(data is result)  # True — cùng object!
+print(data)            # [1, 2, 3] — data cũng bị thay đổi
+```
+
+<Callout type="warning" title="Mutable default argument — lỗi kinh điển">
+Đừng bao giờ dùng mutable làm default argument. Default chỉ được tạo **một lần** khi hàm định nghĩa, nên các lần gọi sau sẽ **dùng chung** object đó:
+
+```python
+def train(model, history=[]):   # SAI
+    history.append(model.loss)
+    return history
+
+# Lần gọi thứ 2 vẫn thấy loss của lần 1!
+```
+
+Cách đúng — dùng `None` rồi khởi tạo bên trong:
+
+```python
+def train(model, history=None):
+    if history is None:
+        history = []
+    history.append(model.loss)
+    return history
+```
+</Callout>
+
+Trong AI pipeline, điều này quan trọng vì bạn liên tục truyền `list`, `dict` (cấu hình, batch data) qua nhiều hàm. Hiểu rõ sẽ giúp tránh "data bị thay đổi ở đâu không rõ".
+
+## Strings
+
+String là chuỗi ký tự unicode, immutable.
+
+### Cắt chuỗi (slicing)
+
+Cú pháp `s[start:stop:step]` — `stop` không inclusive.
+
+```python
+s = "AI Engineer"
+s[0]          # "A"
+s[3:]         # "Engineer"
+s[:2]         # "AI"
+s[3:9:2]      # "Eni"  (mỗi 2 ký tự)
+s[::-1]       # "reenignE IA"  (đảo ngược)
+```
+
+### Các method hữu ích
+
+```python
+"  hello world  ".strip()        # "hello world"
+"hello world".split()            # ["hello", "world"]
+"hello world".split("o")         # ["hell", " w", "rld"]
+"-".join(["a", "b", "c"])        # "a-b-c"
+"hello".replace("l", "L")        # "heLLo"
+"hello".find("ll")               # 2 (index), -1 nếu không thấy
+"hello".startswith("he")         # True
+"hello".endswith("lo")           # True
+```
+
+### f-string — formatting hiện đại
+
+```python
+loss = 0.0234
+epoch = 5
+print(f"Epoch {epoch}: loss = {loss:.4f}")   # "Epoch 5: loss = 0.0234"
+print(f"accuracy = {0.9561:.2%}")            # "accuracy = 95.61%"
+print(f"{name:>20}")                         # căn phải rộng 20
+```
+
+<Callout type="tip" title="f-string với biểu thức">
+f-string có chứa biểu thức: `f"{len(prompt)} tokens, ${cost:.4f}"`. Rất tiện khi log metrics trong training loop.
+</Callout>
+
+## Collections
+
+### List — mảng động
+
+```python
+nums = [1, 2, 3]
+nums.append(4)           # [1,2,3,4]
+nums.extend([5, 6])      # [1,2,3,4,5,6]
+nums.pop()               # 6 (lấy & xóa cuối)
+nums.insert(0, 0)        # [0,1,2,3,4,5]
+nums.sort(reverse=True)  # [5,4,3,2,1,0]
+nums.reverse()           # đảo ngược tại chỗ
+```
+
+### Tuple — list bất biến
+
+```python
+point = (3, 4)
+x, y = point             # unpacking
+```
+
+Dùng tuple khi dữ liệu **không nên thay đổi** (toạ độ, cấu hình cố định, key của dict). Nhanh hơn list và hash được (dùng làm dict key được).
+
+### Dictionary — cặp key-value
+
+```python
+config = {"model": "gpt-4", "temperature": 0.7}
+config["max_tokens"] = 1000          # thêm
+config["temperature"] = 0.9          # sửa
+del config["max_tokens"]             # xoá
+
+config.get("model")                  # "gpt-4"
+config.get("top_p", 1.0)             # 1.0 (default nếu thiếu)
+
+for k, v in config.items():
+    print(k, v)
+```
+
+<Callout type="info" title=".get() tránh KeyError">
+Trong AI, bạn thường đọc cấu hình JSON có thể thiếu field. Dùng `config.get("key", default)` thay vì `config["key"]` để tránh crash khi key không tồn tại.
+</Callout>
+
+### Set — tập hợp không trùng
+
+```python
+a = {1, 2, 3}
+b = {3, 4, 5}
+a | b     # {1,2,3,4,5}  union
+a & b     # {3}           intersection
+a - b     # {1,2}         difference
+```
+
+Hữu ích để **loại trùng lặp** token, deduplicate dataset.
+
+## Control flow
+
+### if / elif / else
+
+```python
+if loss < 0.01:
+    status = "converged"
+elif loss < 0.1:
+    status = "good"
+else:
+    status = "keep training"
+```
+
+### Vòng lặp for
+
+```python
+# enumerate — lấy cả index và giá trị
+for i, batch in enumerate(dataloader):
+    print(f"batch {i}: {len(batch)} samples")
+
+# zip — chạy song song nhiều list
+for prompt, response in zip(prompts, responses):
+    print(prompt, "->", response)
+
+# range
+for epoch in range(10):      # 0..9
+    train_one_epoch()
+```
+
+### while và break/continue
+
+```python
+while loss > threshold:
+    loss = train_step()
+    if not is_finite(loss):
+        break       # thoát vòng
+    if skip:
+        continue    # bỏ qua phần còn lại, sang lần lặp tiếp
+```
+
+## Điểm cần nhớ
+
+- Python **dynamic typing** — kiểm tra kiểu bằng `isinstance()`, không `type() ==`.
+- **Mutable vs immutable** là nguồn bug thầm lặng: `list`/`dict`/`set` thay đổi tại chỗ, truyền qua hàm có thể bị sửa ngoài ý muốn.
+- **Đừng dùng mutable làm default argument** — dùng `None` rồi khởi tạo trong hàm.
+- f-string là cách format chuỗi hiện đại; hỗ trợ biểu thức và spec format (`.4f`, `.2%`).
+- `dict.get(key, default)` an toàn hơn `dict[key]` khi key có thể thiếu.
+- `enumerate` + `zip` là cặp đôi vàng cho vòng lặp trong AI (duyệt batch, ghép cặp dữ liệu).
+
+Bài tiếp theo chúng ta sẽ gói các đoạn code lặp lại thành **hàm** — và học `*args`/`**kwargs`, thứ mà mọi AI SDK (OpenAI, LangChain) đều dùng rầm rập.

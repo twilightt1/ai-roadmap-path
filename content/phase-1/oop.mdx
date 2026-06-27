@@ -1,0 +1,182 @@
+Hướng đối tượng (OOP) là cách tổ chức code mà **toàn bộ hệ sinh thái AI** dựa trên: LangChain có `LLM`/`Chain`/`Agent` class, PyTorch có `nn.Module`, HuggingFace có `PreTrainedModel`. Hiểu class, kế thừa, `super()`, và abstract class là điều kiện tiên quyết để đọc và mở rộng các thư viện này.
+
+## Class và instance
+
+```python
+class LLMClient:
+    # attribute class — chung cho mọi instance
+    default_model = "gpt-4"
+
+    # constructor
+    def __init__(self, api_key: str, model: str | None = None):
+        self.api_key = api_key                    # attribute instance
+        self.model = model or self.default_model
+
+    # instance method
+    def chat(self, prompt: str) -> str:
+        return f"[{self.model}] response to: {prompt}"
+
+# Tạo instance
+client = LLMClient(api_key="sk-...")
+print(client.chat("Hello"))   # [gpt-4] response to: Hello
+print(client.model)           # gpt-4
+```
+
+- `__init__` là constructor, chạy khi tạo instance.
+- `self` là tham chiếu tới instance hiện tại (bắt buộc là tham số đầu của mọi instance method).
+- **Attribute class** (`default_model`) dùng chung cho mọi instance; **attribute instance** (`self.model`) riêng per instance.
+
+<Callout type="warning" title="Cạm bẫy attribute class mutable">
+Đừng dùng mutable (list/dict) làm attribute class — nó bị chia sẻ giữa mọi instance:
+
+```python
+class Bad:
+    history = []            # SAI — mọi instance chung list!
+
+a, b = Bad(), Bad()
+a.history.append("x")
+print(b.history)           # ['x']  — bug!
+```
+
+Sửa: khởi tạo trong `__init__`: `self.history = []`.
+</Callout>
+
+## Kế thừa và super()
+
+```python
+class ClaudeClient(LLMClient):
+    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet"):
+        # gọi constructor cha
+        super().__init__(api_key, model)
+
+    # override method
+    def chat(self, prompt: str) -> str:
+        base = super().chat(prompt)         # gọi method cha
+        return base + " (via Claude)"
+
+c = ClaudeClient("sk-...")
+print(c.chat("Hi"))   # [claude-3-5-sonnet] response to: Hi (via Claude)
+```
+
+`super()` cho phép gọi method của class cha mà không cần nhắc tên cha trực tiếp. Khi override, thường gọi `super().__init__(...)` để tận dụng logic khởi tạo của cha.
+
+## Magic methods (dunder)
+
+Magic method định nghĩa cách object ứng xử với toán tử và hàm built-in:
+
+```python
+class Batch:
+    def __init__(self, samples):
+        self.samples = samples
+
+    def __len__(self):                    # len(batch)
+        return len(self.samples)
+
+    def __getitem__(self, i):             # batch[i]
+        return self.samples[i]
+
+    def __repr__(self):                   # repr(batch), debug
+        return f"Batch({len(self.samples)} samples)"
+
+    def __str__(self):                    # print(batch), người đọc
+        return f"Batch with {len(self)} samples"
+
+batch = Batch(["a", "b", "c"])
+print(len(batch))      # 3
+print(batch[1])        # "b"
+print(batch)           # Batch with 3 samples
+```
+
+<Callout type="tip" title="__getitem__ biến object thành iterable">
+Nếu class định nghĩa `__getitem__`, nó tự nhiên dùng được trong `for x in obj` và list comprehension. Đây là cách PyTorch `Dataset` hoạt động — bạn chỉ cài `__getitem__` + `__len__`, DataLoader lo phần batching.
+</Callout>
+
+## @property, @staticmethod, @classmethod
+
+### @property — biến method thành attribute tính toán
+
+```python
+class Model:
+    def __init__(self, params):
+        self.params = params
+
+    @property
+    def size_mb(self):
+        return len(self.params) * 4 / 1e6   # 4 bytes/param (float32)
+
+m = Model([0.1] * 1_000_000)
+print(m.size_mb)        # 4.0 — truy cập như attribute, không cần ()
+```
+
+### @staticmethod — hàm đặt trong class, không cần instance
+
+```python
+class Tokenizer:
+    @staticmethod
+    def count_tokens(text: str) -> int:
+        return len(text.split())
+
+print(Tokenizer.count_tokens("hello world"))   # 2 — gọi qua class, không cần instance
+```
+
+### @classmethod — method nhận class làm tham số đầu
+
+```python
+class Config:
+    def __init__(self, model: str, temp: float):
+        self.model = model
+        self.temp = temp
+
+    @classmethod
+    def from_dict(cls, d: dict):
+        return cls(d["model"], d["temperature"])   # cls = Config
+
+cfg = Config.from_dict({"model": "gpt-4", "temperature": 0.7})
+```
+
+`@classmethod` thường dùng cho **alternative constructor** (như `from_dict`, `from_json`). `cls` là class hiện tại, nên subclass kế thừa sẽ dùng đúng class con.
+
+## Abstract class (ABC) — pattern của LangChain/PyTorch
+
+Abstract class định nghĩa **interface** mà subclass phải cài. Đây là cách LangChain ép mọi LLM provider cài cùng API:
+
+```python
+from abc import ABC, abstractmethod
+
+class BaseLLM(ABC):
+    @abstractmethod
+    def chat(self, prompt: str) -> str:
+        ...
+
+    @abstractmethod
+    def embed(self, text: str) -> list[float]:
+        ...
+
+# Không thể khởi tạo class trừu tượng trực tiếp
+# llm = BaseLLM()   # TypeError!
+
+class OpenAILLM(BaseLLM):
+    def chat(self, prompt: str) -> str:
+        return f"OpenAI: {prompt}"
+
+    def embed(self, text: str) -> list[float]:
+        return [0.1, 0.2, 0.3]
+
+llm = OpenAILLM()      # OK — đã cài đủ
+llm.chat("Hi")         # "OpenAI: Hi"
+```
+
+<Callout type="info" title="Vì sao ABC quan trọng trong AI">
+`BaseLLM`, `BaseRetriever`, `BaseTool` trong LangChain đều là ABC. Khi bạn viết provider/retriever mới, kế thừa ABC và cài các abstract method → code của bạn plug-and-play với toàn bộ framework. Đây là pattern **lập trình theo interface**, không theo implementation.
+</Callout>
+
+## Điểm cần nhớ
+
+- `__init__` là constructor; `self` luôn là tham số đầu của instance method.
+- **Attribute class** dùng chung cho mọi instance — **đừng** để mutable (list/dict) ở đó.
+- `super()` gọi method cha; dùng khi override để tận dụng logic cha.
+- Magic method (`__len__`, `__getitem__`, `__repr__`) định nghĩa cách object tương tác với built-in. `__getitem__` biến object thành iterable — nền tảng của PyTorch `Dataset`.
+- `@property` = attribute tính toán; `@classmethod` = alternative constructor (`from_dict`); `@staticmethod` = hàm tiện ích trong class.
+- **ABC + `@abstractmethod`** định nghĩa interface — đây là pattern cốt lõi của LangChain/PyTorch. Kế thừa ABC để code của bạn tương thích framework.
+
+Bài tiếp: các **idiom Pythonic** (comprehension, generator, unpacking) giúp code ngắn gọn, hiệu quả memory — quan trọng khi xử lý dataset lớn.

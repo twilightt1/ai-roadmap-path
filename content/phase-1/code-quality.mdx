@@ -1,0 +1,183 @@
+Code AI dễ rối tung: notebook thử nghiệm thành cụm import, API key hardcode, không test, dependency lộn xộn. Bài này covers các công cụ giữ code **sạch, có kiểu, có test, và tái lập được** — kỹ năng phân biệt script thử nghiệm với project production.
+
+## Môi trường ảo (virtual environment)
+
+Mỗi project cần môi trường riêng để cô lập dependency, tránh xung đột:
+
+```bash
+# venv (built-in)
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+source .venv/bin/activate       # Linux/Mac
+
+# hoặc conda (phổ biến trong AI, hỗ trợ CUDA)
+conda create -n ai-platform python=3.12
+conda activate ai-platform
+```
+
+<Callout type="warning" title="Không bao giờ commit .venv">
+`.venv` chứa binary phụ thuộc OS — thêm vào `.gitignore`. Người khác cài lại từ `requirements.txt`. Cũng đừng cài package global (sửa môi trường hệ thống) — luôn vào venv trước.
+</Callout>
+
+## requirements.txt và pip freeze
+
+```bash
+pip install openai anthropic
+pip freeze > requirements.txt     # snapshot dependency
+```
+
+`requirements.txt`:
+```
+openai==1.50.0
+anthropic==0.40.0
+numpy>=1.26
+```
+
+Người khác: `pip install -r requirements.txt` — cài đúng phiên bản.
+
+<Callout type="tip" title="Dùng lock file chính xác hơn">
+`pip freeze` chưa quản lý **sub-dependency** sạch. Cho project nghiêm túc, dùng `uv`/`poetry` sinh lock file tái lập 100%. Nhưng `requirements.txt` đơn giản đủ cho hầu hết AI project nhỏ.
+</Callout>
+
+## Type hints
+
+```python
+def embed(text: str, model: str = "text-embedding-3-small") -> list[float]:
+    ...
+
+def search(query: str, k: int = 5) -> list[dict]:
+    ...
+
+# Typed cho cấu trúc phức tạp
+from typing import Optional, TypedDict
+
+class Message(TypedDict):
+    role: str
+    content: str
+
+def chat(messages: list[Message]) -> str: ...
+```
+
+Lợi ích: IDE (VS Code/PyCharm) gợi ý + cảnh báo đúng, `mypy`/`pyright` bắt lỗi trước khi chạy, teammate dễ đọc. Trong AI, type cho embedding (`list[float]`), message list (`list[dict]`/`TypedDict`) giúp tránh nhầm type rất nhiều.
+
+## dataclasses — container dữ liệu sạch
+
+```python
+from dataclasses import dataclass, field
+
+@dataclass
+class ModelConfig:
+    name: str
+    temperature: float = 0.7
+    max_tokens: int = 1000
+    tools: list[str] = field(default_factory=list)   # mutable default OK
+
+cfg = ModelConfig(name="gpt-4")
+print(cfg)           # ModelConfig(name='gpt-4', temperature=0.7, max_tokens=1000, tools=[])
+```
+
+`@dataclass` tự sinh `__init__`, `__repr__`, `__eq__` — gọn hơn class thường rất nhiều. `field(default_factory=list)` giải quyết đúng vấn đề mutable default.
+
+<Callout type="info" title="dataclass vs TypedDict vs Pydantic">
+- `TypedDict`: kiểu cho dict (input/output API JSON).
+- `@dataclass`: object Python có method, mutable.
+- `Pydantic` (BaseModel): dataclass + **validate** runtime + serialize JSON — phổ biến trong FastAPI/LangChain config.
+</Callout>
+
+## __init__.py và module
+
+Một thư mục có `__init__.py` thành **package**:
+
+```
+ai_platform/
+├── __init__.py
+├── llm/
+│   ├── __init__.py
+│   ├── openai_client.py
+│   └── anthropic_client.py
+└── rag/
+    ├── __init__.py
+    └── retriever.py
+```
+
+```python
+# Thay vì script 1 file dài 1000 dòng
+from ai_platform.llm.openai_client import OpenAIClient
+from ai_platform.rag.retriever import Retriever
+```
+
+## Unit test với pytest
+
+```python
+# test_chunker.py
+from ai_platform.rag.chunker import chunk_text
+
+def test_basic_chunk():
+    assert chunk_text("hello world", chunk_size=5) == ["hello", " worl", "d"]
+
+def test_empty():
+    assert chunk_text("", chunk_size=5) == []
+
+def test_raises_on_negative():
+    import pytest
+    with pytest.raises(ValueError):
+        chunk_text("x", chunk_size=-1)
+```
+
+Chạy:
+```bash
+pytest                         # chạy mọi test_*.py
+pytest test_chunker.py -v      # chi tiết
+pytest -k "chunk"              # chỉ test có tên chứa "chunk"
+```
+
+<Callout type="tip" title="Test cho AI không cần model thật">
+Cho hàm thuần (chunk_text, parse response, tính metric) test dễ. Cho phần gọi LLM thật, **mock** thay vì gọi thật — test nhanh, rẻ, không tốn API. Pattern: tách logic khỏi I/O để 2 phần test độc lập.
+</Callout>
+
+## Linting và formatting
+
+```bash
+# Ruff — linter + formatter hiện đại (thay flake8 + black, nhanh 10-100×)
+pip install ruff
+ruff check .              # lint
+ruff format .             # format
+
+# hoặc flake8 + black (cũ hơn)
+flake8 .
+black .
+```
+
+Ruff bắt: import không dùng, biến không dùng, lỗi cú pháp tiềm ẩn, vi phạm style. Format thống nhất style toàn team (khoảng trắng, dấu ngoặc).
+
+## Cấu trúc project gợi ý
+
+```
+ai-platform/
+├── .gitignore
+├── requirements.txt
+├── README.md
+├── .env.example            # template env (không commit .env thật)
+├── ai_platform/
+│   ├── __init__.py
+│   ├── config.py           # load .env, ModelConfig dataclass
+│   ├── llm/
+│   └── rag/
+├── tests/
+│   ├── test_chunker.py
+│   └── test_router.py
+└── scripts/
+    └── benchmark.py
+```
+
+## Điểm cần nhớ
+
+- **Luôn dùng venv/conda** cô lập dependency; thêm `.venv` vào `.gitignore`.
+- `pip freeze > requirements.txt` snapshot; người khác `pip install -r` cài lại.
+- **Type hints** + `mypy` bắt lỗi sớm; trong AI đặc biệt hữu ích cho embedding/message list.
+- `@dataclass` cho container dữ liệu sạch (tự sinh `__init__`/`__repr__`); `field(default_factory=)` cho mutable default.
+- Thư mục có `__init__.py` = package; tách code thành module thay vì file khổng lồ.
+- `pytest` cho unit test; tách logic thuần khỏi I/O để test không cần gọi LLM thật.
+- **Ruff** (lint + format) hiện đại, nhanh; chạy trước commit để code sạch.
+
+Bài tiếp: **Python cho AI workflows** — Jupyter, Colab, `tqdm`, `argparse`, `dotenv` quản lý API key, seeding tái lập — công cụ hàng ngày của người làm AI.

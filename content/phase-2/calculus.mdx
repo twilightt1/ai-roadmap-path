@@ -1,0 +1,185 @@
+Calculus là toán của **sự thay đổi**. Trong AI, nó trả lời câu hỏi: *"thay đổi weight bao nhiêu để giảm loss?"* — đó chính là gradient descent. Bài này covers đạo hàm, partial derivative, gradient, và **chain rule** — cơ chế mà backpropagation dựa vào để huấn luyện mọi mạng neural.
+
+## Đạo hàm — rate of change
+
+Đạo hàm `f'(x)` đo tốc độ thay đổi của `f` tại điểm `x`. Hình học: độ dốc của tiếp tuyến.
+
+```
+f'(x) = lim(h→0) [f(x+h) - f(x)] / h
+```
+
+Ví dụ: `f(x) = x²` → `f'(x) = 2x`. Tại `x=3`, dốc = 6 (đang tăng nhanh).
+
+### Quy tắc đạo hàm
+
+| Hàm | Đạo hàm |
+|---|---|
+| `xⁿ` | `n·xⁿ⁻¹` |
+| `eˣ` | `eˣ` |
+| `ln(x)` | `1/x` |
+| `sin(x)` | `cos(x)` |
+| `const` | `0` |
+
+**Quy tắc tổng/hiệu**: `(f+g)' = f' + g'`
+**Quy tắc tích**: `(fg)' = f'g + fg'`
+**Quy tắc thương**: `(f/g)' = (f'g - fg')/g²`
+
+```python
+import numpy as np
+
+# Đạo hàm số (numerical) — cho hàm bất kỳ
+def f(x):
+    return x ** 2
+
+def numerical_derivative(f, x, h=1e-5):
+    return (f(x + h) - f(x - h)) / (2 * h)
+
+numerical_derivative(f, 3.0)   # ~6.0 = 2·3 ✓
+```
+
+## Minima, maxima, saddle points
+
+Tại điểm cực trị, đạo hàm = 0. Đạo hàm cấp 2 (`f''`) cho biết loại:
+
+- `f'' > 0` → **minimum** (đáy, lõm lên)
+- `f'' < 0` → **maximum** (đỉnh, lồi xuống)
+- `f'' = 0` → có thể **saddle** (yên ngựa)
+
+<Callout type="warning" title="Saddle points — ác mộng của training">
+Trong không gian nhiều chiều (như weight của mạng lớn), saddle point phổ biến hơn local minimum. Tại đó gradient = 0 nhưng không phải cực tiểu → optimizers bị "kẹt". Đây là lý do cần momentum/Adam để thoát.
+</Callout>
+
+## Partial derivative và gradient
+
+Khi hàm có **nhiều biến** `f(x, y, z)`, partial derivative `∂f/∂x` là đạo hàm theo 1 biến, giữ các biến khác cố định.
+
+```python
+# f(x, y) = x² + 3xy + y²
+# ∂f/∂x = 2x + 3y
+# ∂f/∂y = 3x + 2y
+```
+
+**Gradient** `∇f` là vector gom tất cả partial derivative:
+
+```
+∇f = [∂f/∂x, ∂f/∂y] = [2x+3y, 3x+2y]
+```
+
+<Callout type="info" title="Gradient chỉ uphill">
+Gradient chỉ hướng **tăng nhanh nhất**. Để **giảm** loss, ta đi **ngược** gradient: `θ = θ - α·∇L`. Đây chính là gradient descent.
+</Callout>
+
+## Chain rule — cơ chế của backpropagation
+
+Chain rule cho đạo hàm hàm hợp. Nếu `y = f(g(x))`:
+
+```
+dy/dx = (dy/dg) · (dg/dx)
+```
+
+Cho nhiều tầng `z = f(y)`, `y = g(x)`:
+
+```
+dz/dx = (dz/dy) · (dy/dx)
+```
+
+### Ví dụ neural network 1 tầng
+
+```
+input x → linear: z = w·x + b → activation: a = σ(z) → loss: L = (a - y)²
+```
+
+Tính `∂L/∂w` (để cập nhật weight):
+
+```
+∂L/∂w = (∂L/∂a) · (∂a/∂z) · (∂z/∂w)
+```
+
+Tính từ **phải sang trái** (từ loss ngược về input) — đó là **backpropagation**:
+
+```python
+import numpy as np
+
+def sigmoid(z):
+    return 1 / (1 + np.exp(-z))
+
+# Forward
+x = np.array([0.5, 0.3])
+w = np.array([0.2, -0.1])
+b = 0.1
+y_true = 1.0
+
+z = np.dot(w, x) + b        # 0.17
+a = sigmoid(z)              # ~0.542
+L = (a - y_true) ** 2       # ~0.21
+
+# Backward (chain rule)
+dL_da = 2 * (a - y_true)            # ∂L/∂a
+da_dz = a * (1 - a)                 # ∂a/∂z (sigmoid đạo hàm)
+dz_dw = x                           # ∂z/∂w
+
+dL_dw = dL_da * da_dz * dz_dw       # ∂L/∂w
+print(dL_dw)   # gradient theo w
+```
+
+<Callout type="tip" title="Backprop = chain rule + memory">
+Backprop không phải thuật toán mới — nó là chain rule được tổ chức hiệu quả: tính forward 1 lần, lưu giá trị trung gian, rồi lan truyền gradient ngược. PyTorch's `loss.backward()` làm đúng việc này tự động (autograd).
+</Callout>
+
+## Đạo hàm các hàm activation & loss
+
+### Sigmoid
+
+```
+σ(x) = 1/(1+e⁻ˣ)
+σ'(x) = σ(x)·(1 - σ(x))     # rất tiện: dùng lại output
+```
+
+<Callout type="danger" title="Sigmoid & vanishing gradient">
+Khi `|x|` lớn, `σ(x)` gần 0 hoặc 1 → `σ'(x) ≈ 0` → gradient gần 0 → không học được. Đây là "vanishing gradient" khi mạng sâu dùng sigmoid. Lý do ReLU phổ biến hơn.
+</Callout>
+
+### ReLU
+
+```
+ReLU(x) = max(0, x)
+ReLU'(x) = 1 nếu x > 0, 0 nếu x < 0
+```
+
+Gradient hoặc 1 hoặc 0 — không vanishing (khi `x > 0`). Nhưng khi `x < 0`, gradient = 0 → "dying ReLU" (neuron chết). Leaky ReLU sửa bằng gradient nhỏ thay vì 0.
+
+### Softmax + cross-entropy
+
+Softmax:
+```
+softmax(zᵢ) = e^{zᵢ} / Σⱼ e^{zⱼ}
+```
+
+Đạo hàm softmax rườm rà, nhưng khi ghép với **cross-entropy loss**, kết quả cực gọn:
+
+```
+∂L/∂zᵢ = softmax(zᵢ) - yᵢ     # (predicted - target)
+```
+
+<Callout type="info" title="Tại sao luôn softmax + cross-entropy">
+Việc đạo hàm gọn thành `predicted - target` khiến gradient ổn định và dễ tính. Đây là lý do mọi classification network dùng cặp softmax+cross-entropy thay vì tách rời.
+</Callout>
+
+## Jacobian và Hessian
+
+- **Jacobian**: ma trận mọi partial derivative thứ 1 của vector function. Dùng khi output là vector.
+- **Hessian**: ma trận đạo hàm cấp 2 — cho biết độ cong của hàm. Dùng cho các phương pháp bậc 2 (Newton), nhưng trong deep learning hiếm dùng vì tốn memory (n² cho n tham số).
+
+Trong AI thực tế, ta chỉ cần gradient (cấp 1) — Adam/SGD dùng gradient, không cần Hessian.
+
+## Điểm cần nhớ
+
+- Đạo hàm = rate of change / độ dốc; quy tắc power/tích/thương.
+- Cực trị tại `f'=0`; `f''` cho biết min/max/saddle. **Saddle points phổ biến** ở nhiều chiều → cần momentum/Adam.
+- **Partial derivative** theo 1 biến; **gradient** = vector gom partial, chỉ hướng tăng nhanh nhất → đi ngược để giảm loss.
+- **Chain rule** = cơ chế backpropagation: `∂L/∂w = (∂L/∂a)·(∂a/∂z)·(∂z/∂w)`, tính từ loss ngược về input.
+- Sigmoid đạo hàm `σ(1-σ)` — nhưng **vanishing** khi `|x|` lớn; ReLU gradient 1/0 nhưng "dying" khi `x < 0`.
+- **Softmax + cross-entropy** đạo hàm gọn thành `predicted - target` — lý do luôn dùng cặp này.
+- Deep learning thực tế chỉ cần gradient (cấp 1); Hessian hiếm dùng.
+
+Bài tiếp: **Probability & Statistics** — Bayes, phân phối, MLE — toán đằng sau việc "học" của model.

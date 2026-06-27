@@ -1,0 +1,219 @@
+Đây là chương mà **hầu hết roadmap Python bỏ qua**, nhưng cực kỳ quan trọng cho AI engineering. Khi bạn gọi LLM API, mỗi request mất 1-3 giây. Gọi tuần tự 10 request = 10-30s. Gọi **song song** bằng async = 1-3s. Streaming LLM response (token chảy về liên tục) cũng cần async. Bài này đi vào `async/await`, `asyncio`, và gọi API song song.
+
+## Đồng bộ vs bất đồng bộ
+
+### Đồng bộ (sequential) — chờ từng cái
+
+```python
+import time
+
+def call_api(prompt):
+    time.sleep(2)              # giả lập API mất 2s
+    return f"response to {prompt}"
+
+start = time.time()
+r1 = call_api("Q1")   # 2s
+r2 = call_api("Q2")   # 2s
+r3 = call_api("Q3")   # 2s
+print(f"Tổng: {time.time()-start:.1f}s")   # ~6s
+```
+
+Trong khi chờ API (network I/O), CPU **đứng yên** — lãng phí.
+
+### Async — chờ song song
+
+```python
+import asyncio
+import time
+
+async def call_api(prompt):
+    await asyncio.sleep(2)     # giả lập await (không chặn)
+    return f"response to {prompt}"
+
+async def main():
+    start = time.time()
+    # chạy 3 cái cùng lúc
+    results = await asyncio.gather(
+        call_api("Q1"),
+        call_api("Q2"),
+        call_api("Q3"),
+    )
+    print(f"Tổng: {time.time()-start:.1f}s")   # ~2s (chỉ bằng cái chậm nhất)
+    print(results)
+
+asyncio.run(main())
+```
+
+<Callout type="tip" title="Async giúp khi nào?">
+Async giúp khi tác vụ **chờ I/O** (gọi API, đọc ổ đĩa, DB). Trong lúc chờ, event loop chạy tác vụ khác. Async **không** giúp khi tác vụ **tính toán CPU** — khi đó cần đa luồng/đa tiến trình. LLM API = I/O-bound → async là vũ khí chính.
+</Callout>
+
+## async/await cơ bản
+
+- `async def` khai báo **coroutine**.
+- `await` chờ một coroutine khác hoàn thành (nhường CPU cho event loop lúc chờ).
+- Chỉ dùng `await` bên trong `async def`.
+
+```python
+async def fetch_user(uid):
+    await asyncio.sleep(0.5)
+    return {"id": uid, "name": f"User{uid}"}
+
+async def main():
+    user = await fetch_user(1)     # await coroutine
+    print(user)
+
+asyncio.run(main())               # chạy entry point
+```
+
+## asyncio.gather — chạy song song
+
+```python
+async def main():
+    # Cách 1: gather nhiều coroutine
+    results = await asyncio.gather(
+        fetch_user(1),
+        fetch_user(2),
+        fetch_user(3),
+    )
+    # Cách 2: từ list
+    tasks = [fetch_user(i) for i in range(10)]
+    results = await asyncio.gather(*tasks)
+```
+
+`gather` nhận nhiều coroutine, chạy song song, trả kết quả theo **cùng thứ tự** truyền vào.
+
+<Callout type="warning" title="gather và exception">
+Mặc định, nếu 1 coroutine trong `gather` raise, cả gather raise ngay (trả exception đầu tiên). Muốn không fail-fast, dùng `return_exceptions=True`:
+
+```python
+results = await asyncio.gather(*tasks, return_exceptions=True)
+# results[i] có thể là Exception object thay vì giá trị
+```
+</Callout>
+
+## asyncio.as_completed — xử lý theo thứ tự xong
+
+`gather` chờ **tất cả** xong mới trả. `as_completed` yield kết quả **ngay khi cái nào xong**:
+
+```python
+async def main():
+    tasks = [fetch_user(i) for i in range(10)]
+    for coro in asyncio.as_completed(tasks):
+        result = await coro        # cái xong trước trả trước
+        print(result)
+```
+
+Hữu ích khi muốn hiển thị kết quả dần dần (vd: race giữa nhiều model, in cái nhanh nhất trước).
+
+## Gọi HTTP bất đồng bộ — httpx
+
+`requests` là đồng bộ (chặn). `httpx` có cả sync và async:
+
+```python
+import httpx
+import asyncio
+
+async def call_openai(prompt):
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"model": "gpt-4", "messages": [{"role": "user", "content": prompt}]},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+async def main():
+    prompts = ["Q1", "Q2", "Q3", "Q4", "Q5"]
+    tasks = [call_openai(p) for p in prompts]
+    results = await asyncio.gather(*tasks)   # 5 request song song
+    for r in results:
+        print(r["choices"][0]["message"]["content"])
+```
+
+<Callout type="info" title="Tái dùng AsyncClient">
+Tạo `httpx.AsyncClient` mỗi request tốn overhead (mở connection mới). Tái dùng 1 client cho nhiều request → connection pooling, nhanh hơn. Pattern: tạo client 1 lần, truyền vào, hoặc dùng context manager toàn app.
+</Callout>
+
+## Giới hạn concurrency — Semaphore
+
+Gather 1000 request cùng lúc = bị rate-limit (hoặc đuối server). Dùng `Semaphore` giới hạn song song:
+
+```python
+sem = asyncio.Semaphore(10)   # tối đa 10 cùng lúc
+
+async def call_with_limit(prompt):
+    async with sem:            # chỉ 10 vào được vùng này
+        return await call_openai(prompt)
+
+async def main():
+    prompts = [...]  # 1000 prompts
+    tasks = [call_with_limit(p) for p in prompts]
+    results = await asyncio.gather(*tasks)   # vẫn song song nhưng max 10
+```
+
+<Callout type="warning" title="Tôn trọng rate limit">
+Provider LLM có rate limit (RPM/TPM). Vượt = 429 error. Dùng Semaphore + retry backoff (xem bài error handling) để vừa nhanh vừa không bị cấm.
+</Callout>
+
+## Streaming response — vì sao cần async
+
+LLM streaming (SSE) trả token **từng chunk** liên tục. Để render token ra UI ngay khi đến (như ChatGPT), bạn cần async consume stream:
+
+```python
+async def stream_chat(prompt):
+    async with httpx.AsyncClient() as client:
+        async with client.stream(
+            "POST",
+            "https://api.openai.com/v1/chat/completions",
+            json={"model": "gpt-4", "messages": [...], "stream": True},
+            headers={"Authorization": f"Bearer {api_key}"},
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if line.startswith("data: "):
+                    chunk = parse_chunk(line[6:])
+                    if chunk:
+                        yield chunk["delta"]["content"]   # yield từng token
+```
+
+Server (FastAPI) lại `yield` token xuống client qua SSE. Toàn bộ chuỗi **bất đồng bộ** — không chặn, token chảy mượt.
+
+<Callout type="danger" title="Đừng dùng requests cho streaming production">
+`requests` đồng bộ: khi đọc stream, nó chặn 1 thread. FastAPI + async + httpx/`openai.AsyncOpenAI` cho phép 1 process phục vụ hàng trăm connection streaming cùng lúc. Dùng `requests` trong async = chặn event loop, giết hiệu năng.
+</Callout>
+
+## Chạy async trong script vs FastAPI
+
+- **Script**: `asyncio.run(main())` ở entry point.
+- **FastAPI**: route khai báo `async def`, framework tự chạy event loop.
+- **Gọi async từ code đồng bộ**: dùng `asyncio.run()` (mỗi lần tạo loop mới) — cẩn thận không lồng loop.
+
+```python
+# FastAPI
+from fastapi import FastAPI
+app = FastAPI()
+
+@app.get("/ask")
+async def ask(q: str):
+    result = await call_openai(q)   # async, không chặn
+    return {"answer": result}
+```
+
+## Điểm cần nhớ
+
+- Async giúp tác vụ **I/O-bound** (gọi API, streaming); không giúp CPU-bound.
+- `async def` + `await`; entry point chạy bằng `asyncio.run()`.
+- `asyncio.gather(*tasks)` chạy song song, trả theo thứ tự truyền vào; `return_exceptions=True` để không fail-fast.
+- `asyncio.as_completed` yield kết quả theo thứ tự **xong trước**.
+- Dùng **`httpx.AsyncClient`** (không phải `requests`) cho HTTP bất đồng bộ; tái dùng client cho connection pooling.
+- **`Semaphore`** giới hạn concurrency — tôn trọng rate limit provider.
+- **Streaming LLM** (SSE) cần async để token chảy mượt; FastAPI + async phục vụ hàng trăm connection.
+- Đừng dùng `requests` (sync) trong async — nó chặn event loop.
+
+## Tổng kết Phase 1
+
+Phase 1 đi từ **Python nền tảng** (kiểu, OOP, idiom) qua **xử lý dữ liệu** (NumPy, Pandas) và **chất lượng code** (test, type, venv) tới **async cho AI API**. Bạn giờ có nền tảng vững để: viết code sạch, xử lý dataset, gọi LLM API song song và streaming. Đây là nền móng cho mọi phase sau — từ Math (Phase 2) đến Multi-LLM Orchestration (Phase 7).
+
+Tiếp theo: **Phase 2 — Mathematics & Statistics** — toán đằng sau model, từ linear algebra (cách embedding hoạt động) đến calculus (cách backprop hoạt động).

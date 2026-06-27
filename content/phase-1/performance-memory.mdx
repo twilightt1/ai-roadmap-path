@@ -1,0 +1,173 @@
+Trong AI, data có thể to hàng GB, inference gọi hàng nghìn request, training lặp hàng nghìn epoch. Một vòng lặp kém có thể chậm 100×. Bài này covers generator (`yield`), `itertools`, profiling, shallow vs deep copy, và tại sao **vectorization** đánh bại Python loop.
+
+## Generator và yield
+
+Hàm có `yield` là **generator** — trả giá trị từng cái, tạm dừng giữa chừng, tiếp tục khi được gọi lại:
+
+```python
+def read_batches(path, batch_size=32):
+    batch = []
+    with open(path) as f:
+        for line in f:
+            batch.append(json.loads(line))
+            if len(batch) == batch_size:
+                yield batch          # trả batch này, tạm dừng
+                batch = []           # tiếp tục từ đây
+    if batch:
+        yield batch                  # batch cuối (lẻ)
+
+# Sử dụng — không load hết file vào RAM
+for batch in read_batches("huge.jsonl"):
+    process(batch)
+```
+
+So với trả list hết:
+
+```python
+def read_all(path):           # SAI cho file lớn
+    return [json.loads(l) for l in open(path)]   # RAM nổ
+```
+
+<Callout type="tip" title="yield cho streaming LLM">
+Streaming LLM response (SSE) dùng generator: API trả từng chunk token, bạn `yield` từng chunk xuống client. Đây là cách `stream=True` trong OpenAI SDK hoạt động.
+</Callout>
+
+## itertools — công cụ vòng lặp
+
+```python
+import itertools
+
+# chain — nối nhiều iterable
+list(itertools.chain([1,2], [3,4]))        # [1,2,3,4]
+
+# islice — cắt lazy (không tạo list trung gian)
+first_100 = itertools.islice(stream, 100)
+
+# batch — chia thành nhóm N
+def batched(iterable, n):
+    it = iter(iterable)
+    while batch := tuple(itertools.islice(it, n)):
+        yield batch
+
+for b in batched(range(10), 3):
+    print(b)        # (0,1,2) (3,4,5) (6,7,8) (9,)
+
+# product — tích Descartes (nested loop phẳng)
+for a, b in itertools.product([0,1], [0,1]):
+    print(a, b)     # (0,0)(0,1)(1,0)(1,1)
+
+# combinations / permutations
+list(itertools.combinations("ABC", 2))     # [('A','B'),('A','C'),('B','C')]
+```
+
+<Callout type="info" title="itertools đều lazy">
+Mọi hàm trong `itertools` là **lazy** — không tạo list trung gian, xử lý từng phần tử. Lý tưởng cho stream data lớn.
+</Callout>
+
+## timeit và cProfile — đo trước khi tối ưu
+
+### timeit — đo thời gian một đoạn
+
+```python
+import timeit
+
+# Đo list comprehension vs loop
+t1 = timeit.timeit("[x**2 for x in range(1000)]", number=10000)
+t2 = timeit.timeit("""
+out = []
+for x in range(1000):
+    out.append(x**2)
+""", number=10000)
+print(f"comprehension: {t1:.3f}s, loop: {t2:.3f}s")
+```
+
+### cProfile — tìm hàm chậm nhất
+
+```python
+import cProfile
+
+cProfile.run("train_model()", sort="cumulative")
+```
+
+Output dạng:
+```
+   ncalls  tottime  percall  cumtime  filename:lineno(function)
+   1000     5.2      0.005    5.2     model.py:12(forward)
+   5000     3.1      0.0006   3.1     data.py:45(tokenize)
+```
+
+`tottime` = thời gian trong chính hàm đó; `cumtime` = tổng thời gian gồm hàm con. Tập trung tối ưu hàm có `cumtime` cao nhất.
+
+<Callout type="warning" title="Đo, đừng đoán">
+Nguyên tắc tối ưu: **profile trước, tối ưu sau**. Trực giác về "đâu chậm" thường sai — chỉ `cProfile` cho biết thật. Đừng tối ưu sớm (premature optimization) code chưa phải bottleneck.
+</Callout>
+
+## Shallow vs deep copy
+
+```python
+import copy
+
+original = {"list": [1, 2, 3], "nested": {"a": 1}}
+
+# Gán — chỉ tham chiếu (không copy)
+ref = original
+ref["list"].append(4)
+print(original["list"])      # [1,2,3,4] — bị thay đổi!
+
+# Shallow copy — copy tầng ngoài, nested vẫn tham chiếu
+shallow = original.copy()            # hoặc copy.copy(original)
+shallow["list"].append(5)
+print(original["list"])      # [1,2,3,4,5] — nested vẫn chung!
+
+# Deep copy — copy toàn bộ, đệ quy
+deep = copy.deepcopy(original)
+deep["list"].append(6)
+print(original["list"])      # [1,2,3,4,5] — không bị ảnh hưởng
+```
+
+<Callout type="info" title="Khi nào cần deep copy">
+Trong AI, cần deep copy khi: nhân bản model state (để so sánh trước/sau train), snapshot config dict có nested. Chú ý deep copy chậm và tốn memory — chỉ dùng khi thật sự cần bản hoàn toàn độc lập.
+</Callout>
+
+## Vectorization — đánh bại Python loop
+
+Python loop chậm vì mỗi phép `+` đi qua interpreter. NumPy đẩy phép tính xuống C, tính hàng nghìn phần tử cùng lúc:
+
+```python
+import numpy as np
+
+arr = np.arange(1_000_000)
+
+# Python loop — chậm
+result = [x * 2 for x in arr]           # ~50ms
+
+# Vectorized — nhanh 50-100×
+result = arr * 2                        # ~1ms
+```
+
+Trường hợp điển hình trong AI — tính embedding similarity cho cả batch:
+
+```python
+# Loop — chậm
+sims = []
+for emb in embeddings:
+    sims.append(np.dot(query, emb))
+
+# Vectorized — nhanh
+sims = embeddings @ query              # một phép matmul
+```
+
+<Callout type="danger" title="Tránh loop qua NumPy array">
+Khi đã có NumPy array / PyTorch tensor, **đừng** lặp từng phần tử bằng Python loop. Dùng vectorized op (`+`, `*`, `@`, `sum(axis=)`...). Đây là nguyên tắc số 1 hiệu năng trong AI — khác biệt có thể 100×.
+</Callout>
+
+## Điểm cần nhớ
+
+- **Generator (`yield`)** xử lý data lớn mà không tốn RAM — nền tảng streaming và batch loader.
+- `itertools` (`chain`, `islice`, `batched`, `product`) đều lazy, lý tưởng cho stream.
+- **Profile trước, tối ưu sau**: `timeit` đo đoạn nhỏ, `cProfile` tìm hàm chậm nhất (`cumtime`).
+- `copy()` shallow (nested vẫn chung); `copy.deepcopy()` bản độc lập hoàn toàn.
+- **Vectorization**: với NumPy/PyTorch, dùng phép tính mảng (`@`, `*`, `sum(axis=)`) thay vì Python loop — khác biệt 50-100×.
+- Tránh premature optimization: chỉ tối ưu khi profile chỉ rõ bottleneck.
+
+Bài tiếp: **NumPy** — thư viện lõi của toàn bộ AI/ML, nơi vectorization và broadcasting trở thành kỹ năng sinh tử.

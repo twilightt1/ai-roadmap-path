@@ -1,0 +1,183 @@
+"Pythonic" nghĩa là viết code theo phong cách tự nhiên của Python — ngắn gọn, dễ đọc, và khai thác các cấu trúc đặc trưng của ngôn ngữ. Trong AI, các idiom này không chỉ đẹp mà còn **tiết kiệm memory** (generator) và **rút gọn code xử lý dữ liệu** đáng kể.
+
+## Comprehension
+
+### List comprehension
+
+Thay vì:
+
+```python
+squares = []
+for x in range(10):
+    squares.append(x ** 2)
+```
+
+Viết:
+
+```python
+squares = [x ** 2 for x in range(10)]
+```
+
+Có thể kèm điều kiện:
+
+```python
+even_squares = [x ** 2 for x in range(10) if x % 2 == 0]
+```
+
+### Dict và set comprehension
+
+```python
+# Dict: token -> token_id
+vocab = {token: i for i, token in enumerate(tokens)}
+
+# Set: các token duy nhất
+unique = {w.lower() for w in words}
+```
+
+<Callout type="warning" title="Đừng lạm dụng comprehension cho logic phức tạp">
+Comprehension trở nên khó đọc khi có nhiều `for`/`if` lồng nhau. Nguyên tắc: nếu khó đọc hơn vòng lặp thường — dùng vòng lặp thường. Readability counts.
+</Callout>
+
+## Generator expression — tiết kiệm memory
+
+List comprehension tạo **toàn bộ list** trong memory. Generator expression tạo giá trị **lười** (lazy), chỉ khi được yêu cầu:
+
+```python
+# List — tạo hết 1M số ngay
+squares_list = [x ** 2 for x in range(1_000_000)]   # ~8MB
+
+# Generator — không tạo gì cho tới khi duyệt
+squares_gen = (x ** 2 for x in range(1_000_000))    # ~120 bytes
+```
+
+Generator là iterator — chỉ duyệt được **một lần**:
+
+```python
+gen = (x for x in range(5))
+print(list(gen))   # [0, 1, 2, 3, 4]
+print(list(gen))   # [] — đã cạn!
+```
+
+<Callout type="tip" title="Generator cho dataset lớn">
+Khi xử lý dataset AI nhiều GB, **đừng load hết vào RAM**. Dùng generator để xử lý từng dòng/batch:
+
+```python
+def stream_prompts(path):
+    with open(path) as f:
+        for line in f:
+            yield json.loads(line)["prompt"]
+
+for prompt in stream_prompts("huge.jsonl"):
+    process(prompt)   # chỉ 1 dòng trong RAM tại mỗi thời điểm
+```
+</Callout>
+
+## map, filter, reduce
+
+```python
+nums = [1, 2, 3, 4]
+
+# map — áp dụng hàm cho mỗi phần tử
+doubled = list(map(lambda x: x * 2, nums))        # [2, 4, 6, 8]
+
+# filter — giữ phần tử thỏa điều kiện
+evens = list(filter(lambda x: x % 2 == 0, nums))  # [2, 4]
+
+# reduce — gộp về 1 giá trị
+from functools import reduce
+total = reduce(lambda a, b: a + b, nums)          # 10
+```
+
+Tuy nhiên, trong Python hiện đại, **list comprehension thường dễ đọc hơn** `map`/`filter`:
+
+```python
+doubled = [x * 2 for x in nums]        # rõ hơn map()
+evens = [x for x in nums if x % 2 == 0]  # rõ hơn filter()
+```
+
+`reduce` vẫn dùng cho việc gộp tích lũy, nhưng cộng đồng thường ưu tiên vòng lặp rõ ràng hoặc hàm `sum`/`any`/`all` built-in.
+
+## Unpacking
+
+```python
+# Swap
+a, b = b, a
+
+# Bỏ qua giá trị
+_, value = (label, value)
+
+# Gom phần còn lại
+first, *rest = [1, 2, 3, 4]      # first=1, rest=[2,3,4]
+*init, last = [1, 2, 3, 4]       # init=[1,2,3], last=4
+
+# Unpack dict thành kwargs
+config = {"model": "gpt-4", "temp": 0.7}
+call_llm(**config)               # = call_llm(model="gpt-4", temp=0.7)
+```
+
+## any, all
+
+```python
+errors = [None, None, "timeout"]
+has_error = any(errors)                       # True (có string truthy)
+all_valid = all(x is not None for x in data)  # True nếu mọi phần tử not None
+```
+
+`any` trả `True` nếu **ít nhất 1** phần tử truthy; `all` trả `True` nếu **tất cả** truthy. Cả hai đều **ngắt sớm** (short-circuit) — `any` dừng khi gặp True đầu, `all` dừng khi gặp False đầu.
+
+## sorted với key
+
+```python
+results = [
+    {"model": "gpt-4", "score": 0.92},
+    {"model": "claude", "score": 0.88},
+    {"model": "gemini", "score": 0.95},
+]
+
+# Sắp theo score tăng dần
+by_score = sorted(results, key=lambda r: r["score"])
+
+# Giảm dần
+by_score_desc = sorted(results, key=lambda r: r["score"], reverse=True)
+
+# Sắp nhiều key
+sorted(results, key=lambda r: (r["score"], r["model"]))
+```
+
+## collections module
+
+```python
+from collections import Counter, defaultdict, deque
+
+# Counter — đếm tần suất
+words = ["the", "cat", "the", "dog", "the"]
+freq = Counter(words)
+freq.most_common(1)        # [('the', 3)]
+freq["the"]                # 3
+
+# defaultdict — dict tự tạo value mặc định
+word2docs = defaultdict(list)
+for doc in docs:
+    for w in doc:
+        word2docs[w].append(doc)   # không cần check key tồn tại
+
+# deque — hàng đợi 2 đầu, O(1) cho popleft
+queue = deque([1, 2, 3])
+queue.appendleft(0)
+queue.popleft()           # 0
+```
+
+<Callout type="info" title="defaultdict trong RAG">
+Khi xây index "từ -> danh sách chunk chứa từ", `defaultdict(list)` tuyệt vời: không cần `if key not in dict: dict[key] = []` mỗi lần. Code gọn và ít bug.
+</Callout>
+
+## Điểm cần nhớ
+
+- **Comprehension** (list/dict/set) rút gọn code tạo collection; nhưng đừng lạm dụng khi logic phức tạp.
+- **Generator expression** `(x for x in ...)` lazy — tiết kiệm memory cho dataset lớn, chỉ duyệt được 1 lần.
+- `map`/`filter` hợp lý, nhưng comprehension thường dễ đọc hơn trong Python hiện đại.
+- `any()`/`all()` kiểm tra tồn tại/toàn bộ, có short-circuit.
+- `sorted(key=...)` cho phép sắp theo trường tuỳ ý, hỗ trợ nhiều key.
+- `collections`: `Counter` (đếm), `defaultdict` (auto-init value), `deque` (queue 2 đầu O(1)).
+
+Bài sau: **File I/O** — đọc/ghi text, CSV, JSON, pickle và quản lý đường dẫn bằng `pathlib` — kỹ năng thiết yếu khi nạp dataset và lưu model.

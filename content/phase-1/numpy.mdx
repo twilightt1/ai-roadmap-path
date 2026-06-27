@@ -1,0 +1,202 @@
+NumPy là **nền tảng** của toàn bộ AI/ML — PyTorch, TensorFlow, scikit-learn, Pandas đều xây trên NumPy array (hoặc cùng khái niệm). Mọi phép tính ma trận, vector embedding, gradient đều quy về NumPy. Bài này đi sâu vào ndarray, broadcasting, indexing, và các phép ma trận thiết yếu.
+
+## Tại sao NumPy
+
+Python thuần lưu list các object `int`/`float` rời rạc — mỗi phép `+` qua interpreter, chậm. NumPy dùng **ndarray**: block memory liên tục cùng kiểu, tính bằng C/Fortran SIMD:
+
+```python
+import numpy as np
+
+arr = np.arange(1_000_000)
+result = arr * 2     # một phép C, ~1ms
+# so với [x*2 for x in arr]  ~50ms
+```
+
+## Tạo array
+
+```python
+np.array([1, 2, 3])                       # từ list
+np.zeros(5)                               # [0,0,0,0,0]
+np.zeros((2, 3))                          # ma trận 2x3 số 0
+np.ones((2, 2))                           # ma trận 2x2 số 1
+np.eye(3)                                 # ma trận đơn vị 3x3
+np.arange(0, 10, 2)                       # [0,2,4,6,8]
+np.linspace(0, 1, 5)                      # [0, 0.25, 0.5, 0.75, 1.0]
+np.random.rand(3, 3)                      # uniform [0,1)
+np.random.randn(3, 3)                     # standard normal
+np.random.randint(0, 10, size=5)          # int ngẫu nhiên
+```
+
+## Thuộc tính array
+
+```python
+a = np.random.rand(3, 4, 5)
+a.shape       # (3, 4, 5) — kích thước mỗi trục
+a.ndim        # 3 — số trục
+a.size        # 60 — tổng phần tử
+a.dtype       # float64 — kiểu dữ liệu
+a.itemsize    # 8 — byte mỗi phần tử
+```
+
+<Callout type="info" title="dtype ảnh hưởng memory">
+`float64` (mặc định) tốn 8 byte/phần tử; `float32` chỉ 4. Một array embedding 1 triệu chiều × float32 = 4MB; float64 = 8MB. Trong AI, thường ép `float32`/`float16` để tiết kiệm: `a.astype(np.float32)`.
+</Callout>
+
+## Reshape, flatten, ravel
+
+```python
+a = np.arange(12)              # [0..11]
+a.reshape(3, 4)               # ma trận 3x4
+a.reshape(2, -1)              # -1 tự tính: (2, 6)
+a.reshape(-1)                 # về 1D
+
+# flatten vs ravel
+flat1 = a.reshape(3,4).flatten()   # copy, luôn 1D mới
+flat2 = a.reshape(3,4).ravel()     # view khi có thể (không copy)
+```
+
+`ravel()` trả **view** (chia sẻ memory) khi có thể — nhanh, nhưng sửa view ảnh hưởng gốc. `flatten()` luôn copy.
+
+## Stacking
+
+```python
+a = np.array([1, 2, 3])
+b = np.array([4, 5, 6])
+
+np.stack([a, b])         # axis 0: shape (2,3)
+np.vstack([a, b])        # vertical: (2,3)
+np.hstack([a, b])        # horizontal: (6,)
+np.concatenate([a, b])   # (6,)
+```
+
+## Indexing
+
+### Boolean indexing — lọc theo điều kiện
+
+```python
+arr = np.array([5, 1, 8, 3, 9, 2])
+mask = arr > 4            # [True, False, True, False, True, False]
+arr[mask]                 # [5, 8, 9] — chọn phần tử thỏa
+
+# Kết hợp — lọc + gán
+arr[arr > 4] = 0          # [0, 1, 0, 3, 0, 2]
+```
+
+### np.where — index có điều kiện
+
+```python
+arr = np.array([1, -2, 3, -4])
+np.where(arr > 0, "pos", "neg")
+# ['pos' 'neg' 'pos' 'neg']
+
+# Lấy index phần tử thỏa
+idx = np.where(arr < 0)   # (array([1, 3]),)
+```
+
+### Fancy indexing — index bằng mảng
+
+```python
+arr = np.array([10, 20, 30, 40, 50])
+arr[[0, 2, 4]]            # [10, 30, 50]
+```
+
+## Broadcasting — phép tính shape khác nhau
+
+Broadcasting cho phép tính giữa array shape khác, "nhân bản" trục nhỏ để khớp:
+
+```python
+a = np.array([[1, 2, 3],
+              [4, 5, 6]])     # shape (2, 3)
+b = np.array([10, 20, 30])    # shape (3,)
+
+a + b        # [[11,22,33],[14,25,36]] — b được "cộng" vào mỗi hàng
+```
+
+**Quy tắc**: so sánh shape từ phải sang trái; trục khớp hoặc bằng 1 hoặc bằng nhau; trục bằng 1 được nhân bản.
+
+```python
+a.shape = (2, 3)
+b.shape = (3,)      # → (1, 3) → broadcast thành (2, 3)
+a + b OK
+
+c.shape = (2,)      # → (1, 2) → không khớp (3 vs 2) → lỗi
+a + c               # ValueError
+```
+
+<Callout type="warning" title="Broadcasting là nguồn bug thầm lặng">
+Broadcasting giấu đi sự không khớp shape. `a` shape (3,) + `b` shape (3,1) ra shape (3,3) — có thể không phải ý bạn. Luôn in `.shape` khi kết quả lạ. Đây là lỗi cực phổ biến với embedding/gradient.
+</Callout>
+
+## Phép ma trận
+
+```python
+A = np.random.rand(3, 4)
+B = np.random.rand(4, 5)
+
+# Nhân ma trận — 3 cách tương đương
+C = A @ B                    # Python 3.5+, khuyến nghị
+C = np.matmul(A, B)
+C = np.dot(A, B)             # cũ hơn, hành vi hơi khác với >2D
+
+# Nhân element-wise (Hadamard)
+X = np.array([1, 2, 3])
+Y = np.array([4, 5, 6])
+X * Y                        # [4, 10, 18] — element-wise, KHÔNG phải dot
+
+# Dot product vector
+np.dot(X, Y)                 # 32 (vô hướng)
+X @ Y                        # 32
+```
+
+<Callout type="danger" title="@ vs * — đừng nhầm!">
+`@` là **nhân ma trận** (matmul); `*` là **nhân element-wise**. Trong AI, nhân embedding Q·Kᵀ dùng `@`; còn `*` cho mask/gating element. Nhầm 2 cái này là bug rất khó tìm.
+</Callout>
+
+## Aggregate theo axis
+
+```python
+a = np.arange(12).reshape(3, 4)
+# [[ 0  1  2  3]
+#  [ 4  5  6  7]
+#  [ 8  9 10 11]]
+
+a.sum()              # 66 (tất cả)
+a.sum(axis=0)        # [12, 15, 18, 21] — cộng theo cột
+a.sum(axis=1)        # [6, 22, 36] — cộng theo hàng
+a.mean(axis=1)       # trung bình mỗi hàng
+a.max(axis=0)        # max mỗi cột
+a.argmax(axis=1)     # index max mỗi hàng (dùng cho predicted class)
+```
+
+<Callout type="tip" title="axis=0 = cột, axis=1 = hàng">
+Mnemonic: `axis` là trục bị **thu gọn**. `sum(axis=0)` gộp trục 0 (hàng) → còn cột; `sum(axis=1)` gộp trục 1 (cột) → còn hàng.
+</Callout>
+
+## Linear algebra
+
+```python
+A = np.random.rand(3, 3)
+
+np.linalg.inv(A)         # ma trận nghịch đảo
+np.linalg.eig(A)         # eigenvalues + eigenvectors
+np.linalg.svd(A)         # SVD: U, S, Vt
+np.linalg.norm(v)        # norm L2 mặc định
+np.linalg.norm(v, ord=1) # norm L1
+np.linalg.det(A)         # determinant
+np.linalg.solve(A, b)    # giải Ax = b (tốt hơn inv)
+```
+
+`np.linalg.solve(A, b)` giải hệ `Ax=b` ổn định hơn `inv(A) @ b` — đừng tính nghịch đảo nếu chỉ cần giải hệ.
+
+## Điểm cần nhớ
+
+- NumPy ndarray = block memory liên tục cùng dtype → tính bằng C, **nhanh 50-100×** Python loop.
+- Kiểm tra `shape`, `ndim`, `dtype`; ép kiểu (`astype`) để tiết kiệm memory (`float32`).
+- `reshape(-1)` tự tính; `ravel()` view (sửa ảnh hưởng gốc), `flatten()` copy.
+- **Boolean indexing** (`arr[mask]`) và `np.where` để lọc/điều kiện.
+- **Broadcasting**: tính shape khác theo quy tắc từ phải sang trái; nhưng giấu bug — in `.shape` khi lạ.
+- `@` = matmul, `*` = element-wise — **đừng nhầm**, đây là bug kinh điển.
+- `sum(axis=0)` gộp theo cột, `axis=1` theo hàng; `argmax` lấy index (cho predicted class).
+- `np.linalg.solve` tốt hơn `inv` để giải hệ.
+
+Bài tiếp: **Pandas** — lớp phía trên NumPy cho dữ liệu dạng bảng, công cụ chính để khám phá và làm sạch dataset AI.

@@ -1,0 +1,168 @@
+Probability & statistics là toán của **sự không chắc chắn**. Model AI về bản chất là học phân phối xác suất: "P(spam | email)", "P(next token | context)". Bài này covers xác suất cơ bản, Bayes, phân phối, và MLE/MAP — khái niệm nền cho cả ML classic lẫn LLM.
+
+## Xác suất cơ bản
+
+**Sample space** (không gian mẫu) = mọi kết quả có thể. **Event** = tập con. Xác suất `P(A)` ∈ [0,1].
+
+### Joint, marginal, conditional
+
+- **Joint** `P(A, B)`: xác suất cả A và B cùng xảy ra.
+- **Marginal** `P(A)`: xác suất A (bỏ qua B): `P(A) = Σ_B P(A, B)`.
+- **Conditional** `P(A|B)`: xác suất A khi biết B đã xảy ra:
+
+```
+P(A|B) = P(A, B) / P(B)
+```
+
+```python
+# Ví dụ: dự đoán có reply khi user gõ "thanks"
+# P(reply), P(thanks), P(reply, thanks)
+P_reply = 0.3
+P_thanks = 0.2
+P_reply_and_thanks = 0.15
+
+P_reply_given_thanks = P_reply_and_thanks / P_thanks
+# 0.75 → 75% khả năng user sẽ reply tiếp khi nói "thanks"
+```
+
+### Independence
+
+A, B độc lập nếu `P(A, B) = P(A)·P(B)` → biết B không thay đổi xác suất A: `P(A|B) = P(A)`.
+
+<Callout type="warning" title="Naive Bayes giả định độc lập">
+Naive Bayes (classifier) giả định các feature **độc lập** cho nhau — thường không đúng thực tế (vd: từ "free" và "win" thường đi cùng trong spam). Dù giả định sai, classifier vẫn hoạt động khá tốt vì chỉ cần **thứ tự** xác suất đúng, không cần giá trị chính xác.
+</Callout>
+
+## Bayes' Theorem — lật ngược xác suất
+
+```
+P(A|B) = P(B|A) · P(A) / P(B)
+```
+
+Bayes cho phép "lật" `P(A|B)` thành `P(B|A)` — cực mạnh khi bạn biết chiều ngược lại.
+
+```python
+# Bài toán: xét nghiệm bệnh
+# P(bệnh) = 0.01 (1% dân số mắc)
+# P(dương|bệnh) = 0.99 (test nhạy)
+# P(dương|khỏe) = 0.05 (tỷ lệ dương tính giả)
+P_disease = 0.01
+P_pos_given_disease = 0.99
+P_pos_given_healthy = 0.05
+P_healthy = 1 - P_disease
+
+# P(dương) = P(dương|bệnh)·P(bệnh) + P(dương|khỏe)·P(khỏe)
+P_pos = (P_pos_given_disease * P_disease
+         + P_pos_given_healthy * P_healthy)
+
+P_disease_given_pos = (P_pos_given_disease * P_disease) / P_pos
+print(P_disease_given_pos)   # ~0.167 — chỉ 16.7%!
+```
+
+<Callout type="info" title="Vì sao chỉ 16.7%?">
+Test dương tính nhưng chỉ 16.7% thật sự mắc bệnh — vì bệnh hiếm (1%), số người khỏe bị **dương tính giả** (5% × 99%) nhiều hơn số người bệnh dương tính (99% × 1%). Đây là **base rate fallacy** — trực giác thường sai với các bệnh hiếm.
+</Callout>
+
+## Random variables và phân phối
+
+- **Discrete** (rời rạc): đếm được (số email spam). Có **PMF** (probability mass function).
+- **Continuous** (liên tục): đo được (thời gian phản hồi). Có **PDF** (density), tích phân ra xác suất.
+- **CDF** `F(x) = P(X ≤ x)`: xác suất lũy tích.
+
+### Expected value và variance
+
+```
+E[X] = Σ x · P(x)         # trung bình (weighted)
+Var(X) = E[(X - E[X])²]   # độ phân tán
+```
+
+## Các phân phối quan trọng
+
+| Phân phối | Ví dụ | Trong AI |
+|---|---|---|
+| **Bernoulli** | 1 phép thử, 2 kết quả (đồng xu) | Binary classification |
+| **Binomial** | n lần Bernoulli | Số lần đúng trong n predict |
+| **Gaussian (Normal)** | Phân phối tự nhiên | Khởi tạo weight, noise |
+| **Uniform** | Mọi giá trị đều có | Random search, sampling |
+| **Poisson** | Số sự kiện trong khoảng | Số request/giờ |
+| **Multinomial** | n thử, nhiều kết quả | Language modeling (token) |
+
+### Gaussian — phổ biến nhất
+
+```
+f(x) = (1/√(2πσ²)) · exp(-(x-μ)²/(2σ²))
+```
+
+```python
+import numpy as np
+
+samples = np.random.normal(loc=0, scale=1, size=10000)  # μ=0, σ=1
+print(samples.mean(), samples.std())   # ~0, ~1
+```
+
+<Callout type="tip" title="Khởi tạo weight Gaussian">
+PyTorch mặc định khởi tạo weight bằng Gaussian (có chuẩn hóa). Việc chọn σ ảnh hưởng training: quá lớn → exploding, quá nhỏ → vanishing. Các schema (Xavier, He) chọn σ tùy số input/output để giữ phương sai ổn định qua các tầng.
+</Callout>
+
+## Central Limit Theorem & Law of Large Numbers
+
+- **LLN**: trung bình mẫu → kỳ vọng thật khi n → ∞. (Lý do train càng nhiều data càng tốt.)
+- **CLT**: tổng nhiều biến độc lập → phân phối Gaussian, bất kể phân phối gốc. (Lý do Gaussian xuất hiện khắp nơi — noise tự nhiên là tổng nhiều nguồn.)
+
+## MLE và MAP — model "học" thế nào
+
+### MLE — Maximum Likelihood Estimation
+
+Chọn tham số θ **tối đa hóa** xác suất thấy data:
+
+```
+θ_MLE = argmax_θ P(data | θ)
+```
+
+```python
+# MLE cho Gaussian: μ = mean(data), σ = std(data)
+# — đó chính là cách ta ước lượng trung bình!
+import numpy as np
+data = np.random.normal(5, 2, 1000)
+mu_mle = data.mean()      # ~5
+sigma_mle = data.std()    # ~2
+```
+
+<Callout type="info" title="MLE = minimize negative log-likelihood">
+Thực tế, thay vì tối đa `P(data|θ)`, ta **tối thiểu** `-log P(data|θ)` (NLL) — dễ tính hơn (tích thành tổng). Cross-entropy loss chính là NLL của phân phối categorical → đây là **lý do cross-entropy là loss tự nhiên cho classification**.
+</Callout>
+
+### MAP — Maximum A Posteriori
+
+MAP thêm **prior** (niềm tin trước) về θ:
+
+```
+θ_MAP = argmax_θ P(data | θ) · P(θ)
+```
+
+MAP = MLE + regularization. Ví dụ prior Gaussian trên weight → tương đương **L2 regularization** (weight decay). Prior Laplace → L1.
+
+## Entropy, KL, Cross-entropy
+
+- **Entropy** `H(X) = -Σ p(x) log p(x)`: độ "không chắc chắn" của phân phối. Phân phối uniform (đều) → entropy max.
+- **Cross-entropy** `H(p, q) = -Σ p(x) log q(x)`: đo chi phí khi dùng q mã hóa p. Khi p = true label, q = prediction → cross-entropy là loss.
+- **KL divergence** `KL(p||q) = Σ p log(p/q)`: "khoảng cách" từ p đến q (không đối xứng).
+
+```
+H(p, q) = H(p) + KL(p||q)
+```
+
+<Callout type="tip" title="Cross-entropy = entropy + KL">
+Vì H(p) cố định (true label không đổi), **tối thiểu cross-entropy ≡ tối thiểu KL** ≡ đưa prediction gần true. Đây là lý do cross-entropy là loss cho classification. (Chi tiết hơn ở chương Information Theory.)
+</Callout>
+
+## Điểm cần nhớ
+
+- **Conditional** `P(A|B) = P(A,B)/P(B)`; **independence** khi `P(A,B)=P(A)P(B)`.
+- **Bayes** lật `P(A|B)` thành `P(B|A)` — cẩn thận base rate với sự kiện hiếm.
+- Discrete (PMF) vs continuous (PDF/CDF); **expected value** = trung bình weighted, **variance** = độ tản.
+- **Gaussian** phổ biến cho noise/khởi tạo weight; **Multinomial** cho language modeling.
+- **MLE** = tối đa likelihood (≡ tối thiểu NLL = cross-entropy); **MAP** = MLE + prior (= regularization).
+- **Cross-entropy = entropy + KL**; tối thiểu cross-entropy ≡ đưa prediction gần true label.
+
+Bài tiếp: **Optimization** — gradient descent, Adam, learning rate schedule — cách model thực sự "học" bằng cách cập nhật weight.
