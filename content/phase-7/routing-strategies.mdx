@@ -1,0 +1,475 @@
+Routing là bộ não của multi-LLM system. Router biến một user request cộng với business constraints thành quyết định: dùng model nào, provider nào, prompt version nào, max tokens bao nhiêu, có được gửi dữ liệu này ra ngoài không, và nếu uncertain thì fallback thế nào. Ở mức giáo sư AI engineering, routing là **constrained optimization under uncertainty**, không phải vài câu `if/else` cảm tính.
+
+## Why this matters
+
+Router sai tạo lỗi production rất đắt:
+
+- Route task khó sang model rẻ → hallucination tự tin.
+- Route task đơn giản sang frontier model → unit economics chết.
+- Route dữ liệu private sang provider không allowed → compliance incident.
+- Route prompt 120k tokens sang model context 32k → request fail.
+- Route JSON extraction sang model schema yếu → downstream parser crash.
+
+<Callout type="danger" title="Router sai thì toàn bộ hệ thống sai">
+Một router chọn model rẻ cho task cần reasoning có thể tạo answer tự tin nhưng sai. Một router chọn model mạnh cho mọi request có thể làm sản phẩm lỗ tiền. Routing phải được đo bằng quality, cost và latency cùng lúc.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Mô hình hóa routing như constrained optimization.
+2. Xác định routing inputs: task, modality, tokens, budget, policy, eval scores.
+3. Thiết kế task-based, cost-based, latency-based, context-based, compliance-based routing.
+4. Implement rule-based router và hiểu giới hạn.
+5. Implement classifier-based router với confidence threshold.
+6. Thiết kế A/B, shadow, canary routing.
+7. Hiểu bandit routing ở mức khái niệm.
+8. Log route reason để debug và audit.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Multi-LLM capability matrix.
+- Token/cost/latency concepts từ Phase 6.
+- Structured output và provider abstraction.
+- Evaluation metrics cơ bản.
+
+## Core intuition: routing is constrained optimization
+
+Router chọn model `m` cho request `r`:
+
+```text
+choose model m
+maximize expected_quality(task, m)
+subject to:
+  estimated_cost(m, tokens) <= budget
+  expected_latency(m) <= SLA
+  provider_allowed(m, tenant_data) == true
+  required_capabilities ⊆ capabilities(m)
+  context_window(m) >= estimated_input + output_budget
+```
+
+Đây là bài toán nhiều mục tiêu. Bạn không tối ưu quality một mình; bạn tối ưu quality trong ràng buộc production.
+
+## Routing inputs
+
+Một router tốt cần nhiều signals:
+
+| Input | Example | Dùng để |
+|---|---|---|
+| task type | classify, RAG, code, vision | chọn model family |
+| modality | text/image/audio | require multimodal |
+| token estimate | 8k input | context/cost |
+| output schema | strict JSON | schema-capable model |
+| user tier | free/pro/enterprise | budget/model tier |
+| tenant policy | EU-only, no external | compliance |
+| latency SLA | p95 < 3s | fast model/streaming |
+| remaining budget | monthly quota | cost routing |
+| eval scores | per-task model score | quality routing |
+| cache availability | exact/semantic hit | avoid provider call |
+
+## Task-based routing
+
+Task là signal mạnh nhất.
+
+| Task | Candidate route | Vì sao |
+|---|---|---|
+| Simple classification | small cheap model | output ngắn, deterministic |
+| JSON extraction | schema reliable model | parser downstream cần ổn định |
+| Hard reasoning | frontier reasoning model | quality quan trọng |
+| Code generation | code-strong model | syntax/tests quan trọng |
+| Vision QA | multimodal model | cần image understanding |
+| Long document QA | RAG + long-context fallback | context lớn |
+| Sensitive data | private/local/compliant model | data policy |
+
+## Cost-based routing
+
+Cost estimate:
+
+```text
+estimated_cost = input_tokens * input_price + output_budget * output_price
+```
+
+Cost routing strategies:
+
+- free tier dùng cheap model,
+- pro tier dùng stronger model,
+- enterprise dùng compliant model,
+- compress context trước khi gọi model đắt,
+- cap `max_output_tokens`,
+- route batch/offline sang cheaper slower model.
+
+<Callout type="warning" title="Cost routing không được làm mù quality">
+Nếu model rẻ làm sai và cần human correction hoặc retry nhiều lần, tổng cost có thể cao hơn model mạnh ngay từ đầu.
+</Callout>
+
+## Latency-based routing
+
+Latency dimensions:
+
+- TTFT,
+- total latency,
+- provider region,
+- streaming support,
+- queue/load,
+- model size.
+
+Real-time chat khác batch job:
+
+```text
+chat user waiting → optimize TTFT + streaming
+nightly summarization → optimize cost/throughput
+```
+
+## Context-window routing
+
+Nếu prompt estimate vượt model context:
+
+```text
+input_tokens + output_budget > context_window
+```
+
+Options:
+
+1. compress/summarize,
+2. reduce retrieved chunks,
+3. multi-step retrieval,
+4. route to long-context model,
+5. ask user to narrow query.
+
+Long-context route nên là last resort nếu retrieval/compression không đủ hoặc task thật sự cần full context.
+
+## Compliance and privacy routing
+
+Compliance constraints là hard constraints:
+
+```text
+if tenant.policy.external_providers_allowed == false:
+    candidates = local_or_private_models_only
+```
+
+Examples:
+
+- EU tenant → EU region only.
+- Healthcare data → approved provider only.
+- Source code → no training/retention provider.
+- Secrets detected → block or private model.
+
+## Rule-based router
+
+Rule-based router dễ hiểu, dễ audit, phù hợp giai đoạn đầu.
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass
+class Request:
+    task: str
+    modality: str
+    estimated_tokens: int
+    requires_json: bool
+    contains_pii: bool
+    user_tier: str
+    tenant_requires_private: bool
+
+
+def route(req: Request) -> str:
+    if req.contains_pii and req.tenant_requires_private:
+        return "local-private-model"
+    if req.modality == "image":
+        return "vision-model"
+    if req.estimated_tokens > 100_000:
+        return "long-context-model"
+    if req.requires_json:
+        return "json-reliable-model"
+    if req.task == "simple_classification":
+        return "cheap-fast-model"
+    if req.user_tier == "enterprise":
+        return "high-quality-model"
+    return "default-balanced-model"
+```
+
+Giới hạn:
+
+- rules phình to,
+- conflict khó quản lý,
+- không tự học từ performance,
+- brittle khi tasks đa dạng.
+
+## Classifier-based router
+
+Dùng classifier/LLM nhỏ để dự đoán task hoặc difficulty.
+
+```text
+query → router model → {task, difficulty, confidence}
+```
+
+Nếu confidence thấp:
+
+- route tới default safe model,
+- ask clarification,
+- use stronger model,
+- run multiple candidates.
+
+```python
+def route_with_confidence(router_output):
+    if router_output.confidence < 0.65:
+        return "safe-default-model"
+    if router_output.task == "code":
+        return "code-model"
+    if router_output.difficulty == "hard":
+        return "frontier-model"
+    return "cheap-model"
+```
+
+<Callout type="warning" title="Router model cũng có lỗi">
+Nếu router là LLM, nó cũng hallucinate hoặc misclassify. Router cần eval, calibration và fallback khi uncertain.
+</Callout>
+
+## Performance-based routing
+
+Sau khi có logs/eval, router có thể dùng measured performance.
+
+Data cần:
+
+```text
+(task_type, model, prompt_version) → quality_score, latency, cost, error_rate
+```
+
+Router chọn model có score tốt nhất dưới constraints.
+
+## A/B, shadow and canary routing
+
+### A/B routing
+
+Một phần traffic thật dùng route A, phần khác route B.
+
+Metrics:
+
+- task success,
+- user satisfaction,
+- cost/request,
+- latency,
+- invalid JSON rate,
+- escalation/human correction.
+
+### Shadow routing
+
+Gửi request tới model B nhưng không trả response cho user. Dùng để đo model mới an toàn hơn.
+
+### Canary routing
+
+Rollout model mới cho 1–5% traffic trước, monitor errors/cost/quality.
+
+## Bandit routing
+
+Bandit routing cân bằng exploration và exploitation.
+
+```text
+exploit: dùng model đang tốt nhất
+explore: thử model khác để học performance
+```
+
+Phù hợp:
+
+- high-volume low-risk tasks,
+- online feedback rõ,
+- cost per request chấp nhận được.
+
+Không phù hợp nếu:
+
+- safety-critical,
+- legal/medical high stakes,
+- feedback noisy,
+- compliance constraints phức tạp.
+
+## Route reason logging
+
+Mỗi decision cần explain được.
+
+```json
+{
+  "request_id": "req_123",
+  "route": "claude-sonnet",
+  "reason": [
+    "task=long_document_qa",
+    "estimated_tokens=54000",
+    "tenant_policy=external_allowed",
+    "quality_score=0.89"
+  ],
+  "rejected_candidates": [
+    {"model": "cheap-fast", "reason": "context_window_too_small"},
+    {"model": "local", "reason": "quality_below_threshold"}
+  ],
+  "estimated_cost": 0.043,
+  "router_confidence": 0.87
+}
+```
+
+Without route reason logs, debugging routing is guesswork.
+
+## Implementation lab: intelligent router
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass
+class ModelInfo:
+    name: str
+    context_window: int
+    cost_per_1k: float
+    p95_latency_ms: int
+    supports_json: bool
+    supports_vision: bool
+    allowed_for_private: bool
+    quality_by_task: dict[str, float]
+
+
+@dataclass
+class RouteRequest:
+    task: str
+    estimated_tokens: int
+    output_budget: int
+    requires_json: bool
+    modality: str
+    private_data: bool
+    max_cost: float
+    max_latency_ms: int
+
+
+def estimate_cost(model: ModelInfo, req: RouteRequest) -> float:
+    return ((req.estimated_tokens + req.output_budget) / 1000) * model.cost_per_1k
+
+
+def route(req: RouteRequest, models: list[ModelInfo]):
+    candidates = []
+    reasons = {}
+
+    for m in models:
+        reject = []
+        if req.estimated_tokens + req.output_budget > m.context_window:
+            reject.append("context_window_too_small")
+        if req.requires_json and not m.supports_json:
+            reject.append("json_not_supported")
+        if req.modality == "image" and not m.supports_vision:
+            reject.append("vision_not_supported")
+        if req.private_data and not m.allowed_for_private:
+            reject.append("data_policy_blocked")
+        if estimate_cost(m, req) > req.max_cost:
+            reject.append("cost_too_high")
+        if m.p95_latency_ms > req.max_latency_ms:
+            reject.append("latency_too_high")
+
+        if reject:
+            reasons[m.name] = reject
+            continue
+        candidates.append(m)
+
+    if not candidates:
+        return None, reasons
+
+    best = max(candidates, key=lambda m: m.quality_by_task.get(req.task, 0.0))
+    return best.name, reasons
+```
+
+Extend lab:
+
+1. Add user tiers.
+2. Add route reason output.
+3. Add fallback candidates.
+4. Add eval scores by prompt_version.
+5. Add A/B bucket assignment.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: router chỉ dựa vào task label">
+Task label quan trọng nhưng chưa đủ. Context length, schema, latency, cost và compliance có thể override task route.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: không log rejected candidates">
+Khi route sai, bạn cần biết model nào bị loại và vì sao. Nếu chỉ log selected model, debug rất khó.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: coi compliance là score mềm">
+Nếu tenant không cho external provider, route đó phải bị block tuyệt đối. Không được để quality/cost bù compliance violation.
+</Callout>
+
+Checklist:
+
+1. Router có hard constraints không?
+2. Có estimate tokens trước routing không?
+3. Có model capability registry không?
+4. Có eval scores per task không?
+5. Có confidence threshold không?
+6. Có route reason logs không?
+7. Có A/B hoặc shadow testing không?
+8. Có monitor cost/latency by route không?
+9. Có fallback khi router uncertain không?
+
+## Practice exercises
+
+1. Thiết kế routing rules cho 6 task types.
+2. Implement cost-aware router với max budget.
+3. Thêm compliance hard constraint.
+4. Tạo route reason log cho 10 requests.
+5. Simulate classifier router với confidence threshold.
+6. Thiết kế A/B test giữa 2 routing policies.
+7. Viết dashboard metrics cho router.
+
+## Knowledge check
+
+1. Routing là constrained optimization nghĩa là gì?
+2. Những inputs nào router nên dùng?
+3. Task-based routing thiếu gì nếu đứng một mình?
+4. Vì sao confidence threshold quan trọng?
+5. Shadow routing khác A/B routing thế nào?
+6. Bandit routing phù hợp khi nào?
+7. Route reason log cần chứa gì?
+
+## Answer key
+
+1. Chọn model tối đa quality kỳ vọng dưới ràng buộc cost, latency, compliance, context và capabilities.
+2. Task, modality, tokens, schema, user tier, tenant policy, budget, latency SLA, eval scores.
+3. Không xét cost, context, compliance, latency, schema và user tier.
+4. Để xử lý uncertainty; confidence thấp nên route safe/default hoặc ask clarification.
+5. Shadow không trả output model mới cho user; A/B trả output thật cho một phần traffic.
+6. High-volume, low-risk, feedback rõ, có guardrails.
+7. Selected model, reasons, rejected candidates, constraints, estimated cost, confidence, policy version.
+
+## Mini-project: Intelligent Multi-LLM Router
+
+**Task:** Build router prototype chọn model cho 100 requests giả lập.
+
+**Deliverables:**
+
+- Model registry với capabilities.
+- Request classifier hoặc rule-based task detector.
+- Token/cost estimator.
+- Hard constraints: context, JSON, modality, compliance.
+- Route reason logging.
+- Metrics: route distribution, estimated cost, rejected candidates.
+
+**Success criteria:**
+
+- Không route request vi phạm compliance.
+- Không route request quá context window.
+- Có route reasons audit được.
+- Có baseline policy và improved policy để so sánh.
+- Có analysis về cost/quality tradeoff.
+
+## Điểm cần nhớ
+
+- Router là constrained optimizer, không chỉ if/else task label.
+- Compliance, context window và required capabilities là hard constraints.
+- Cost/latency/quality là tradeoff cần đo.
+- Classifier router cần confidence threshold và calibration.
+- A/B, shadow, canary giúp rollout routing policy an toàn.
+- Route reason logs là bắt buộc để debug và audit.
+
+## Next chapter bridge
+
+Routing chọn model cho happy path. Nhưng production không chỉ có happy path: provider timeout, 429, invalid JSON, safety refusal và streaming interruption sẽ xảy ra. Chương tiếp theo: **Fallback Architecture** — retry, degradation, circuit breaker và fallback không phá contract.

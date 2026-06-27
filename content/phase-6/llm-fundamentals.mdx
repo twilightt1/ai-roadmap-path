@@ -1,0 +1,658 @@
+Phase 6 bắt đầu bằng một chuyển đổi quan trọng: từ **hiểu transformer như một mô hình NLP** sang **hiểu LLM như một hệ thống production có chi phí, độ trễ, bộ nhớ, rủi ro và hành vi khó kiểm soát**. LLM không phải “hộp ma thuật”; về cốt lõi nó vẫn là transformer decoder dự đoán token tiếp theo, nhưng khi scale lên hàng tỷ tham số và phục vụ hàng triệu request, các chi tiết như context window, KV cache, RoPE, GQA, Flash Attention, alignment và scaling laws trở thành kiến thức bắt buộc.
+
+## Why this matters
+
+Một AI Engineer giỏi không chỉ biết gọi API. Bạn phải trả lời được các câu hỏi production:
+
+- Vì sao prompt 50k tokens làm request chậm và đắt?
+- Vì sao model context 128k vẫn bỏ sót thông tin ở giữa?
+- Vì sao streaming có `time-to-first-token` chậm nhưng sau đó token ra nhanh?
+- Vì sao self-host model bị hết VRAM dù weights đã load vừa?
+- Vì sao instruct model follow yêu cầu tốt hơn base model?
+- Vì sao model lớn hơn không luôn là lựa chọn tốt nhất?
+
+<Callout type="info" title="Giảng viên nói thẳng">
+Nếu bạn không hiểu prefill/decode, KV cache và token budget, bạn sẽ debug LLM bằng cảm giác. Production AI engineering cần đo lường và mô hình hóa chi phí/độ trễ, không chỉ thử prompt.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích LLM decoder-only là transformer autoregressive scale lớn.
+2. Viết công thức causal self-attention và hiểu causal mask.
+3. Phân tích cost `O(seq_len²)` của attention ở prefill.
+4. Phân biệt prefill latency, decode latency, TTFT và tokens/sec.
+5. Tính KV cache memory từ tensor shapes.
+6. Hiểu positional encoding: absolute, relative, RoPE, ALiBi.
+7. Giải thích Flash Attention, MQA/GQA và sliding window attention ở mức hệ thống.
+8. Phân biệt pretraining, SFT, RLHF và DPO.
+9. Hiểu scaling laws và vì sao compute-optimal không giống production-optimal.
+10. Nhận diện hallucination, lost-in-the-middle, distribution shift và benchmark contamination.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Transformer architecture: Q/K/V, multi-head attention, causal mask.
+- Tokenization và token budget.
+- Language modeling: next-token prediction, decoding.
+- Python cơ bản để đọc estimation code.
+
+## Core intuition: same transformer, different scale constraints
+
+Ở Phase 5, bạn học transformer block:
+
+```text
+x = x + Attention(LayerNorm(x))
+x = x + MLP(LayerNorm(x))
+```
+
+LLM hiện đại vẫn dùng ý tưởng đó, nhưng scale làm mọi thứ thay đổi:
+
+```text
+small transformer: học kiến trúc
+LLM production: quản lý tokens, memory, latency, cost, alignment, safety
+```
+
+Một request LLM gồm hai giai đoạn:
+
+```text
+Prompt tokens → prefill → KV cache → decode token-by-token → final answer
+```
+
+Diagram:
+
+```text
+User prompt + context
+        │
+        ▼
+Prefill: compute transformer states for all input tokens
+        │
+        ├── store K/V tensors in KV cache
+        ▼
+Decode loop:
+   previous tokens + KV cache
+        │
+        ├── predict next token
+        ├── append token
+        └── repeat until stop/max_tokens
+```
+
+## Causal self-attention math
+
+Với input representation `X`, model tạo:
+
+```text
+Q = XW_Q
+K = XW_K
+V = XW_V
+```
+
+Attention chuẩn:
+
+```text
+Attention(Q,K,V) = softmax(QKᵀ / √d_k) V
+```
+
+Với decoder-only LLM, thêm causal mask:
+
+```text
+Attention(Q,K,V) = softmax(QKᵀ / √d_k + M) V
+```
+
+Trong đó:
+
+```text
+M[i,j] = 0      nếu j <= i
+M[i,j] = -inf   nếu j > i
+```
+
+Nghĩa là token ở vị trí `i` chỉ nhìn được quá khứ và chính nó, không nhìn tương lai.
+
+Ví dụ causal mask 4 tokens:
+
+```text
+      k0   k1   k2   k3
+q0     0 -inf -inf -inf
+q1     0    0 -inf -inf
+q2     0    0    0 -inf
+q3     0    0    0    0
+```
+
+<Callout type="danger" title="Causal mask là điều kiện để training đúng">
+Nếu model thấy future token khi training, nó cheat. Loss sẽ đẹp nhưng generation thật sẽ fail vì lúc inference token tương lai chưa tồn tại.
+</Callout>
+
+## Attention complexity: why long context is expensive
+
+Attention scores có shape:
+
+```text
+(batch, heads, seq_len, seq_len)
+```
+
+Vì có ma trận `seq_len × seq_len`, cost attention chuẩn tăng xấp xỉ:
+
+```text
+O(seq_len²)
+```
+
+Nếu tăng context từ 8k lên 32k:
+
+```text
+32k / 8k = 4 lần sequence length
+attention matrix ≈ 4² = 16 lần lớn hơn
+```
+
+Đây là lý do long context rất hữu ích nhưng không miễn phí.
+
+## Context window is not memory
+
+Context window là số token model có thể attend trong một request. Nó không phải memory dài hạn thật.
+
+```text
+system prompt + chat history + retrieved docs + user query + output budget <= context window
+```
+
+Vấn đề:
+
+- Model có thể không chú ý đều mọi vị trí.
+- Context nhiễu làm answer kém hơn.
+- Token dài làm cost và latency tăng.
+- Long-context model vẫn có lost-in-the-middle.
+
+<Callout type="warning" title="Context window không phải database">
+Nếu bạn có 1,000 trang tài liệu, đừng nhồi hết vào prompt. Hãy retrieval/rerank/chunk tốt, rồi dùng context window cho phần thật sự liên quan.
+</Callout>
+
+## Prefill vs decode
+
+LLM inference có hai phase rất khác nhau.
+
+### Prefill
+
+Prefill xử lý toàn bộ prompt input.
+
+```text
+input tokens: 20,000
+model computes states and K/V for 20,000 tokens
+```
+
+Đặc điểm:
+
+- parallel tốt trên GPU,
+- cost bị ảnh hưởng mạnh bởi input length,
+- quyết định `time-to-first-token`.
+
+### Decode
+
+Decode sinh từng token một.
+
+```text
+step 1: generate token 1
+step 2: generate token 2
+step 3: generate token 3
+```
+
+Đặc điểm:
+
+- sequential, token sau phụ thuộc token trước,
+- dùng KV cache,
+- output length quyết định total generation time.
+
+Metrics production:
+
+| Metric | Ý nghĩa |
+|---|---|
+| TTFT | time-to-first-token, chủ yếu do prefill |
+| tokens/sec | tốc độ decode |
+| total latency | TTFT + thời gian sinh output |
+| input tokens | cost và prefill load |
+| output tokens | cost và decode time |
+
+## KV cache tensor shapes
+
+Trong decode, ta không muốn tính lại K/V cho mọi previous token. KV cache lưu K và V của prefix.
+
+Shape thường gặp:
+
+```text
+K: (batch, num_kv_heads, seq_len, head_dim)
+V: (batch, num_kv_heads, seq_len, head_dim)
+```
+
+Memory xấp xỉ:
+
+```text
+KV bytes = 2 × layers × batch × seq_len × num_kv_heads × head_dim × bytes_per_value
+```
+
+Trong đó `2` là K và V.
+
+Ví dụ:
+
+```text
+layers = 32
+batch = 1
+seq_len = 8192
+num_kv_heads = 8
+head_dim = 128
+bytes_per_value = 2  # bf16/fp16
+```
+
+```text
+KV ≈ 2 × 32 × 1 × 8192 × 8 × 128 × 2 bytes
+   ≈ 1.0 GB per sequence
+```
+
+Nếu batch = 16, con số này thành khoảng 16 GB chỉ cho KV cache.
+
+<Callout type="danger" title="Self-host LLM: weights không phải toàn bộ VRAM">
+Bạn có thể load model weights vừa VRAM nhưng vẫn OOM khi batch/context tăng vì KV cache tăng theo batch × seq_len.
+</Callout>
+
+## KV cache and serving engines
+
+Serving engines như vLLM/TGI/SGLang tối ưu:
+
+- continuous batching,
+- paged attention,
+- KV cache allocation,
+- prefix caching,
+- scheduling requests.
+
+Trực giác:
+
+```text
+GPU đắt → phải giữ GPU bận
+KV cache lớn → phải quản lý memory thông minh
+requests khác độ dài → batching khó
+```
+
+## Positional encodings
+
+Self-attention không biết thứ tự token nếu không có positional information.
+
+| Method | Cơ chế | Điểm mạnh | Hạn chế |
+|---|---|---|---|
+| Absolute | học/thêm vector theo vị trí tuyệt đối | đơn giản | extrapolate kém ngoài max length |
+| Relative | encode khoảng cách giữa tokens | tốt cho quan hệ tương đối | phức tạp hơn |
+| RoPE | xoay Q/K theo vị trí | phổ biến, hỗ trợ relative behavior | cần scaling tricks cho context rất dài |
+| ALiBi | thêm bias theo khoảng cách | đơn giản, extrapolate tốt trong vài setup | ít phổ biến hơn RoPE trong nhiều LLM mới |
+
+## RoPE intuition
+
+RoPE không chỉ cộng position vector vào token embedding. Nó xoay query/key trong không gian vector theo vị trí. Khi Q và K dot product, score chứa thông tin vị trí tương đối.
+
+```text
+token meaning + token position → attention score aware of relative distance
+```
+
+Vì nhiều LLM dùng RoPE, context extension thường liên quan đến RoPE scaling.
+
+## Flash Attention
+
+Flash Attention không đổi công thức:
+
+```text
+softmax(QKᵀ / √d_k)V
+```
+
+Nó đổi cách tính để giảm memory I/O giữa GPU SRAM và HBM. Với attention dài, bottleneck thường không chỉ là số phép nhân mà là đọc/ghi ma trận attention khổng lồ.
+
+```text
+same math, less memory traffic, faster attention
+```
+
+<Callout type="info" title="Flash Attention là systems optimization">
+Đây là ví dụ AI hiện đại cần cả ML và systems. Công thức giống nhau, nhưng layout/tile/memory access quyết định throughput.
+</Callout>
+
+## MQA and GQA
+
+Multi-head attention truyền thống có K/V riêng cho mỗi head. KV cache vì vậy lớn.
+
+- MHA: nhiều Q heads, nhiều K/V heads.
+- MQA: nhiều Q heads, 1 K/V head dùng chung.
+- GQA: nhiều Q heads chia nhóm, mỗi nhóm dùng chung K/V.
+
+| Method | KV cache | Quality | Inference |
+|---|---|---|---|
+| MHA | lớn | mạnh | tốn memory |
+| MQA | nhỏ nhất | có thể giảm quality | nhanh/nhẹ |
+| GQA | trung gian | cân bằng | phổ biến |
+
+GQA là compromise tốt: giảm KV cache đáng kể mà giữ quality tốt hơn MQA trong nhiều setting.
+
+## Sliding window attention
+
+Sliding window attention giới hạn mỗi token attend trong một cửa sổ gần nó.
+
+```text
+token i attends to tokens [i-window, ..., i]
+```
+
+Ưu điểm:
+
+- giảm compute/memory,
+- tốt cho local dependencies,
+- hỗ trợ sequence dài hiệu quả hơn.
+
+Nhược điểm:
+
+- long-range dependency khó hơn,
+- cần kiến trúc/layers xử lý thông tin xa,
+- không phải task nào cũng phù hợp.
+
+## Training pipeline: from base model to assistant
+
+### 1. Pretraining
+
+Model học next-token prediction trên corpus lớn.
+
+```text
+raw text/code → filtered dataset → base model
+```
+
+Base model biết hoàn thành text nhưng chưa chắc trả lời như assistant.
+
+### 2. Supervised Fine-Tuning (SFT)
+
+Fine-tune trên instruction-response pairs:
+
+```text
+instruction → ideal answer
+```
+
+Model học format hội thoại, style trả lời, obey instruction.
+
+### 3. RLHF
+
+RLHF dùng human preference:
+
+```text
+prompt → answer A vs answer B → human chọn tốt hơn
+```
+
+Pipeline khái quát:
+
+```text
+pretrained model → SFT model → reward model → policy optimization
+```
+
+Reward model học đo response nào được con người thích hơn. Policy optimization cố tăng reward nhưng thường phải giữ model không đi quá xa SFT distribution bằng KL penalty.
+
+### 4. DPO
+
+DPO học trực tiếp từ preference pairs:
+
+```text
+chosen response > rejected response
+```
+
+Nó tránh training reward model riêng trong nhiều setup, đơn giản hơn RLHF truyền thống.
+
+<Callout type="warning" title="Alignment không làm model thành truth machine">
+SFT/RLHF/DPO làm model hữu ích và nghe lời hơn, nhưng không đảm bảo factuality tuyệt đối. RAG, tools, eval và guardrails vẫn cần thiết.
+</Callout>
+
+## Reward hacking and alignment limits
+
+Nếu reward model thích câu dài, model có thể học viết dài dù không tốt hơn. Nếu human preferences bias, model inherit bias. Nếu prompt adversarial, alignment có thể fail.
+
+Failure modes:
+
+- over-refusal,
+- sycophancy,
+- verbosity,
+- hidden hallucination,
+- reward hacking,
+- safety/helpfulness tradeoff.
+
+## Scaling laws
+
+Scaling laws quan sát rằng loss thường giảm có quy luật khi tăng:
+
+- parameters,
+- data tokens,
+- training compute.
+
+Nhưng có tradeoff. Một model rất lớn train thiếu data có thể không compute-optimal. Chinchilla-style intuition: với compute cố định, cần cân bằng model size và data size.
+
+Production lại có objective khác:
+
+```text
+training loss tốt ≠ app utility tốt nhất
+```
+
+Bạn còn cần:
+
+- latency thấp,
+- cost hợp lý,
+- context đủ,
+- domain accuracy,
+- safety,
+- deployability.
+
+## Inference scaling and test-time compute
+
+Ngoài training scale, hiện đại còn dùng inference-time compute:
+
+- generate nhiều candidates,
+- self-consistency voting,
+- verifier/reranker,
+- tool use,
+- multi-step planning.
+
+Tradeoff:
+
+```text
+quality tăng có thể đổi bằng latency/cost tăng
+```
+
+## Hallucination taxonomy
+
+### Intrinsic hallucination
+
+Model mâu thuẫn với input/context.
+
+```text
+Context: Refund window is 30 days.
+Answer: Refund window is 60 days.
+```
+
+### Extrinsic hallucination
+
+Model thêm thông tin không có trong context.
+
+```text
+Answer: Refunds are processed by Sarah from finance.
+```
+
+Nếu context không nói Sarah, đây là extrinsic hallucination.
+
+## Lost in the middle
+
+Long-context models có thể nhớ tốt đầu và cuối prompt hơn phần giữa. Đây là position bias thực nghiệm.
+
+Mitigations:
+
+- rerank context,
+- đặt evidence quan trọng gần query,
+- dùng citations,
+- chia câu hỏi phức tạp thành nhiều retrieval steps,
+- eval với long-context test cases.
+
+## Distribution shift and benchmark contamination
+
+Model có thể làm tốt benchmark nhưng kém trên data công ty bạn vì:
+
+- domain khác training data,
+- format khác,
+- ngôn ngữ khác,
+- benchmark đã xuất hiện trong pretraining,
+- task production có constraints không có trong benchmark.
+
+Bài học: luôn có eval set nội bộ.
+
+## Implementation lab: capacity and latency estimator
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass
+class LLMConfig:
+    layers: int
+    num_kv_heads: int
+    head_dim: int
+    bytes_per_value: int = 2  # fp16/bf16
+
+
+def estimate_kv_cache_gb(config: LLMConfig, batch: int, seq_len: int) -> float:
+    bytes_total = (
+        2
+        * config.layers
+        * batch
+        * seq_len
+        * config.num_kv_heads
+        * config.head_dim
+        * config.bytes_per_value
+    )
+    return bytes_total / (1024 ** 3)
+
+
+def estimate_request_cost(input_tokens, output_tokens, input_price, output_price):
+    return input_tokens * input_price + output_tokens * output_price
+
+
+cfg = LLMConfig(layers=32, num_kv_heads=8, head_dim=128)
+for seq_len in [4096, 8192, 32768]:
+    print(seq_len, round(estimate_kv_cache_gb(cfg, batch=4, seq_len=seq_len), 2), "GB")
+```
+
+Extend lab:
+
+1. Test batch = 1, 4, 16.
+2. Test seq_len = 4k, 8k, 32k.
+3. Plot KV cache memory.
+4. Compare with GPU VRAM.
+5. Explain when you need GQA/paged attention.
+
+## Empirical lab: prompt length vs latency
+
+**Goal:** đo ảnh hưởng của input length đến TTFT và total latency.
+
+**Setup:** dùng một provider API hoặc local model.
+
+**Steps:**
+
+1. Tạo prompts 1k, 8k, 32k tokens.
+2. Giữ `max_output_tokens` cố định.
+3. Log TTFT, total latency, input/output tokens, cost.
+4. Kiểm tra answer có bỏ sót fact ở giữa prompt không.
+
+Record:
+
+| Trial | Input tokens | Output tokens | TTFT | Total latency | Cost | Missed facts |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 1k | 300 | | | | |
+| 2 | 8k | 300 | | | | |
+| 3 | 32k | 300 | | | | |
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: nghĩ context dài luôn tốt hơn">
+Context dài có thể làm model nhiễu, tăng cost/latency và khó eval. Retrieval tốt thường quan trọng hơn nhồi nhiều text.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: dùng base model cho chatbot production">
+Base model không được align để follow instructions tốt. Dùng instruct/chat checkpoint cho user-facing apps.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: bỏ qua KV cache khi self-host">
+Serving LLM không chỉ là load weights. KV cache có thể là bottleneck VRAM chính khi context/batch lớn.
+</Callout>
+
+Checklist:
+
+1. Model là base hay instruct/chat?
+2. Context window có đủ input + output budget không?
+3. Prompt có quá dài/nhiễu không?
+4. Có token counting không?
+5. Có đo TTFT và tokens/sec không?
+6. Self-host có tính KV cache chưa?
+7. Có eval hallucination/groundedness không?
+8. Có kiểm tra lost-in-the-middle không?
+9. Có chọn model theo quality/cost/latency không?
+
+## Practice exercises
+
+1. Tính attention matrix size khi `seq_len=4096`, `heads=32`.
+2. Tính KV cache cho model 40 layers, 8 kv heads, head_dim 128, batch 8, seq_len 16k.
+3. Vẽ causal mask 6×6.
+4. So sánh base vs instruct model trên cùng 5 prompts.
+5. Tìm model card của một LLM và ghi context window, GQA/MQA, license.
+6. Tạo long-context test có fact ở đầu/giữa/cuối và so answer.
+
+## Knowledge check
+
+1. LLM decoder-only học objective gì?
+2. Causal mask chặn điều gì?
+3. Vì sao attention prefill thường có cost `O(seq_len²)`?
+4. Prefill khác decode thế nào?
+5. KV cache lưu tensor nào và shape thường ra sao?
+6. GQA giúp gì khi inference?
+7. Flash Attention tối ưu bottleneck nào?
+8. SFT khác RLHF/DPO thế nào?
+9. Lost-in-the-middle là gì?
+10. Vì sao benchmark tốt chưa đủ để chọn model production?
+
+## Answer key
+
+1. Next-token prediction: `P(next_token | previous_tokens)`.
+2. Chặn token hiện tại nhìn token tương lai.
+3. Vì attention scores là ma trận `seq_len × seq_len`.
+4. Prefill xử lý toàn bộ input song song; decode sinh từng token tuần tự với KV cache.
+5. Key và Value tensors: `(batch, num_kv_heads, seq_len, head_dim)`.
+6. Giảm số K/V heads, giảm KV cache và tăng inference efficiency.
+7. Memory I/O trong attention, không đổi công thức attention.
+8. SFT học từ instruction-response; RLHF/DPO học từ preference pairs.
+9. Model bỏ sót thông tin ở giữa context dài dù nằm trong context window.
+10. Production còn phụ thuộc domain, latency, cost, safety, context, data policy và eval nội bộ.
+
+## Mini-project: LLM architecture decision memo
+
+**Task:** Chọn model strategy cho 3 use cases: chatbot nội bộ, summarizer tài liệu dài, code assistant.
+
+**Deliverables:**
+
+- 3 model options mỗi use case.
+- Context window và token budget.
+- Cost/latency estimate.
+- Nếu self-host: KV cache estimate.
+- Rủi ro hallucination/lost-in-the-middle.
+- Recommendation: model chính, fallback, eval plan.
+
+**Success criteria:**
+
+- Có lý do rõ, không chọn theo hype.
+- Có tính token/cost/KV cache.
+- Có eval nội bộ và failure cases.
+- Có tradeoff quality vs latency vs cost.
+
+## Điểm cần nhớ
+
+- LLM là transformer decoder next-token predictor ở scale production.
+- Causal self-attention dùng mask để không nhìn future tokens.
+- Long context tốn cost/latency và không phải memory thật.
+- Prefill quyết định TTFT; decode quyết định tốc độ sinh output.
+- KV cache giảm compute decode nhưng tăng VRAM theo batch × seq_len.
+- RoPE/GQA/Flash Attention là tối ưu quan trọng của LLM hiện đại.
+- Alignment làm model hữu ích hơn nhưng không loại bỏ hallucination.
+- Scaling laws hữu ích, nhưng production cần tối ưu quality/cost/latency/safety.
+
+## Next chapter bridge
+
+Hiểu model rồi, bước tiếp theo là điều khiển behavior của model bằng input. Chương tiếp theo: **Prompt Engineering** — system/user messages, few-shot, structured output, prompt evaluation, RAG prompting và prompt injection defense.

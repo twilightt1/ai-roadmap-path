@@ -1,0 +1,571 @@
+API Integration Patterns là phần biến LLM API từ demo thành hệ thống production. Ở cấp độ giáo sư AI engineering, ta không chỉ nói “thêm retry và cache”; ta phải thiết kế **middleware policy**: request đi qua bước nào, lỗi nào retry, lỗi nào fallback, quota tính ra sao, cache có an toàn không, logs đủ debug không, và mọi quyết định này ảnh hưởng cost/latency/security thế nào.
+
+## Why this matters
+
+LLM APIs là dependency đắt, chậm và có xác suất lỗi cao hơn nhiều API nội bộ. Chúng có thể:
+
+- timeout,
+- rate limit,
+- trả JSON lỗi,
+- bị safety block,
+- vượt context,
+- chậm theo giờ cao điểm,
+- thay đổi behavior khi model version đổi,
+- làm bill tăng mạnh nếu retry/cache sai.
+
+<Callout type="danger" title="LLM call không được là black box">
+Mỗi request phải có trace: input tokens, output tokens, prompt version, model, latency, cache hit, retry count, fallback path, validation status và estimated cost. Không có trace thì không có production engineering.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Thiết kế middleware ordering cho LLM request.
+2. Quản lý token budget, truncation và context packing.
+3. Phân loại errors và quyết định retry/fallback/user response.
+4. So sánh rate limiting algorithms.
+5. Thiết kế cache exact/semantic/tenant-isolated an toàn.
+6. Dùng circuit breaker để bảo vệ hệ thống khi provider lỗi.
+7. Thiết kế fallback policy có constraints quality/security/schema.
+8. Xây observability với logs, metrics, traces.
+9. Validate response theo nhiều lớp: syntax, schema, business, groundedness, safety.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- HTTP errors, retries, timeout.
+- Tokenization/context window.
+- AI API provider abstraction.
+- Redis/cache/rate limit concepts.
+- Structured output validation.
+
+## Core intuition: LLM APIs are distributed systems dependencies
+
+Một LLM call production nên đi qua pipeline:
+
+```text
+Request
+  ↓
+Authenticate / authorize
+  ↓
+Normalize input
+  ↓
+Estimate tokens
+  ↓
+Check quota/rate limit
+  ↓
+Cache lookup
+  ↓
+Provider call with timeout
+  ↓
+Retry if retryable
+  ↓
+Fallback if policy allows
+  ↓
+Validate response
+  ↓
+Log/trace usage
+  ↓
+Return response
+```
+
+Mỗi mũi tên là một policy decision.
+
+## Middleware ordering and policy decisions
+
+Ordering không tùy tiện.
+
+### Auth first
+
+Không auth thì không biết user/tenant, không áp quota/permissions được.
+
+### Normalize before cache key
+
+Nếu input có whitespace khác nhau nhưng meaning giống nhau, normalize có thể tăng cache hit. Nhưng normalize quá mạnh có thể làm sai semantics.
+
+### Token count before provider call
+
+Để chặn context overflow và estimate cost.
+
+### Rate limit before expensive work
+
+Thông thường check quota trước provider call. Nhưng có thể cache lookup trước quota nếu cache hit không tốn provider cost. Policy này phải rõ.
+
+### Log even on failure
+
+Failed calls vẫn cần trace để debug provider reliability và cost.
+
+<Callout type="warning" title="Không có ordering đúng, middleware sẽ tự mâu thuẫn">
+Ví dụ deduct quota trước cache lookup có thể làm user mất quota dù trả cached answer. Ngược lại cache lookup trước auth có thể leak tenant data nếu cache key không isolate.\n</Callout>
+
+## Token budget management
+
+Budget equation:
+
+```text
+system + developer + chat_history + retrieved_context + user_query + output_budget <= context_window
+```
+
+Strategies khi vượt budget:
+
+| Strategy | Khi dùng | Rủi ro |
+|---|---|---|
+| Drop oldest history | chat dài | mất context quan trọng |
+| Summarize history | cần giữ gist | summary hallucination |
+| Reduce retrieved chunks | RAG | giảm recall |
+| Rerank context | nhiều chunks | cần reranker tốt |
+| Compress context | docs dài | mất chi tiết |
+| Long-context model | truly long input | cost/latency cao |
+| Ask user narrow scope | query mơ hồ | UX gián đoạn |
+
+## Context packing for RAG
+
+Không chỉ lấy top-k rồi nhét vào prompt. Context packing cần cân bằng:
+
+- relevance,
+- diversity,
+- source priority,
+- recency,
+- token length,
+- citation metadata.
+
+Pattern:
+
+```text
+retrieve top-50 → rerank top-10 → diversify → pack until token budget → cite IDs
+```
+
+Nếu có lost-in-the-middle, đặt evidence quan trọng gần cuối prompt hoặc gần question tùy model/eval.
+
+## Truncation is a product decision
+
+Silent truncation là bug. Nếu phải cắt, log rõ:
+
+```text
+truncated: true
+truncated_sections: ["chat_history", "retrieved_context"]
+original_tokens: 18000
+final_tokens: 7900
+```
+
+User-facing behavior có thể là:
+
+- trả lời với context rút gọn,
+- thông báo cần narrow query,
+- dùng long-context model,
+- chạy multi-step retrieval.
+
+## Error taxonomy and retry matrix
+
+| Error | Retry? | Fallback? | Strategy |
+|---|---|---|---|
+| 400 invalid request | no | no | fix payload/schema |
+| 401/403 auth | no | no | check key/permissions |
+| 408 timeout | maybe | yes | retry with timeout budget |
+| 429 rate limit | yes | maybe | backoff + jitter, respect Retry-After |
+| 500/502/503/504 | yes | yes | retry then fallback |
+| context length | no | maybe | reduce context or long-context model |
+| invalid JSON output | repair/retry | maybe | schema repair loop |
+| safety refusal | usually no | policy-dependent | return refusal or human review |
+| stream interrupted | tricky | maybe | cannot blindly replay partial output |
+
+Professor-level point: retry is not moral virtue. Retry is a policy with cost and side effects.
+
+## Exponential backoff with jitter
+
+Without jitter, many clients retry at the same time, creating retry storms.
+
+```python
+import random
+import time
+
+
+def sleep_backoff(attempt: int, base=0.5, cap=8.0):
+    raw = min(cap, base * (2 ** attempt))
+    jittered = raw * (0.5 + random.random())
+    time.sleep(jittered)
+```
+
+## Retry budgets and amplification
+
+Nếu mỗi request retry 3 lần, traffic có thể tăng 4x trong outage.
+
+```text
+normal: 100 requests/sec
+provider degraded
+with 3 retries: up to 400 attempts/sec
+```
+
+Mitigations:
+
+- max attempts,
+- global retry budget,
+- circuit breaker,
+- respect Retry-After,
+- fail fast for non-retryable errors.
+
+## Idempotency
+
+Retry an toàn nếu operation idempotent. Generate text thường không có side effect, nhưng tool actions thì có.
+
+Danger:
+
+```text
+send_email() timeout → retry → user receives duplicate emails
+create_refund() timeout → retry → duplicate refund
+```
+
+Use idempotency keys:
+
+```text
+operation_id = hash(user_id + action_type + business_id)
+```
+
+## Rate limiting algorithms compared
+
+| Algorithm | Pros | Cons | Best for |
+|---|---|---|---|
+| Fixed window | đơn giản | burst ở boundary | quota đơn giản |
+| Sliding window log | chính xác | tốn memory | low-volume strict limit |
+| Sliding counter | cân bằng | approximate | web APIs |
+| Token bucket | cho burst hợp lý | cần tune refill | LLM request limits |
+| Leaky bucket | smooth traffic | ít linh hoạt burst | downstream protection |
+| Concurrency limit | bảo vệ workers/GPU | không đo quota dài hạn | expensive/slow calls |
+
+LLM systems thường cần kết hợp:
+
+```text
+per-user daily quota + per-minute token bucket + global concurrency limit
+```
+
+## Caching: exact, semantic, embedding
+
+### Exact cache
+
+Cache theo hash payload chính xác.
+
+Good for:
+
+- deterministic classification,
+- repeated eval,
+- fixed summarization,
+- embeddings.
+
+Cache key phải gồm:
+
+```text
+model + prompt_version + input + decoding_settings + schema_version + tenant_id
+```
+
+### Semantic cache
+
+Cache dựa trên similarity của query. Nguy hiểm hơn vì query gần nhau chưa chắc cùng answer.
+
+Risk:
+
+```text
+"refund policy for EU" gần "refund policy for US" nhưng answer khác
+```
+
+### Embedding cache
+
+Cache embeddings cho document chunks. Phải include embedding model/version.
+
+<Callout type="danger" title="Shared cache có thể leak tenant data">
+Nếu cache không include tenant/user permission context, user A có thể nhận answer của user B. Cache phải tenant-isolated hoặc chỉ dùng cho public data.
+</Callout>
+
+## Cache invalidation
+
+Invalidate khi đổi:
+
+- model,
+- prompt version,
+- schema,
+- retrieved context,
+- business rules,
+- source document,
+- user permissions.
+
+TTL strategy:
+
+| Data | TTL gợi ý |
+|---|---|
+| public static docs | dài |
+| user-specific answers | ngắn hoặc không cache |
+| embeddings | đến khi model/doc đổi |
+| eval outputs | versioned, dài |
+
+## Circuit breaker
+
+Circuit breaker ngăn hệ thống tiếp tục gọi provider đang lỗi.
+
+States:
+
+```text
+closed → normal
+open → fail fast / route fallback
+half-open → thử một ít requests để kiểm tra recovery
+```
+
+Signal:
+
+- error rate,
+- timeout rate,
+- p95 latency,
+- rate limit rate.
+
+## Fallback policy design
+
+Fallback không chỉ là “model B nếu model A lỗi”. Cần policy.
+
+Metadata cần biết:
+
+```text
+model_context_window
+supports_tools
+supports_json_schema
+data_policy_allowed
+cost_per_token
+latency_profile
+quality_score_by_task
+```
+
+Fallback constraints:
+
+- output schema compatible không?
+- context window đủ không?
+- provider có được phép nhận data này không?
+- model có tool calling tương đương không?
+- quality degradation có chấp nhận được không?
+
+## Observability: logs, metrics, traces
+
+### Structured logs
+
+```json
+{
+  "request_id": "req_123",
+  "tenant_id": "t_abc",
+  "route": "/chat",
+  "prompt_version": "rag_answer_v3",
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "input_tokens": 1200,
+  "output_tokens": 300,
+  "latency_ms": 2400,
+  "cache_hit": false,
+  "retry_count": 1,
+  "fallback_path": ["primary", "secondary"],
+  "validation_status": "pass",
+  "estimated_cost": 0.0042
+}
+```
+
+### Metrics
+
+- requests/sec,
+- p50/p95/p99 latency,
+- TTFT,
+- tokens/sec,
+- error rate,
+- retry rate,
+- fallback rate,
+- cache hit rate,
+- cost per tenant,
+- invalid JSON rate.
+
+### Traces
+
+Trace spans:
+
+```text
+HTTP request
+ ├── auth
+ ├── token_count
+ ├── cache_lookup
+ ├── provider_call
+ ├── validation
+ └── logging
+```
+
+## Response validation layers
+
+| Layer | Example |
+|---|---|
+| Syntax | valid JSON |
+| Schema | required fields/types/enums |
+| Business | amount <= allowed refund |
+| Groundedness | answer supported by retrieved context |
+| Citation | cited doc IDs exist and support claim |
+| Safety | no secrets/toxicity/policy violation |
+| Tool args | user authorized for action |
+
+Validation failure strategy:
+
+```text
+repair → retry → fallback → controlled error → human review
+```
+
+## Implementation lab: middleware simulation
+
+```python
+import random
+import time
+from dataclasses import dataclass
+
+
+@dataclass
+class SimResult:
+    ok: bool
+    error: str | None
+    latency_ms: int
+    cost: float
+
+
+class FakeProvider:
+    def call(self) -> SimResult:
+        r = random.random()
+        if r < 0.10:
+            return SimResult(False, "429", 100, 0.0)
+        if r < 0.18:
+            return SimResult(False, "500", 200, 0.0)
+        if r < 0.23:
+            return SimResult(False, "invalid_json", 800, 0.002)
+        return SimResult(True, None, random.randint(500, 2000), 0.004)
+
+
+def should_retry(error: str | None) -> bool:
+    return error in {"429", "500"}
+
+
+def call_with_policy(provider, max_attempts=3):
+    attempts = []
+    for attempt in range(max_attempts):
+        result = provider.call()
+        attempts.append(result)
+        if result.ok:
+            return result, attempts
+        if not should_retry(result.error):
+            return result, attempts
+        time.sleep(0.1 * (2 ** attempt))
+    return attempts[-1], attempts
+
+
+provider = FakeProvider()
+result, attempts = call_with_policy(provider)
+print(result)
+print("attempts", len(attempts), [a.error for a in attempts])
+```
+
+Extend lab:
+
+1. Run 1,000 simulated requests.
+2. Compute retry rate, failure rate, cost, p95 latency.
+3. Add cache hit probability.
+4. Add fallback provider.
+5. Plot metrics before/after circuit breaker.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: không có timeout">
+Request treo làm worker bị giữ, user chờ vô hạn và queue nghẽn. Luôn đặt timeout theo route/task.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: cache key thiếu model/settings/tenant">
+Cache key thiếu metadata có thể trả output sai config hoặc leak dữ liệu giữa tenants.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: retry làm nhân cost và side effects">
+Retries trong outage có thể tạo retry storm. Retries với tool actions có thể gây duplicate side effects nếu thiếu idempotency.
+</Callout>
+
+Checklist:
+
+1. Middleware ordering có rõ không?
+2. Có token guard trước provider call không?
+3. Có timeout per route không?
+4. Retry matrix có phân biệt retryable/non-retryable không?
+5. Có retry budget/circuit breaker không?
+6. Rate limit có per-user/per-tenant/global không?
+7. Cache key có model/prompt/settings/schema/tenant không?
+8. Fallback có kiểm tra compliance/schema/context không?
+9. Logs có request_id và prompt_version không?
+10. Metrics có retry/fallback/cache/validation rates không?
+11. Response validation có nhiều lớp không?
+
+## Practice exercises
+
+1. Thiết kế middleware ordering cho `/chat` và `/extract-json`.
+2. Viết retry matrix cho 10 lỗi provider.
+3. Implement token bucket pseudocode.
+4. Thiết kế cache key cho RAG answer.
+5. Mô phỏng retry storm với 1,000 requests.
+6. Viết fallback policy cho primary GPT → Claude → local model.
+7. Tạo structured log schema cho LLM call.
+8. Thiết kế validation layers cho refund tool call.
+
+## Knowledge check
+
+1. Vì sao middleware ordering quan trọng?
+2. Silent truncation nguy hiểm thế nào?
+3. Retry amplification là gì?
+4. Token bucket khác fixed window thế nào?
+5. Semantic cache nguy hiểm ở đâu?
+6. Circuit breaker có những state nào?
+7. Fallback policy cần metadata gì?
+8. Observability LLM cần log/metric gì?
+9. Response validation có những lớp nào?
+10. Vì sao idempotency quan trọng cho tool actions?
+
+## Answer key
+
+1. Vì các bước ảnh hưởng security, quota, cache correctness, cost và logs.
+2. Có thể cắt mất instruction/context mà app không biết, làm answer sai âm thầm.
+3. Retries làm traffic/cost tăng mạnh khi provider degraded.
+4. Fixed window đếm trong khung thời gian; token bucket refill dần và cho burst có kiểm soát.
+5. Query gần nhau về embedding nhưng answer đúng có thể khác theo jurisdiction/user/context.
+6. Closed, open, half-open.
+7. Context window, tool/schema support, data policy, cost, latency, task quality.
+8. Tokens, latency, cost, model, prompt version, cache hit, retry count, fallback path, validation status.
+9. Syntax, schema, business, groundedness, citation, safety, tool-argument authorization.
+10. Retry timeout có thể thực thi action nhiều lần nếu thiếu idempotency key.
+
+## Mini-project: Production LLM middleware simulator
+
+**Task:** Build simulator cho LLM middleware xử lý 1,000 requests với lỗi ngẫu nhiên.
+
+**Deliverables:**
+
+- Token budget guard.
+- Retry/backoff policy.
+- Rate limiting simulation.
+- Exact cache với SHA-256 key.
+- Fallback provider.
+- Circuit breaker.
+- Validation failure simulation.
+- Metrics report: p95 latency, retry rate, fallback rate, cache hit, cost.
+
+**Success criteria:**
+
+- Có retry matrix rõ.
+- Có log mỗi request với request_id.
+- Chứng minh retry policy không gây cost explosion.
+- Có so sánh before/after cache và circuit breaker.
+- Có analysis failure modes.
+
+## Điểm cần nhớ
+
+- LLM integration là distributed systems engineering.
+- Middleware phải encode policy: auth, token, quota, cache, provider call, retry, fallback, validation, logging.
+- Retry cần matrix, budget, jitter và idempotency awareness.
+- Rate limiting nên kết hợp quota, token bucket và concurrency limit.
+- Cache phải versioned, tenant-safe và invalidated đúng.
+- Fallback tăng reliability nhưng có quality/security/schema tradeoffs.
+- Observability là điều kiện để debug cost, latency và quality.
+
+## Next chapter bridge
+
+Integration patterns vẫn chưa đủ nếu secrets bị leak hoặc data access sai. Chương tiếp theo: **Secure API Integration** — threat modeling, secrets lifecycle, secure RAG authorization, tool permissions và safe logging.

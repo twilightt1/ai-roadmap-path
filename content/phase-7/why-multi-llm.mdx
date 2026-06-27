@@ -1,0 +1,355 @@
+Multi-LLM Architecture không phải là “gọi nhiều model cho vui”. Đây là chiến lược production để cân bằng **quality, latency, cost, reliability, context length, compliance, modality và capability**. Ở quy mô sản phẩm thật, model choice không nên là hằng số hard-code; nó phải là một **runtime policy** được đo, log, kiểm thử và govern.
+
+## Why this matters
+
+Single-model architecture đơn giản nhưng dễ vỡ:
+
+- Provider outage làm toàn bộ app chết.
+- Một model giỏi reasoning nhưng chậm/đắt cho task đơn giản.
+- Một model rẻ trả JSON kém làm pipeline extraction fail.
+- Tenant enterprise có data policy không cho gửi dữ liệu sang provider nhất định.
+- Task vision/code/long-context cần capability khác nhau.
+- Model version update có thể làm prompt cũ regression.
+
+<Callout type="warning" title="Multi-LLM không phải redundancy đơn giản">
+Nếu bạn chỉ gọi provider B khi provider A lỗi, đó mới là fallback. Multi-LLM architecture thật sự cần routing policy, quality measurement, cost accounting, observability và governance.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích vì sao model selection nên là runtime policy.
+2. Phân biệt single-model, fallback-only và true multi-LLM architecture.
+3. Xác định routing dimensions: task, cost, latency, quality, context, compliance, modality.
+4. Thiết kế model capability matrix.
+5. Hiểu hidden complexity của multi-provider systems.
+6. Thiết kế evaluation loop cho model/provider choice.
+7. Nhận diện risks: schema drift, prompt portability, data-policy mismatch.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Phase 6 LLM fundamentals: context, latency, token cost.
+- Provider abstraction và API contracts.
+- Prompt engineering và structured output.
+- Retry/fallback/observability basics.
+- Secure API integration: data policy, secrets, logging.
+
+## Core intuition: model choice is a policy decision
+
+Một request production nên đi qua decision layer:
+
+```text
+User request
+  ↓
+Task / risk / modality classifier
+  ↓
+Candidate model set
+  ↓
+Constraints: cost, latency, compliance, context, tools
+  ↓
+Selected provider/model
+  ↓
+Validation + fallback + trace
+```
+
+Thay vì:
+
+```python
+model = "gpt-4o"  # hard-coded forever
+```
+
+Bạn muốn:
+
+```python
+model = router.select(request, tenant_policy, budget, eval_scores)
+```
+
+## Single-model vs fallback-only vs true multi-LLM
+
+| Architecture | Ý tưởng | Ưu điểm | Hạn chế |
+|---|---|---|---|
+| Single-model | mọi request dùng một model | đơn giản | cost/latency/availability phụ thuộc một model |
+| Fallback-only | model B khi model A lỗi | tăng reliability | không tối ưu cost/task quality |
+| True multi-LLM | route theo task/policy/metrics | tối ưu quality-cost-latency | cần router, eval, observability |
+
+<Callout type="info" title="Giảng viên nói thẳng">
+Multi-LLM chỉ có giá trị nếu bạn đo được quyết định của router. Nếu không log vì sao request dùng model nào, bạn chỉ đang thêm complexity mà không có governance.
+</Callout>
+
+## Why one model is never optimal for all tasks
+
+Các task khác nhau có requirements khác nhau:
+
+| Task | Điều quan trọng | Model phù hợp |
+|---|---|---|
+| Simple classification | rẻ, nhanh, stable JSON | small/cheap model |
+| Legal reasoning | accuracy, citations, long context | strong reasoning/long-context model |
+| Code generation | code benchmarks, tool use | code-strong model |
+| Vision QA | image understanding | multimodal model |
+| Sensitive internal docs | privacy/data residency | private/local/compliant provider |
+| High-volume extraction | cost, schema reliability | structured-output reliable model |
+
+Một model frontier có thể làm mọi thứ “đủ tốt”, nhưng unit economics có thể chết nếu bạn dùng nó cho hàng triệu tasks đơn giản.
+
+## Capability matrix design
+
+Capability matrix là registry mô tả model/provider theo dimensions đo được.
+
+| Dimension | What to measure | Example |
+|---|---|---|
+| Quality | task eval score | RAG correctness 88% |
+| Latency | TTFT, p95 total latency | p95 < 4s |
+| Cost | input/output price | $/1M tokens |
+| Context | max + effective context | 128k max, lost-middle eval |
+| Tools | tool-call validity rate | 97% valid args |
+| JSON | schema pass rate | 99% valid JSON |
+| Modality | text/image/audio/video | supports vision |
+| Data policy | retention/training/region | EU allowed |
+| Reliability | error/rate-limit rate | 99.9% success |
+
+Example registry row:
+
+```json
+{
+  "provider": "anthropic",
+  "model": "claude-sonnet",
+  "context_window": 200000,
+  "supports_tools": true,
+  "supports_vision": true,
+  "json_score": 0.94,
+  "rag_quality_score": 0.89,
+  "p95_latency_ms": 6200,
+  "cost_tier": "high",
+  "allowed_regions": ["us", "eu"]
+}
+```
+
+## Multi-LLM architecture patterns
+
+### Static model selection
+
+Mỗi feature dùng một model cố định.
+
+```text
+/support-classifier → cheap model
+/legal-chat → strong model
+/vision-qa → vision model
+```
+
+Đơn giản nhưng kém linh hoạt.
+
+### User-tier routing
+
+```text
+free users → cheap model
+pro users → higher-quality model
+enterprise → compliant provider/private model
+```
+
+Tốt cho cost control, nhưng phải tránh làm quality quá tệ cho free tier.
+
+### Task-based routing
+
+Router phân loại task rồi chọn model.
+
+```text
+classification → small model
+reasoning → strong model
+code → code model
+image → multimodal model
+```
+
+### Verifier/judge model
+
+Một model sinh answer, model khác kiểm tra.
+
+```text
+generator → answer
+judge/verifier → pass/fail/score
+```
+
+Dùng cho high-risk workflows nhưng tăng cost/latency.
+
+### Specialist models
+
+Dùng model domain-specific:
+
+- embedding model cho retrieval,
+- reranker cho ranking,
+- code model cho code,
+- local model cho private data,
+- frontier model cho hard reasoning.
+
+## Hidden complexity of multi-provider systems
+
+Multi-provider không chỉ là đổi endpoint:
+
+| Difference | Production impact |
+|---|---|
+| Tokenizer khác | token cost/context estimate khác |
+| Message schema khác | prompt adapter cần normalize |
+| Tool format khác | tool call parser/validator khác |
+| Streaming event khác | frontend/gateway phải chuẩn hóa |
+| Safety filter khác | answer/refusal behavior khác |
+| Pricing khác | router phải cost-aware |
+| Model versioning khác | regression monitoring cần thiết |
+| Data policy khác | tenant routing phải enforce |
+
+## Prompt portability problem
+
+Prompt tối ưu cho model A có thể kém trên model B:
+
+- model B cần JSON instruction rõ hơn,
+- model C không hiểu cùng tool schema,
+- model D over-refuse với safety wording,
+- model E bỏ qua examples dài.
+
+Vì vậy multi-LLM cần eval prompt trên từng target model.
+
+## Production decision framework
+
+Trước khi thêm model mới, hỏi:
+
+1. Model giải quyết gap nào?
+2. Task nào dùng model này?
+3. Eval score trên data nội bộ ra sao?
+4. Cost/request và p95 latency là bao nhiêu?
+5. Provider có được phép xử lý dữ liệu tenant không?
+6. Model có support schema/tool/vision/context cần thiết không?
+7. Fallback path là gì?
+8. Prompt có portable không?
+9. Observability có log model decision không?
+
+## Implementation lab: model capability scorecard
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass
+class ModelScore:
+    name: str
+    quality: float      # 0-1 from eval
+    latency: float      # 0-1, higher is faster
+    cost: float         # 0-1, higher is cheaper
+    compliance: float   # 0-1
+    json_reliability: float
+
+    def weighted_score(self, weights):
+        return (
+            self.quality * weights["quality"] +
+            self.latency * weights["latency"] +
+            self.cost * weights["cost"] +
+            self.compliance * weights["compliance"] +
+            self.json_reliability * weights["json"]
+        )
+
+
+models = [
+    ModelScore("frontier", 0.95, 0.55, 0.20, 0.80, 0.96),
+    ModelScore("cheap-fast", 0.72, 0.95, 0.95, 0.85, 0.88),
+    ModelScore("private-local", 0.78, 0.70, 0.70, 1.00, 0.82),
+]
+
+weights = {"quality": 0.4, "latency": 0.2, "cost": 0.2, "compliance": 0.1, "json": 0.1}
+for m in sorted(models, key=lambda x: x.weighted_score(weights), reverse=True):
+    print(m.name, round(m.weighted_score(weights), 3))
+```
+
+Extend lab:
+
+1. Tạo 20 prompts cho classification, RAG, JSON extraction, code, multilingual.
+2. Chạy 3 models/providers.
+3. Log quality, latency, cost, JSON validity.
+4. Điền capability matrix.
+5. Viết recommendation model per task.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: thêm nhiều model nhưng không có eval">
+Nếu không có task eval, routing chỉ là opinion. Multi-LLM cần metrics theo task, không chỉ benchmark marketing.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: quên prompt portability">
+Prompt chạy tốt trên model A có thể fail trên model B. Mỗi model route cần prompt compatibility tests.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: routing bỏ qua data policy">
+Model tốt nhất về quality có thể không được phép nhận dữ liệu tenant. Compliance constraints phải là hard constraints, không phải soft score.
+</Callout>
+
+Checklist:
+
+1. Có capability matrix cho từng model không?
+2. Có eval score theo task không?
+3. Có cost/latency thực tế không?
+4. Có data policy per tenant không?
+5. Có prompt tests cross-model không?
+6. Có log route reason không?
+7. Có fallback policy không?
+8. Có monitor model regression không?
+
+## Practice exercises
+
+1. So sánh 3 models cho 5 task types.
+2. Thiết kế capability matrix cho app RAG nội bộ.
+3. Tạo 20-prompt eval set cho model selection.
+4. Viết decision memo: khi nào dùng frontier vs cheap vs local model.
+5. Tìm một prompt không portable giữa 2 models và phân tích vì sao.
+6. Thiết kế route logging schema.
+
+## Knowledge check
+
+1. Vì sao multi-LLM không chỉ là fallback?
+2. Runtime model policy cần những inputs nào?
+3. Capability matrix nên chứa dimensions gì?
+4. Prompt portability problem là gì?
+5. Vì sao compliance phải là hard constraint?
+6. Verifier/judge model đổi quality lấy gì?
+7. Single-model architecture fail ở đâu?
+
+## Answer key
+
+1. Vì true multi-LLM gồm routing, eval, cost, observability, policy và governance.
+2. Task, user tier, token estimate, budget, latency SLA, data policy, capability needs, eval scores.
+3. Quality, latency, cost, context, tools, JSON reliability, modality, data policy, region, reliability.
+4. Prompt tối ưu cho model này có thể không work trên model khác do tokenizer/safety/schema/instruction behavior khác.
+5. Vì vi phạm data policy/compliance không thể bù bằng quality cao.
+6. Tăng cost/latency nhưng có thể tăng correctness/safety.
+7. Outage, cost inefficiency, latency mismatch, capability mismatch, provider lock-in.
+
+## Mini-project: Model selection scorecard
+
+**Task:** Build scorecard cho 4 models/providers trong một AI product.
+
+**Deliverables:**
+
+- Capability matrix.
+- 50 eval prompts chia theo task.
+- Cost/latency measurements.
+- JSON/tool validity rate.
+- Data policy matrix.
+- Recommendation model per route.
+
+**Success criteria:**
+
+- Route decision dựa trên evidence.
+- Có hard constraints cho compliance.
+- Có route reason logging proposal.
+- Có fallback candidates.
+- Có report tradeoff quality/cost/latency.
+
+## Điểm cần nhớ
+
+- Multi-LLM là production policy layer, không phải model shopping.
+- Không model nào tối ưu cho mọi task, cost, latency, context và compliance.
+- Capability matrix là nền của routing và fallback.
+- Prompt portability, schema drift và tokenizer differences là hidden complexity.
+- Model choice phải được đo, log và review như quyết định kiến trúc.
+
+## Next chapter bridge
+
+Bạn đã hiểu vì sao cần nhiều model và capability matrix. Chương tiếp theo: **Routing Strategies** — cách router chọn model theo task, cost, latency, context, compliance và measured performance.

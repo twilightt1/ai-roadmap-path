@@ -1,0 +1,658 @@
+Multi-LLM Gateway là control plane cho AI calls trong production. Nó không chỉ forward request sang OpenAI/Claude/Gemini; nó enforce policy: ai được gọi model nào, với budget nào, prompt version nào, fallback nào, cache nào, validation nào và trace nào. Đây là chương capstone của Phase 7 vì nó gom routing, fallback, provider abstraction, cost tracking, cache, security và observability thành một kiến trúc thống nhất.
+
+## Why this matters
+
+Nếu không có gateway, mỗi app/team sẽ tự implement:
+
+- API keys,
+- retries,
+- fallback,
+- token counting,
+- logging,
+- prompt versions,
+- cost tracking,
+- provider adapters,
+- schema validation,
+- rate limits.
+
+Kết quả thường là:
+
+- duplicated bugs,
+- inconsistent security,
+- không biết ai tiêu tiền,
+- khó đổi provider,
+- prompt/version phân tán,
+- không có global observability.
+
+<Callout type="danger" title="Gateway là control plane, không chỉ proxy">
+Nếu gateway chỉ forward request sang provider, nó chưa phải multi-LLM gateway. Gateway phải enforce policy: model, budget, tenant, prompt, routing, fallback, validation, cost và observability.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Thiết kế multi-LLM gateway architecture end-to-end.
+2. Xây provider abstraction layer cho chat, stream, embed.
+3. Thiết kế model/capability registry.
+4. Implement request lifecycle: auth → route → call → validate → log.
+5. Track token/cost per user/tenant/feature/model.
+6. Thiết kế exact/semantic cache manager an toàn.
+7. Thiết kế fallback manager và response validator.
+8. Support streaming qua gateway.
+9. Instrument traces, metrics, logs và dashboards.
+10. Chuẩn bị scaling architecture với Redis/Postgres/Kafka/K8s.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Phase 6: LLM APIs, integration patterns, secure API.
+- Phase 7: multi-LLM rationale, routing, fallback, MCP, frameworks.
+- Backend architecture: FastAPI/Node, Redis, Postgres, queues.
+- Observability concepts: logs, metrics, traces.
+
+## Core intuition: centralize AI policy
+
+Architecture:
+
+```text
+Apps / Products
+      ↓
+Multi-LLM Gateway
+  ├── Auth / tenant policy
+  ├── Prompt registry
+  ├── Token estimator
+  ├── Router
+  ├── Provider adapters
+  ├── Fallback manager
+  ├── Cache manager
+  ├── Response validator
+  ├── Cost tracker
+  └── Observability
+      ↓
+OpenAI / Anthropic / Gemini / Local / vLLM / MCP tools
+```
+
+Gateway biến AI calls thành governed platform capability.
+
+## Gateway responsibilities
+
+| Component | Responsibility |
+|---|---|
+| Provider abstraction | normalized chat/embed/stream/tool API |
+| Model registry | capabilities, prices, limits, health |
+| Router | choose provider/model based on policy |
+| Token estimator | estimate and guard tokens |
+| Cost tracker | cost per user/tenant/feature/model |
+| Fallback manager | retry/cascade/circuit breaker |
+| Cache manager | exact/semantic/embedding cache |
+| Validator | schema/business/safety/grounding validation |
+| Prompt registry | versions, rollout, A/B tests |
+| Observability | traces, metrics, logs |
+| Policy engine | tenant/provider/data restrictions |
+
+## Provider abstraction layer
+
+Interface:
+
+```python
+from typing import Protocol, AsyncIterator
+from dataclasses import dataclass
+
+
+@dataclass
+class ChatRequest:
+    messages: list[dict]
+    model: str
+    temperature: float = 0.2
+    max_tokens: int = 1000
+
+
+@dataclass
+class Usage:
+    input_tokens: int
+    output_tokens: int
+
+
+@dataclass
+class ChatResponse:
+    text: str
+    provider: str
+    model: str
+    finish_reason: str
+    usage: Usage
+    latency_ms: float
+
+
+class LLMProvider(Protocol):
+    async def chat(self, request: ChatRequest) -> ChatResponse:
+        ...
+
+    async def stream(self, request: ChatRequest) -> AsyncIterator[dict]:
+        ...
+
+    async def embed(self, texts: list[str], model: str) -> list[list[float]]:
+        ...
+```
+
+Normalized response giúp app không phụ thuộc provider-specific SDK.
+
+## Model and capability registry
+
+Registry fields:
+
+```json
+{
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "context_window": 128000,
+  "max_output_tokens": 16000,
+  "input_price_per_1m": 0.15,
+  "output_price_per_1m": 0.60,
+  "supports_streaming": true,
+  "supports_tools": true,
+  "supports_json_schema": true,
+  "modalities": ["text", "image"],
+  "allowed_regions": ["us", "eu"],
+  "data_policy": "enterprise_allowed",
+  "health_status": "healthy",
+  "eval_scores": {
+    "rag_qa": 0.86,
+    "json_extraction": 0.94,
+    "code": 0.78
+  }
+}
+```
+
+Registry là nguồn sự thật cho router/fallback/cost estimator.
+
+## Request lifecycle
+
+```text
+1. Authenticate tenant/user
+2. Load tenant AI policy
+3. Resolve prompt version
+4. Normalize request
+5. Estimate tokens and cost
+6. Check quota/rate limit
+7. Cache lookup
+8. Route model
+9. Execute provider call
+10. Retry/fallback if needed
+11. Validate response
+12. Store usage event/trace
+13. Return normalized response
+```
+
+<Callout type="warning" title="Lifecycle order là policy">
+Cache trước hay sau quota? Token count trước hay sau prompt resolution? Validation trước hay sau logging? Những quyết định này ảnh hưởng cost, security và correctness.
+</Callout>
+
+## Tenant AI policy
+
+Example:
+
+```json
+{
+  "tenant_id": "acme",
+  "allowed_providers": ["openai", "anthropic"],
+  "blocked_models": ["experimental-model-x"],
+  "max_monthly_budget": 5000,
+  "data_residency": "eu",
+  "allow_external_providers": true,
+  "default_route": "balanced",
+  "sensitive_data_route": "private-model"
+}
+```
+
+Policy engine phải enforce hard constraints trước routing score.
+
+## Token counting and cost tracking
+
+Cost attribution dimensions:
+
+- tenant,
+- user,
+- feature,
+- model,
+- provider,
+- prompt version,
+- route policy,
+- cache hit/miss,
+- fallback used.
+
+Usage event schema:
+
+```text
+llm_usage_events(
+  request_id,
+  tenant_id,
+  user_id_hash,
+  feature,
+  provider,
+  model,
+  prompt_version,
+  input_tokens,
+  output_tokens,
+  estimated_cost,
+  actual_cost,
+  latency_ms,
+  cache_hit,
+  fallback_used,
+  created_at
+)
+```
+
+Estimated tokens dùng trước call; actual usage ghi sau response.
+
+## Prompt registry
+
+Prompt registry quản lý:
+
+- prompt name,
+- version,
+- owner,
+- target models,
+- schema,
+- rollout percentage,
+- eval score,
+- changelog.
+
+Example:
+
+```json
+{
+  "name": "rag_answer",
+  "version": "v4",
+  "schema_version": "answer_schema_v2",
+  "target_models": ["gpt-4o", "claude-sonnet"],
+  "rollout": 0.25,
+  "eval_score": 0.88
+}
+```
+
+## Router in the gateway
+
+Router uses:
+
+```text
+tenant_policy + request_features + model_registry + budget + eval_scores
+```
+
+Output:
+
+```json
+{
+  "provider": "anthropic",
+  "model": "claude-sonnet",
+  "reason": ["task=long_context_rag", "context=54000", "quality_score=0.89"],
+  "fallback_candidates": ["gpt-4o", "local-private"]
+}
+```
+
+## Cache manager
+
+### Exact cache
+
+Key:
+
+```text
+sha256(tenant_id + prompt_version + model + normalized_input + settings + data_version)
+```
+
+### Semantic cache
+
+Uses embedding similarity. More dangerous; requires:
+
+- tenant isolation,
+- similarity threshold,
+- answer freshness,
+- no high-risk personalized outputs,
+- audit cache hits.
+
+### Embedding cache
+
+Key includes:
+
+```text
+embedding_model + text_hash + preprocessing_version
+```
+
+## Response validator
+
+Validation layers:
+
+```text
+transport success
+  ↓
+finish_reason acceptable
+  ↓
+syntax parse
+  ↓
+JSON schema
+  ↓
+business rules
+  ↓
+groundedness/citation
+  ↓
+safety/policy
+```
+
+If fail:
+
+```text
+repair → retry → fallback → controlled error → human review
+```
+
+## Streaming gateway design
+
+Gateway can normalize provider stream events:
+
+```text
+event: start
+data: {"request_id":"req_123", "model":"..."}
+
+event: token
+data: {"delta":"Hello"}
+
+event: metadata
+data: {"input_tokens":100, "output_tokens":20}
+
+event: done
+data: {"finish_reason":"stop"}
+```
+
+Issues:
+
+- cancellation,
+- partial provider errors,
+- final usage metadata,
+- client disconnect,
+- buffering for schema-critical outputs,
+- safety scanning partial text.
+
+## Observability
+
+Metrics:
+
+- request count by provider/model,
+- p50/p95/p99 latency,
+- TTFT,
+- tokens/sec,
+- input/output tokens,
+- cost per tenant/feature,
+- error rate,
+- fallback rate,
+- cache hit rate,
+- validation failure rate,
+- router distribution,
+- circuit breaker state.
+
+Trace example:
+
+```json
+{
+  "request_id": "req_123",
+  "tenant_id": "acme",
+  "feature": "resume_ranker",
+  "prompt_version": "ranker_v4",
+  "route": {
+    "provider": "anthropic",
+    "model": "claude-sonnet",
+    "reason": ["long_context", "quality_score_high"]
+  },
+  "usage": {
+    "input_tokens": 9120,
+    "output_tokens": 640,
+    "cost_usd": 0.083
+  },
+  "latency": {
+    "ttft_ms": 1200,
+    "total_ms": 8700
+  },
+  "fallback": {"used": false},
+  "cache": {"hit": false},
+  "validation": {"schema": "passed", "safety": "passed"}
+}
+```
+
+## Scaling architecture
+
+```text
+Load Balancer
+   ↓
+Stateless Gateway Pods
+   ├── Redis: cache, rate limit, circuit state
+   ├── PostgreSQL: prompt registry, usage events, policies
+   ├── Kafka/Queue: async logs, batch jobs, eval events
+   ├── Vector DB: semantic cache / RAG if needed
+   └── Provider APIs / vLLM / MCP servers
+```
+
+Scaling concerns:
+
+- gateway pods stateless,
+- provider concurrency limits,
+- Redis hot keys,
+- Postgres write volume for usage events,
+- streaming connections hold workers,
+- backpressure during provider outage,
+- per-tenant quotas distributed correctly.
+
+## Security and governance
+
+Gateway must enforce:
+
+- API keys server-side,
+- tenant provider allowlist,
+- data residency,
+- prompt/content redaction,
+- tool permission checks,
+- audit logs,
+- budget limits,
+- model allow/block lists.
+
+<Callout type="danger" title="Gateway có quyền lực lớn">
+Gateway thấy prompts, outputs, usage, tenant policy và provider keys. Nó phải được bảo vệ như critical infrastructure: auth, least privilege, audit, encryption, incident response.
+</Callout>
+
+## Implementation lab: gateway skeleton
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass
+class GatewayRequest:
+    tenant_id: str
+    user_id: str
+    feature: str
+    prompt_name: str
+    input_text: str
+    requires_json: bool = False
+
+
+class Gateway:
+    def __init__(self, registry, router, cache, providers, validator, usage_store):
+        self.registry = registry
+        self.router = router
+        self.cache = cache
+        self.providers = providers
+        self.validator = validator
+        self.usage_store = usage_store
+
+    async def chat(self, req: GatewayRequest):
+        policy = load_tenant_policy(req.tenant_id)
+        prompt = resolve_prompt(req.prompt_name, policy)
+        payload = build_payload(prompt, req)
+
+        token_estimate = estimate_tokens(payload)
+        check_quota(policy, token_estimate)
+
+        cache_key = build_cache_key(req, payload)
+        if cached := self.cache.get(cache_key):
+            return cached
+
+        route = self.router.select(req, policy, self.registry)
+        provider = self.providers[route.provider]
+
+        response = await provider.chat(route.to_chat_request(payload))
+        validated = self.validator.validate(response, req)
+
+        self.usage_store.record(req, route, response, cache_hit=False)
+        self.cache.set(cache_key, validated)
+        return validated
+```
+
+Extend lab milestones:
+
+1. `POST /v1/chat` endpoint.
+2. Mock provider adapters.
+3. Model registry YAML/JSON.
+4. Rule-based router.
+5. Fallback manager.
+6. Redis exact cache.
+7. Usage events in Postgres or JSONL.
+8. Prometheus-style metrics.
+9. Streaming endpoint.
+10. MCP tool integration stub.
+
+## Mapping to Phase 7 hard project
+
+Hard project: **Production Multi-LLM Orchestration Platform**.
+
+Gateway components map directly:
+
+| Project feature | Gateway component |
+|---|---|
+| auth | tenant/user policy |
+| rate limiting | Redis quota/token bucket |
+| routing | router + model registry |
+| observability | traces/metrics/logs |
+| cost tracking | usage events |
+| prompt versioning | prompt registry |
+| A/B testing | rollout policy |
+| MCP integration | tool/context layer |
+| streaming | normalized SSE gateway |
+| K8s auto-scaling | stateless pods + metrics |
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: gateway chỉ là thin proxy">
+Nếu gateway không enforce policy, route, validate, log cost và manage fallback, nó chưa giải quyết multi-LLM production problems.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: không có model registry">
+Hard-code model metadata trong code làm routing/fallback/cost updates chậm và dễ sai.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: semantic cache shared giữa tenants">
+Semantic cache không tenant-isolated có thể leak dữ liệu. Cache phải tôn trọng tenant, user permissions và data version.
+</Callout>
+
+Checklist:
+
+1. Có provider abstraction không?
+2. Có model/capability registry không?
+3. Có tenant AI policy không?
+4. Có prompt registry/versioning không?
+5. Có token/cost tracking không?
+6. Có router reason logs không?
+7. Có fallback manager không?
+8. Có response validation layers không?
+9. Có exact cache tenant-safe không?
+10. Có streaming normalization không?
+11. Có metrics/traces/logs không?
+12. Có security controls cho gateway keys/logs không?
+
+## Practice exercises
+
+1. Vẽ gateway architecture cho công ty SaaS multi-tenant.
+2. Thiết kế model registry schema.
+3. Thiết kế prompt registry schema.
+4. Viết request lifecycle cho `/v1/chat`.
+5. Thiết kế usage event table.
+6. Viết cache key cho RAG answer.
+7. Thiết kế metrics dashboard cho gateway.
+8. Viết policy cho tenant EU-only.
+9. Thiết kế fallback manager trong gateway.
+10. So sánh gateway centralized vs mỗi app tự gọi provider.
+
+## Knowledge check
+
+1. Vì sao gateway là control plane?
+2. Gateway khác thin proxy thế nào?
+3. Model registry cần field gì?
+4. Request lifecycle gồm những bước nào?
+5. Cost tracking nên group theo dimensions nào?
+6. Semantic cache cần guardrails gì?
+7. Response validation layers gồm gì?
+8. Streaming gateway phải xử lý gì?
+9. Scaling gateway cần state lưu ở đâu?
+10. Gateway security có rủi ro gì?
+
+## Answer key
+
+1. Vì nó centralize/enforce AI policy: model, prompt, routing, budget, validation, logging.
+2. Thin proxy chỉ forward; gateway route, validate, cache, fallback, track cost, enforce tenant policy.
+3. Provider, model, context, price, modalities, tools, JSON support, region, data policy, health, eval scores.
+4. Auth, policy, prompt, normalize, token/cost estimate, quota, cache, route, provider call, fallback, validate, log, return.
+5. Tenant, user, feature, provider, model, prompt version, route policy, cache/fallback.
+6. Tenant isolation, similarity threshold, data version, permission version, no high-risk personalized cache.
+7. Transport, finish reason, syntax, schema, business, groundedness/citation, safety/policy.
+8. Normalized events, cancellation, partial errors, usage metadata, client disconnect, buffering if needed.
+9. Stateless pods; shared state in Redis/Postgres/queues/vector DB depending component.
+10. It holds provider keys, prompts, logs, policies and can route sensitive data; needs strict security/audit.
+
+## Mini-project: Production Multi-LLM Gateway
+
+**Task:** Build gateway skeleton for multi-provider AI calls.
+
+**Deliverables:**
+
+- `/v1/chat` endpoint.
+- Provider abstraction with 2 mock providers.
+- Model registry.
+- Tenant policy.
+- Rule-based router.
+- Fallback manager.
+- Exact cache.
+- Usage event logging.
+- Response validation.
+- Metrics summary.
+- README architecture diagram.
+
+**Success criteria:**
+
+- Request logs include selected model and route reason.
+- Cost tracked per tenant/feature/model.
+- Fallback path traced.
+- Cache is tenant-safe.
+- Invalid JSON blocked before app response.
+- Design can extend to real providers and MCP tools.
+
+## Điểm cần nhớ
+
+- Multi-LLM gateway centralizes AI policy and provider access.
+- Gateway is not just proxy; it must route, validate, track, cache, fallback and observe.
+- Model registry and prompt registry are foundational for governance.
+- Cost tracking must be per tenant/user/feature/model/prompt version.
+- Cache and routing must respect tenant policy and permissions.
+- Observability is mandatory: traces, metrics, logs, route reasons.
+- Gateway becomes critical infrastructure and must be secured accordingly.
+
+## Phase 7 wrap-up
+
+Bạn đã hoàn thành module **Multi-LLM Orchestration**:
+
+1. **Why Multi-LLM Architecture:** vì sao model choice là runtime policy.
+2. **Routing Strategies:** routing theo task, cost, latency, context, compliance và performance.
+3. **Fallback Architecture:** controlled degradation, retry/fallback/circuit breaker không phá contract.
+4. **Model Context Protocol:** chuẩn hóa tools/resources/prompts nhưng vẫn cần security.
+5. **Orchestration Frameworks:** chọn LangChain/LangGraph/LlamaIndex/CrewAI/AutoGen đúng problem shape.
+6. **Multi-LLM Gateway:** control plane production cho providers, routing, fallback, cost, cache, validation và observability.
+
+## Next phase bridge
+
+Sau khi biết orchestrate nhiều LLM, bước tiếp theo thường là **RAG & Knowledge Systems nâng cao** hoặc **AI Agents production** tùy roadmap tiếp theo: ingestion pipelines, vector databases, reranking, evaluation, memory, tool execution, human-in-the-loop và agent safety.

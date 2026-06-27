@@ -1,0 +1,460 @@
+LLM Orchestration Frameworks như LangChain, LangGraph, LlamaIndex, CrewAI và AutoGen không phải “AI brain”. Chúng là abstraction cho prompt templates, model adapters, tools, memory/state, retrieval, workflow graphs, tracing và multi-agent coordination. Một AI Engineer giỏi phải biết **khi nào dùng framework, khi nào không, và làm sao không để framework che mất architecture**.
+
+## Why this matters
+
+Framework giúp prototype nhanh, nhưng production dễ gặp:
+
+- hidden prompts,
+- hidden retries,
+- agent loops,
+- khó test,
+- khó observe cost,
+- version churn,
+- lock-in,
+- tool permission leaks,
+- state/memory bug.
+
+<Callout type="warning" title="Framework không thay thế architecture">
+Nếu bạn không hiểu state, retries, tool permissions, validation và tracing, LangChain hay LangGraph chỉ giúp bạn tạo bug phức tạp nhanh hơn.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. So sánh LangChain, LangGraph, LlamaIndex, CrewAI và AutoGen.
+2. Hiểu chains, tools, agents, memory, state graphs, query engines và multi-agent workflows.
+3. Chọn framework theo problem shape.
+4. Thiết kế framework-independent interfaces.
+5. Thêm observability/evaluation quanh framework workflow.
+6. Tránh uncontrolled agent loops và hidden state bugs.
+7. Biết khi nào plain code tốt hơn framework.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Prompt engineering và tool calling.
+- RAG, embeddings, reranking.
+- Routing/fallback basics.
+- State machine/workflow concepts.
+
+## Core intuition: frameworks organize control flow and context flow
+
+Frameworks thường gom nhiều thành phần:
+
+```text
+Prompt templates
+  + Model adapters
+  + Tools
+  + Memory/state
+  + Retrieval
+  + Workflow graph
+  + Tracing/evals
+= Orchestration framework
+```
+
+Câu hỏi không phải “framework nào hot nhất”, mà là:
+
+```text
+Problem của bạn cần abstraction nào?
+```
+
+## Framework comparison matrix
+
+| Framework | Strong at | Weakness/risk | Use when |
+|---|---|---|---|
+| LangChain | components, chains, tools, integrations | abstraction churn, hidden behavior | fast LLM app assembly |
+| LangGraph | stateful graphs, cycles, human-in-loop | cần design rõ hơn | controlled agent workflows |
+| LlamaIndex | data connectors, indexes, query engines | ít general app orchestration hơn | RAG-heavy systems |
+| CrewAI | role-based multi-agent tasks | dễ over-agentify | task decomposition demos/internal workflows |
+| AutoGen | multi-agent conversations/group chat | loop/cost control phức tạp | agent research/collaboration experiments |
+
+## LangChain
+
+LangChain cung cấp:
+
+- prompt templates,
+- chains,
+- tools,
+- agents,
+- retrievers,
+- memory abstractions,
+- LCEL,
+- integrations,
+- LangSmith tracing.
+
+Strength:
+
+- prototype nhanh,
+- nhiều integrations,
+- cộng đồng lớn,
+- useful components.
+
+Risk:
+
+- abstraction thay đổi nhanh,
+- hidden prompts/callbacks,
+- khó kiểm soát khi agent phức tạp,
+- app logic dễ phụ thuộc sâu vào framework objects.
+
+Production recommendation:
+
+```text
+Use LangChain components behind your own interface.
+Do not let framework types spread everywhere in business logic.
+```
+
+## LangGraph
+
+LangGraph phù hợp workflow có state và control flow rõ.
+
+Concepts:
+
+- state object,
+- nodes,
+- edges,
+- conditional edges,
+- cycles,
+- checkpoints,
+- human-in-the-loop.
+
+Graph example:
+
+```text
+START
+  ↓
+classify_task
+  ├── simple → answer_node
+  ├── needs_tool → tool_node → validate_node
+  └── uncertain → human_review
+  ↓
+END
+```
+
+LangGraph tốt khi bạn muốn agent không chạy tự do mà theo graph kiểm soát được.
+
+<Callout type="tip" title="State graph tốt hơn agent loop mơ hồ">
+Nếu workflow có steps rõ, conditional branches và validation gates, graph explicit thường dễ test/debug hơn agent tự quyết mọi thứ.
+</Callout>
+
+## LlamaIndex
+
+LlamaIndex mạnh ở data/RAG layer:
+
+- data connectors/readers,
+- document parsing,
+- indexes,
+- retrievers,
+- query engines,
+- response synthesizers,
+- metadata filters.
+
+Dùng khi core problem là:
+
+```text
+ingest data → index → retrieve → synthesize answer
+```
+
+Production considerations:
+
+- kiểm soát chunking,
+- metadata ACL filters,
+- eval retrieval recall,
+- citation correctness,
+- avoid black-box query engines nếu cần audit sâu.
+
+## CrewAI
+
+CrewAI tổ chức workflows bằng agents có roles/goals/tasks.
+
+Example mental model:
+
+```text
+Researcher agent → gather facts
+Writer agent → draft answer
+Reviewer agent → critique
+```
+
+Useful for:
+
+- internal automation prototypes,
+- role-based task decomposition,
+- demos/training.
+
+Risks:
+
+- role prompting theater,
+- nhiều agents tăng cost/latency,
+- unclear accountability,
+- agent outputs amplify errors.
+
+<Callout type="warning" title="Đừng over-agentify">
+Nếu một deterministic workflow 3 bước giải quyết được task, đừng tạo 5 agents đóng vai chuyên gia. Multi-agent không tự động tốt hơn.
+</Callout>
+
+## AutoGen
+
+AutoGen tập trung vào multi-agent conversations:
+
+- AssistantAgent,
+- UserProxy,
+- group chat,
+- code execution,
+- conversational collaboration.
+
+Strong for:
+
+- research experiments,
+- multi-agent discussion,
+- coding assistants with execution loops.
+
+Need controls:
+
+- max turns,
+- termination conditions,
+- cost caps,
+- sandboxed code execution,
+- tool permissions,
+- transcript logging.
+
+## Framework selection decision tree
+
+```text
+Core problem là retrieval/data indexing?
+  yes → consider LlamaIndex
+
+Need stateful workflow with cycles/branches/human review?
+  yes → consider LangGraph
+
+Need quick chain/tool prototype with many integrations?
+  yes → consider LangChain
+
+Need role-based decomposition for internal task automation?
+  maybe CrewAI, but validate necessity
+
+Need multi-agent conversation experiments?
+  consider AutoGen
+
+Need simple deterministic flow?
+  use plain code first
+```
+
+## Plain code vs framework
+
+Plain code tốt khi:
+
+- workflow đơn giản,
+- cần full control,
+- team chưa cần nhiều integrations,
+- muốn dễ debug/test.
+
+Framework tốt khi:
+
+- nhiều integrations,
+- graph/state phức tạp,
+- RAG data connectors nhiều,
+- need tracing/evals ecosystem,
+- prototype speed quan trọng.
+
+Rule:
+
+```text
+Start with architecture; choose framework to implement architecture, not to define it.
+```
+
+## Production risks
+
+| Risk | Symptom | Mitigation |
+|---|---|---|
+| Hidden prompts | output thay đổi khó hiểu | log resolved prompts |
+| Hidden retries | cost tăng bất ngờ | centralize retry policy |
+| Agent loop | chạy mãi/tốn tiền | max turns, termination |
+| Memory leak | context phình to | explicit state limits |
+| Tool permission leak | agent gọi tool không nên | permission layer outside framework |
+| Version churn | upgrade phá behavior | pin versions, tests |
+| Lock-in | khó đổi framework | internal interfaces |
+
+## Observability around frameworks
+
+Dù dùng framework, bạn vẫn cần trace:
+
+```json
+{
+  "workflow_id": "wf_123",
+  "framework": "langgraph",
+  "node": "tool_node",
+  "model": "gpt-4o-mini",
+  "prompt_version": "tool_v2",
+  "input_tokens": 800,
+  "output_tokens": 120,
+  "tool_calls": ["search_docs"],
+  "latency_ms": 900,
+  "validation": "passed"
+}
+```
+
+Log:
+
+- node/chain name,
+- prompt version,
+- model,
+- tool calls,
+- state transitions,
+- retry/fallback,
+- cost,
+- validation.
+
+## Implementation lab: raw code vs graph workflow
+
+Workflow:
+
+```text
+classify request
+  ↓
+route model
+  ↓
+call tool if needed
+  ↓
+validate output
+  ↓
+fallback on failure
+  ↓
+return answer
+```
+
+Plain code sketch:
+
+```python
+def run_workflow(req):
+    task = classify(req)
+    model = route(task, req)
+
+    if task.needs_tool:
+        observation = call_tool(task.tool, req)
+    else:
+        observation = None
+
+    answer = call_model(model, req, observation)
+    if not validate(answer):
+        answer = fallback(req)
+
+    return answer
+```
+
+Graph mental model:
+
+```text
+START → classify → route → maybe_tool → generate → validate
+                              ↑                  ↓
+                              └──── fallback ← fail
+```
+
+Compare:
+
+| Criteria | Plain code | Graph framework |
+|---|---|---|
+| Simplicity | tốt cho flow nhỏ | overhead |
+| Visualization | manual | built-in graph |
+| State checkpoint | manual | framework support |
+| Debug | direct | needs tracing |
+| Complex cycles | messy | stronger |
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: chọn framework trước khi hiểu workflow">
+Nếu chưa vẽ được state/data flow bằng text, framework sẽ che giấu vấn đề thay vì giải quyết.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: để framework quyết retry/tool permissions">
+Retry, fallback và permissions là policy của hệ thống. Không nên rải rác trong framework defaults.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: uncontrolled agent loops">
+Agent không có max turns, termination criteria và cost cap có thể chạy rất lâu, gọi tool liên tục và tạo bill lớn.
+</Callout>
+
+Checklist:
+
+1. Có workflow diagram không?
+2. Có state schema rõ không?
+3. Có max turns/cost cap không?
+4. Có log resolved prompts không?
+5. Tool permissions nằm ngoài framework không?
+6. Có validation gates không?
+7. Có trace node/chain/tool không?
+8. Framework versions có pin không?
+9. Có tests không gọi provider thật không?
+10. Có exit criteria cho agents không?
+
+## Practice exercises
+
+1. Vẽ workflow graph cho RAG chatbot có tool search.
+2. Chọn framework cho 5 use cases và giải thích.
+3. Rewrite một agent loop thành state graph explicit.
+4. Thiết kế trace schema cho LangGraph workflow.
+5. Tìm hidden prompt trong một framework example và log nó.
+6. Thiết kế max-turn policy cho AutoGen-style group chat.
+7. So sánh plain code vs LangChain cho classifier pipeline.
+
+## Knowledge check
+
+1. Framework orchestration giải quyết gì?
+2. LangGraph mạnh hơn LangChain ở use case nào?
+3. LlamaIndex phù hợp nhất khi nào?
+4. CrewAI có rủi ro gì?
+5. Vì sao plain code đôi khi tốt hơn framework?
+6. Hidden prompts nguy hiểm thế nào?
+7. Agent loop cần controls gì?
+8. Tool permission nên nằm ở đâu?
+
+## Answer key
+
+1. Tổ chức prompts, model calls, tools, state, retrieval, workflows, tracing.
+2. Stateful cyclic workflows có branches, validation, human-in-the-loop.
+3. RAG/data ingestion/index/query engine-heavy systems.
+4. Over-agentify, cost/latency tăng, role theater, unclear accountability.
+5. Flow đơn giản, cần full control, dễ test/debug, ít dependencies.
+6. Output thay đổi khó debug; prompt không version/log làm regression khó truy vết.
+7. Max turns, termination criteria, cost cap, tool permissions, sandboxing, traces.
+8. Ở policy/security layer của app/gateway, không chỉ trong prompt/framework default.
+
+## Mini-project: Framework selection report
+
+**Task:** Chọn framework/không framework cho 3 workflows.
+
+Workflows:
+
+1. RAG over internal docs.
+2. Stateful support agent with tools.
+3. Multi-agent research assistant.
+
+**Deliverables:**
+
+- Workflow diagrams.
+- Framework comparison table.
+- Decision rationale.
+- Risks and mitigations.
+- Observability plan.
+- Exit/termination policies.
+
+**Success criteria:**
+
+- Không chọn framework theo hype.
+- Có phân tích plain code option.
+- Có state/control flow rõ.
+- Có cost/loop/security controls.
+- Có testing strategy.
+
+## Điểm cần nhớ
+
+- Framework là abstraction cho control/context flow, không phải AI brain.
+- Chọn framework theo problem shape: RAG, graph workflow, integrations, multi-agent experiments.
+- LangGraph phù hợp stateful controlled workflows; LlamaIndex mạnh về RAG/data layer.
+- CrewAI/AutoGen hữu ích nhưng dễ tạo uncontrolled multi-agent complexity.
+- Architecture và policy phải rõ trước khi chọn framework.
+- Observability, validation, permissions và cost caps vẫn là trách nhiệm của bạn.
+
+## Next chapter bridge
+
+Frameworks giúp xây workflows, nhưng production multi-LLM cần một control plane trung tâm để quản lý providers, routing, fallback, cost, cache, validation và observability. Chương tiếp theo: **Multi-LLM Gateway Architecture**.

@@ -1,0 +1,508 @@
+Working with AI APIs là nơi lý thuyết LLM gặp production software. Một provider API không chỉ là endpoint trả text; nó là một **contract** gồm request schema, response schema, capability limits, pricing, streaming behavior, tool calling semantics, data policy và failure modes. AI Engineer phải hiểu contract này để build hệ thống ổn định, portable và đo được.
+
+## Why this matters
+
+Prototype gọi API một lần rất dễ. Production khó hơn vì:
+
+- mỗi provider có message format khác nhau,
+- tool calling không hoàn toàn giống nhau,
+- streaming event format khác nhau,
+- token accounting khác nhau,
+- embeddings model đổi là đổi cả vector space,
+- vision input có cost/privacy/failure modes riêng,
+- batch jobs có partial failures,
+- provider outages/rate limits xảy ra thật.
+
+<Callout type="warning" title="Đừng nhầm model ability với API feature">
+Một model có thể giỏi reasoning nhưng provider API chưa hỗ trợ structured output tốt. Một provider có tool calling tiện nhưng model cụ thể có thể yếu ở domain của bạn. Luôn tách capability của model và capability của API platform.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Thiết kế API contract cho chat/generate/embed/stream/tool calls.
+2. So sánh OpenAI, Anthropic, Gemini và local/open providers theo capability matrix.
+3. Hiểu chat messages, structured output, tool calling và streaming ở mức state machine.
+4. Dùng embeddings API với hiểu biết về vector space, metrics và retrieval evaluation.
+5. Nhận diện multimodal/vision failure modes.
+6. Thiết kế batch job lifecycle với retries/partial failures.
+7. Viết provider abstraction có mock provider và contract tests.
+8. Log usage/cost/latency an toàn cho mỗi request.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- HTTP, JSON, SDK, environment variables.
+- Prompt engineering và structured output.
+- Embeddings/RAG basics.
+- Async/streaming concept.
+
+## Core intuition: providers differ, capabilities repeat
+
+Các provider khác nhau, nhưng capability lặp lại:
+
+```text
+chat/generate
+stream
+embed
+vision/multimodal
+tool calling
+structured output
+batch
+usage metadata
+```
+
+Vì vậy app nên phụ thuộc vào interface nội bộ, không phụ thuộc trực tiếp mọi nơi vào SDK cụ thể.
+
+```text
+Application → LLMClient interface → Provider adapters → OpenAI/Anthropic/Gemini/Local
+```
+
+## Provider capability matrix
+
+| Capability | OpenAI-style | Anthropic Claude | Gemini | Local/vLLM/Ollama |
+|---|---|---|---|---|
+| Chat/messages | có | có | có | tùy wrapper |
+| System instruction | message/field tùy API | thường field riêng | field/config tùy SDK | chat template |
+| Tool calling | mạnh | có | có/varies | model-dependent |
+| Structured output | JSON/schema tùy model | varies | varies | thường manual/constrained decoder |
+| Streaming | SSE/events | events | events | server-dependent |
+| Embeddings | có | không phải trọng tâm chính | có | model-dependent |
+| Vision | có | có | mạnh | model-dependent |
+| Batch | có/varies | varies | varies | tự build |
+| Token counting | tokenizer/provider-specific | provider-specific | provider-specific | tokenizer local |
+| Data policy | theo provider/plan | theo provider/plan | theo provider/plan | bạn tự chịu trách nhiệm |
+
+Bảng này không thay thế docs. Nó dạy bạn phải hỏi đúng câu hỏi trước khi chọn provider.
+
+## Chat API contract design
+
+Một chat contract tối thiểu nên có:
+
+```json
+{
+  "model": "string",
+  "messages": [
+    {"role": "system", "content": "..."},
+    {"role": "user", "content": "..."}
+  ],
+  "temperature": 0.2,
+  "max_tokens": 1000
+}
+```
+
+Response contract nên expose:
+
+```json
+{
+  "text": "...",
+  "model": "...",
+  "finish_reason": "stop|length|tool_call|safety|error",
+  "usage": {"input_tokens": 123, "output_tokens": 456},
+  "latency_ms": 1500
+}
+```
+
+Professor-level point: nếu app layer không có normalized `finish_reason`, bạn sẽ khó phân biệt answer kết thúc tự nhiên, bị cắt vì max tokens, bị safety block, hay cần tool call.
+
+## OpenAI-style chat example
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+resp = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+        {"role": "system", "content": "You are a concise AI tutor."},
+        {"role": "user", "content": "Explain KV cache in 3 bullets."},
+    ],
+    temperature=0.2,
+)
+
+print(resp.choices[0].message.content)
+print(resp.usage)
+```
+
+## Anthropic and Gemini differences
+
+Anthropic-style APIs thường tách `system` khỏi `messages`. Gemini-style SDK có abstraction riêng cho `contents`, multimodal parts và generation config. Đây là lý do cần adapter.
+
+```python
+class AnthropicAdapter:
+    def generate(self, messages, model, system=None, **kwargs):
+        # Convert internal message format to Anthropic format
+        ...
+
+class GeminiAdapter:
+    def generate(self, messages, model, **kwargs):
+        # Convert internal messages to Gemini contents
+        ...
+```
+
+<Callout type="tip" title="Normalize ở boundary">
+Chỉ adapter layer nên biết provider-specific schema. Business logic nên gọi interface chung.
+</Callout>
+
+## Tool calling execution loop
+
+Tool calling không có nghĩa model tự chạy function. Model chỉ đề xuất action có structured arguments.
+
+State machine:
+
+```text
+User request
+   ↓
+Model response: tool_call(name, arguments)
+   ↓
+Validate schema
+   ↓
+Authorize user/action
+   ↓
+Execute tool in app/backend
+   ↓
+Sanitize observation
+   ↓
+Send observation back to model
+   ↓
+Model final answer
+   ↓
+Validate final response
+```
+
+Risks:
+
+- model chọn sai tool,
+- arguments không hợp lệ,
+- tool result chứa prompt injection,
+- tool có side effect,
+- retry tạo duplicate action,
+- loop tool call vô hạn.
+
+Controls:
+
+- max tool calls,
+- schema validation,
+- permission checks,
+- idempotency keys,
+- human confirmation cho actions rủi ro.
+
+## Structured output across providers
+
+Structured output có nhiều mức:
+
+| Level | Cơ chế | Độ tin cậy |
+|---|---|---|
+| Prompt-only JSON | “Return JSON” | thấp-trung bình |
+| JSON mode | provider ép JSON syntax | tốt hơn |
+| JSON schema/structured output | provider constrained theo schema | mạnh nếu hỗ trợ |
+| Tool calling | model trả function args | mạnh cho actions |
+| External constrained decoding | grammar/parser ở serving | mạnh nhưng phức tạp |
+
+Dù dùng level cao, vẫn validate ở app.
+
+## Streaming protocol details
+
+Streaming thường dùng SSE-like events.
+
+SSE frame đơn giản:
+
+```text
+event: token
+data: {"delta":"Hello"}
+
+event: token
+data: {"delta":" world"}
+
+event: done
+data: {"usage":{"input_tokens":10,"output_tokens":2}}
+```
+
+Production issues:
+
+- client disconnect,
+- provider stream error giữa chừng,
+- partial unsafe output,
+- final usage metadata có thể đến cuối,
+- cancellation phải propagate tới provider,
+- UI cần biết stream ended normally hay error.
+
+## Embeddings API: vector space contract
+
+Embedding model biến text thành vector. Nhưng vector chỉ meaningful trong cùng một vector space.
+
+```text
+embedding_model_A(text) ≠ embedding_model_B(text)
+```
+
+Nếu đổi embedding model, thường phải re-embed toàn bộ corpus.
+
+Key concepts:
+
+| Concept | Ý nghĩa |
+|---|---|
+| dimension | số chiều vector |
+| cosine | đo cùng hướng |
+| dot product | giống cosine nếu vectors normalized |
+| L2 distance | khoảng cách Euclidean |
+| normalization | làm norm = 1 |
+| ANN index | approximate nearest neighbor search |
+
+Example:
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+resp = client.embeddings.create(
+    model="text-embedding-3-small",
+    input=["Refunds are available within 30 days.", "Reset your password."],
+)
+
+vectors = [item.embedding for item in resp.data]
+print(len(vectors), len(vectors[0]))
+```
+
+## Retrieval evaluation
+
+Embeddings API không đủ. Bạn phải đo retrieval:
+
+| Metric | Câu hỏi |
+|---|---|
+| recall@k | relevant chunk có nằm trong top-k không? |
+| MRR | relevant result xuất hiện sớm cỡ nào? |
+| nDCG | ranking có tốt khi relevance nhiều mức không? |
+
+RAG production thường dùng:
+
+```text
+sparse retrieval + dense embeddings + reranker
+```
+
+Dense search bắt semantic similarity; sparse search bắt exact IDs/error codes; reranker cải thiện precision.
+
+## Vision and multimodal APIs
+
+Vision model nhận image/document/screenshot. Use cases:
+
+- chart QA,
+- invoice extraction,
+- screenshot troubleshooting,
+- OCR fallback,
+- UI automation.
+
+Failure modes:
+
+- đọc sai số trong chart,
+- bỏ sót footnote,
+- nhầm layout bảng,
+- screenshot chứa prompt injection,
+- ảnh mờ/downscale mất chữ,
+- cost tăng mạnh với nhiều pages.
+
+Decision rule:
+
+```text
+PDF text selectable → parse/OCR + RAG trước
+complex image/chart → vision model có thể cần
+100-page scan → OCR/layout pipeline + selective vision, không gửi hết bừa
+```
+
+## Batch API lifecycle
+
+Batch phù hợp jobs offline:
+
+- classify 1M tickets,
+- embed documents,
+- summarize archives,
+- run prompt eval.
+
+Lifecycle:
+
+```text
+prepare JSONL requests
+   ↓
+upload batch
+   ↓
+provider validates
+   ↓
+running
+   ↓
+completed with outputs + errors
+   ↓
+reconcile partial failures
+   ↓
+retry failed items idempotently
+```
+
+Cần:
+
+- request IDs,
+- idempotency,
+- partial failure handling,
+- cost accounting,
+- output validation.
+
+## Testing provider abstractions
+
+Provider wrapper phải test được không cần gọi API thật.
+
+Test types:
+
+| Test | Mục đích |
+|---|---|
+| mock provider tests | app logic không cần external API |
+| contract tests | adapter trả normalized schema đúng |
+| golden tests | fixed input → expected parsed behavior |
+| streaming snapshot tests | event sequence đúng |
+| error tests | rate limit, timeout, malformed response |
+
+## Implementation lab: provider-agnostic client
+
+```python
+from dataclasses import dataclass
+from typing import Protocol, Iterable
+
+
+@dataclass
+class LLMUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+@dataclass
+class LLMResponse:
+    text: str
+    model: str
+    finish_reason: str
+    usage: LLMUsage
+
+
+class ChatProvider(Protocol):
+    def generate(self, messages: list[dict], model: str, **kwargs) -> LLMResponse:
+        ...
+
+    def stream(self, messages: list[dict], model: str, **kwargs) -> Iterable[dict]:
+        ...
+
+
+class MockProvider:
+    def generate(self, messages, model, **kwargs):
+        return LLMResponse(
+            text="mock response",
+            model=model,
+            finish_reason="stop",
+            usage=LLMUsage(input_tokens=10, output_tokens=2),
+        )
+
+    def stream(self, messages, model, **kwargs):
+        yield {"event": "token", "delta": "mock"}
+        yield {"event": "done", "usage": {"input_tokens": 10, "output_tokens": 1}}
+```
+
+Extend lab:
+
+1. Add OpenAI adapter.
+2. Add Anthropic/Gemini adapter or second mock.
+3. Add contract tests for normalized response.
+4. Add streaming test.
+5. Add usage logging.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: gọi SDK trực tiếp khắp codebase">
+Không có abstraction sẽ khó đổi provider, thêm fallback, log usage hoặc test.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: đổi embedding model mà không re-embed corpus">
+Embedding spaces khác nhau. Query vector mới so với document vectors cũ có thể làm retrieval hỏng âm thầm.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: để model tool call trực tiếp thành action">
+Model đề xuất arguments; app phải validate, authorize, execute và audit. Đặc biệt với email, payment, database writes.
+</Callout>
+
+Checklist:
+
+1. Có provider abstraction không?
+2. Response schema có normalized `finish_reason`/usage không?
+3. Tool args có schema validation không?
+4. Tool action có authorization không?
+5. Streaming có handle disconnect/error không?
+6. Embeddings có lưu model/version/dimension không?
+7. Retrieval có eval recall@k/MRR không?
+8. Vision input có privacy/cost preprocessing không?
+9. Batch jobs có request IDs và partial retry không?
+10. Có mock/contract tests không?
+
+## Practice exercises
+
+1. Viết `ChatProvider` protocol và `MockProvider`.
+2. Normalize response từ 2 provider giả định.
+3. Thiết kế tool calling state machine cho `search_docs` và `send_email`.
+4. Tạo embedding store nhỏ và tính cosine top-k.
+5. Tính recall@3 cho 20 queries.
+6. Thiết kế SSE event format cho streaming.
+7. Viết batch job schema với request IDs.
+8. Tạo provider capability matrix cho 3 providers bạn dùng.
+
+## Knowledge check
+
+1. Vì sao model ability khác API feature?
+2. Provider abstraction nên normalize những gì?
+3. Tool calling flow production gồm bước nào?
+4. Vì sao vẫn validate structured output dù provider hỗ trợ schema?
+5. Đổi embedding model cần làm gì?
+6. Streaming production có failure modes nào?
+7. Batch API cần xử lý partial failures ra sao?
+8. Contract tests cho provider wrapper kiểm tra gì?
+
+## Answer key
+
+1. Model có năng lực nội tại; API quyết định cách expose tools/schema/streaming/limits.
+2. Text, model, finish_reason, usage, errors, tool calls, stream events.
+3. Model proposes, app validates, authorizes, executes, sanitizes observation, sends back, validates final.
+4. Provider/schema không kiểm tra hết business logic, permissions, citations và semantic correctness.
+5. Re-embed corpus, cập nhật metadata/index và rerun retrieval eval.
+6. Disconnect, partial output, stream error, missing final usage, cancellation, unsafe partial text.
+7. Track item IDs, reconcile outputs/errors, retry failed items idempotently.
+8. Normalized schema, error mapping, streaming events, usage extraction, edge cases.
+
+## Mini-project: Multi-provider API gateway
+
+**Task:** Build provider-agnostic gateway hỗ trợ chat, stream, embeddings và mock tool calling.
+
+**Deliverables:**
+
+- `ChatProvider` interface.
+- At least 1 real adapter or 2 mock adapters.
+- Normalized `LLMResponse`.
+- Streaming event schema.
+- Embedding endpoint with model metadata.
+- Tool calling execution loop mock.
+- Contract tests.
+- Usage logging.
+
+**Success criteria:**
+
+- App layer không phụ thuộc provider SDK cụ thể.
+- Có test không cần gọi API thật.
+- Có handle error/rate limit mock.
+- Có log usage/cost/latency.
+- Có README mô tả cách thêm provider mới.
+
+## Điểm cần nhớ
+
+- AI API là contract, không chỉ endpoint.
+- Provider khác nhau về schema, tools, streaming, token accounting và data policy.
+- Tool calling phải được app validate/authorize/execute.
+- Embedding model định nghĩa vector space; đổi model cần re-embed và re-evaluate.
+- Streaming cải thiện UX nhưng cần handle partial states.
+- Provider abstraction + contract tests là nền cho multi-LLM orchestration.
+
+## Next chapter bridge
+
+Gọi API được rồi, production cần xử lý token limits, retries, rate limits, caching, fallback, cost và observability. Chương tiếp theo: **API Integration Patterns**.

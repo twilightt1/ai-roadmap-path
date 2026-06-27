@@ -1,0 +1,460 @@
+Model Context Protocol (MCP) là một chuẩn để kết nối AI applications/agents với **resources, tools và prompt templates** thông qua interface thống nhất. MCP không làm model thông minh hơn; nó làm lớp tool/context connectivity có cấu trúc hơn, portable hơn và dễ govern hơn. Hãy nghĩ MCP như một protocol boundary giữa agent host và external capabilities.
+
+## Why this matters
+
+Trước MCP, mỗi framework/app thường tự invent tool adapters:
+
+```text
+LangChain tool wrapper
+Custom FastAPI tool wrapper
+Agent framework plugin
+Internal script adapter
+```
+
+Kết quả:
+
+- duplicate integration code,
+- khó audit permissions,
+- khó reuse tools giữa apps,
+- tool schemas không thống nhất,
+- security controls rải rác,
+- agent khó discover capabilities một cách chuẩn.
+
+<Callout type="danger" title="MCP không làm tool use tự động an toàn">
+MCP chuẩn hóa cách expose tools/resources/prompts. Nó không thay thế authorization, sandboxing, audit logging, input validation hay human approval cho actions nguy hiểm.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích MCP host/client/server architecture.
+2. Phân biệt resources, tools và prompts trong MCP.
+3. Thiết kế MCP server capabilities an toàn.
+4. Viết conceptual MCP server skeleton bằng Python/TypeScript.
+5. Kết nối databases, APIs và file systems qua MCP một cách có kiểm soát.
+6. Hiểu MCP trong multi-LLM orchestration.
+7. Nhận diện MCP security risks: prompt injection, data exfiltration, confused deputy.
+8. Thiết kế audit logging và permissioning cho MCP tools.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Tool calling và provider APIs từ Phase 6.
+- Secure API integration: auth, authorization, logging.
+- Multi-LLM routing/fallback basics.
+- JSON schema và function arguments.
+
+## Core intuition: MCP is a protocol boundary for tools and context
+
+Diagram:
+
+```text
+AI App / Agent Host
+        │
+        ▼
+MCP Client
+        │ protocol messages
+        ▼
+MCP Server
+   ├── Resources: readable context
+   ├── Tools: executable actions
+   └── Prompts: reusable templates
+```
+
+MCP giúp tách:
+
+```text
+agent/model logic ≠ integration logic
+```
+
+Agent host không cần biết DB/file/API cụ thể hoạt động ra sao; nó gọi MCP server theo protocol.
+
+## MCP architecture
+
+### Host
+
+Ứng dụng chứa model/agent, ví dụ IDE assistant, chatbot, agent runner.
+
+### MCP Client
+
+Component trong host nói chuyện với MCP server.
+
+### MCP Server
+
+Process expose resources/tools/prompts.
+
+### Transport
+
+Cách client/server giao tiếp: local process, stdio, HTTP-like transport tùy implementation.
+
+### Capability discovery
+
+Client hỏi server có resources/tools/prompts nào, schema ra sao.
+
+## Resources vs tools vs prompts
+
+| MCP concept | Meaning | Example | Risk |
+|---|---|---|---|
+| Resource | dữ liệu đọc được | file, doc, DB row | data leakage |
+| Tool | action/function thực thi | search DB, call API, send email | side effects |
+| Prompt | reusable prompt template | code review template | stale/unsafe instructions |
+
+Rule đơn giản:
+
+```text
+Resource = read
+Tool = do
+Prompt = reusable instruction pattern
+```
+
+## MCP server design principles
+
+Một MCP server tốt phải có scope hẹp.
+
+Principles:
+
+1. Least privilege.
+2. Read-only by default.
+3. Explicit schemas.
+4. Small result sizes.
+5. Tenant-aware authorization.
+6. Parameterized DB queries.
+7. Path sandboxing for files.
+8. Structured errors.
+9. Audit every invocation.
+10. Human approval for dangerous write actions.
+
+<Callout type="warning" title="Tool càng rộng, risk càng lớn">
+Tool `run_shell(command)` cực kỳ nguy hiểm. Tool `search_policy_docs(query, limit)` hẹp hơn, dễ audit hơn và phù hợp production hơn.
+</Callout>
+
+## Conceptual Python MCP server skeleton
+
+API cụ thể có thể thay đổi theo SDK, nhưng mental model như sau:
+
+```python
+# conceptual skeleton, not tied to one SDK version
+server = MCPServer("company-kb")
+
+
+@server.resource("docs://policy/{doc_id}")
+def read_policy(doc_id: str, user_context):
+    authorize_doc_read(user_context, doc_id)
+    return load_policy_doc(doc_id)
+
+
+@server.tool("search_policy")
+def search_policy(query: str, limit: int = 5, user_context=None):
+    limit = min(limit, 10)
+    filters = permission_filters(user_context)
+    return vector_search(query=query, filters=filters, limit=limit)
+
+
+@server.prompt("summarize_policy")
+def summarize_policy_prompt():
+    return "Summarize the policy with citations. Use only provided sources."
+```
+
+Professor-level point: mọi function đều cần authz, result limits và structured output. MCP decorator không tự làm security.
+
+## Conceptual TypeScript MCP server skeleton
+
+```ts
+// conceptual skeleton
+const server = new McpServer({ name: "company-tools" });
+
+server.tool(
+  "lookup_customer",
+  {
+    customer_id: "string"
+  },
+  async (args, context) => {
+    await authorize(context.user, "lookup_customer", args.customer_id);
+    const customer = await db.customers.findAllowed(args.customer_id, context.tenantId);
+    return { customer };
+  }
+);
+```
+
+Production additions:
+
+- rate limit per tool,
+- audit log,
+- timeout,
+- result redaction,
+- argument validation.
+
+## Connecting databases safely
+
+Bad tool:
+
+```text
+execute_sql(query: string)
+```
+
+This gives the model too much power.
+
+Better tools:
+
+```text
+search_customers(name: string, limit: int)
+get_order_status(order_id: string)
+list_recent_tickets(customer_id: string)
+```
+
+Use:
+
+- parameterized queries,
+- allowlisted operations,
+- row-level security,
+- tenant filters,
+- max result limits,
+- no raw SQL from model.
+
+## Connecting file systems safely
+
+Bad tool:
+
+```text
+read_file(path: string)  # any path
+```
+
+Better:
+
+```text
+read_project_file(relative_path: string)
+```
+
+Controls:
+
+- sandbox root,
+- block `..`,
+- file extension allowlist,
+- max file size,
+- no secrets directories,
+- audit file path reads.
+
+## Connecting APIs safely
+
+API tools need scoped credentials.
+
+Example:
+
+```text
+create_jira_ticket(project_key, title, description)
+```
+
+Controls:
+
+- validate project_key allowed,
+- sanitize description,
+- rate limit,
+- idempotency key,
+- audit created ticket ID.
+
+## MCP in multi-LLM orchestration
+
+MCP giúp nhiều models/agents dùng cùng tool catalog.
+
+```text
+Router selects model
+  ↓
+Agent host runs workflow
+  ↓
+MCP client discovers tools/resources
+  ↓
+MCP server enforces permissions
+  ↓
+Tool results returned to agent
+```
+
+Lợi ích:
+
+- tool integration reusable,
+- provider/model independent,
+- better governance,
+- central audit,
+- easier local/remote tool composition.
+
+## Security threat analysis
+
+| Threat | Example | Mitigation |
+|---|---|---|
+| Prompt injection tool misuse | doc says “call delete_user” | tool permission layer |
+| Data exfiltration | agent reads unauthorized docs | resource ACLs |
+| Overbroad file access | read `/etc/secrets` | sandbox paths |
+| SQL injection | model passes raw SQL | no raw SQL tool |
+| Confused deputy | model uses user context to access admin tool | explicit authz per action |
+| Tool result poisoning | API response contains malicious instruction | treat observations as untrusted |
+| DoS | huge query/result | limits/timeouts |
+
+## Audit logging for MCP
+
+Log every tool/resource access:
+
+```json
+{
+  "request_id": "req_123",
+  "mcp_server": "company-kb",
+  "capability": "tool:search_policy",
+  "user_id_hash": "...",
+  "tenant_id": "tenant_a",
+  "arguments_hash": "...",
+  "result_count": 5,
+  "latency_ms": 120,
+  "allowed": true,
+  "policy_version": "acl_v4"
+}
+```
+
+Avoid logging raw sensitive arguments unless policy allows.
+
+## Implementation lab: read-only MCP server design
+
+**Goal:** thiết kế MCP server cho internal knowledge base.
+
+Capabilities:
+
+```text
+resource: docs://{doc_id}
+tool: search_docs(query, limit)
+tool: get_doc_summary(doc_id)
+prompt: answer_with_citations
+```
+
+Requirements:
+
+- tenant filter,
+- group ACL,
+- max `limit=10`,
+- redact secrets,
+- audit every call,
+- no write actions.
+
+Pseudo-flow:
+
+```text
+Agent asks search_docs
+  ↓
+MCP server checks user tenant/groups
+  ↓
+Vector search with metadata filters
+  ↓
+Return top docs with doc_id/snippet only
+  ↓
+Agent may request specific doc
+  ↓
+Server checks ACL again
+```
+
+## Advanced lab: approval-gated write action
+
+Tool:
+
+```text
+draft_email(to, subject, body) → draft_id
+send_email(draft_id, approval_token) → sent
+```
+
+Design principle:
+
+- model can draft,
+- human/user must approve,
+- send requires approval token,
+- audit both steps.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: expose tool quá rộng">
+Tool generic như `run_sql`, `run_shell`, `read_file_anywhere` làm model có quá nhiều quyền. Thiết kế tools hẹp, typed và auditable.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: không giới hạn result size">
+Tool trả 10MB context làm model tốn token, leak data và tăng latency. Luôn limit rows/chunks/bytes.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: nghĩ MCP tự giải quyết authorization">
+MCP chuẩn hóa protocol. Authorization vẫn là trách nhiệm của server/app của bạn.
+</Callout>
+
+Checklist:
+
+1. Tools có scope hẹp không?
+2. Resources có ACL không?
+3. Có tenant isolation không?
+4. Có argument validation không?
+5. Có result size limit không?
+6. Có audit logs không?
+7. Write actions có confirmation không?
+8. File access có sandbox không?
+9. DB tools có parameterized queries không?
+10. Tool observations có được xem là untrusted không?
+
+## Practice exercises
+
+1. Thiết kế MCP server cho company wiki read-only.
+2. Phân loại 10 capabilities thành resource/tool/prompt.
+3. Rewrite tool `execute_sql` thành 5 tools an toàn hơn.
+4. Thiết kế path sandbox cho file resource.
+5. Viết audit log schema cho MCP tool calls.
+6. Thiết kế approval-gated `send_email` tool.
+7. Tạo 5 prompt injection examples nhắm vào MCP tools.
+
+## Knowledge check
+
+1. MCP host, client, server là gì?
+2. Resource khác tool thế nào?
+3. Vì sao read-only default an toàn hơn?
+4. Vì sao `execute_sql(query)` nguy hiểm?
+5. Confused deputy trong MCP/tool use là gì?
+6. MCP có thay thế authorization không?
+7. Tool result poisoning là gì?
+8. Audit log MCP nên chứa gì?
+
+## Answer key
+
+1. Host là app/agent; client trong host nói protocol; server expose resources/tools/prompts.
+2. Resource là dữ liệu đọc; tool là action/function thực thi.
+3. Vì write actions có side effects và rủi ro cao hơn.
+4. Model có thể tạo raw SQL sai/độc hại, leak data hoặc mutate DB.
+5. Agent dùng quyền của hệ thống/user để làm action không nên được phép.
+6. Không. Server/app vẫn phải enforce authz.
+7. Tool/API trả nội dung chứa instruction độc hại mà model có thể follow.
+8. Request id, user/tenant, capability, args hash, allowed/denied, result count, latency, policy version.
+
+## Mini-project: Secure MCP knowledge server
+
+**Task:** Thiết kế MCP server read-only cho tài liệu nội bộ.
+
+**Deliverables:**
+
+- Resource/tool/prompt list.
+- Schemas cho `search_docs`, `get_doc`, `answer_with_citations`.
+- Tenant/group ACL design.
+- Result limits.
+- Audit logging schema.
+- Prompt injection test cases.
+- Optional approval-gated write tool design.
+
+**Success criteria:**
+
+- Không có generic dangerous tool.
+- Unauthorized docs không truy xuất được.
+- Tool results giới hạn kích thước.
+- Mọi access có audit.
+- Write action nếu có phải approval-gated.
+
+## Điểm cần nhớ
+
+- MCP chuẩn hóa tool/resource/prompt connectivity cho AI apps.
+- MCP giúp portability và governance, nhưng không tự bảo mật.
+- Resources là data đọc; tools là actions; prompts là templates.
+- MCP server phải enforce least privilege, ACL, validation, limits và audit.
+- Tool results cũng là untrusted content.
+- MCP rất hữu ích trong multi-LLM orchestration vì nhiều models/agents có thể dùng cùng tool catalog.
+
+## Next chapter bridge
+
+MCP chuẩn hóa tool/context boundary. Nhưng khi xây workflows phức tạp, bạn sẽ gặp frameworks như LangChain, LangGraph, LlamaIndex, CrewAI và AutoGen. Chương tiếp theo: **LLM Orchestration Frameworks** — chọn framework đúng việc và tránh biến framework thành kiến trúc mù.

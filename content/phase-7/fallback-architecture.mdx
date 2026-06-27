@@ -1,0 +1,453 @@
+Fallback Architecture bảo vệ user experience khi model, provider, schema, network hoặc safety layer fail. Nhưng fallback không phải “thử model khác bừa”. Fallback đúng là **controlled degradation**: giảm chất lượng/khả năng một cách có kiểm soát, vẫn giữ contract, security policy, cost budget và traceability.
+
+## Why this matters
+
+Trong production, các lỗi sau sẽ xảy ra:
+
+- provider timeout,
+- 429 rate limit,
+- 500/503 provider errors,
+- invalid JSON,
+- tool call arguments sai,
+- context length overflow,
+- safety refusal,
+- streaming bị ngắt giữa chừng,
+- model mới regression.
+
+Nếu không có fallback, app fail trực tiếp. Nếu fallback sai, app có thể trả answer sai, schema invalid, leak data, hoặc nhân cost.
+
+<Callout type="warning" title="Fallback không được phá contract">
+Nếu primary model phải trả JSON theo schema nhưng fallback model trả text tự do, bạn không có fallback — bạn chỉ đẩy lỗi xuống downstream parser.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Phân biệt retry, fallback, cache fallback, degraded response và fail closed.
+2. Thiết kế fallback cascade theo task.
+3. Xây error taxonomy cho LLM providers.
+4. Giữ schema, safety và compliance constraints trong fallback.
+5. Hiểu circuit breaker states: closed, open, half-open.
+6. Xử lý streaming fallback nuance.
+7. Log fallback path để debug cost/reliability.
+8. Build fallback manager simulation.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- API integration patterns: retry, timeout, cache, validation.
+- Routing strategies và model capability registry.
+- Structured output validation.
+- Secure API constraints.
+
+## Core intuition: fallback is controlled degradation
+
+Fallback flow:
+
+```text
+Primary model
+  ↓ success
+Validate response
+  ↓ pass
+Return
+
+Primary fail
+  ↓
+Retry if retryable
+  ↓ still fail
+Fallback model/path if policy allows
+  ↓
+Validate again
+  ↓
+Return or degraded response or fail closed
+```
+
+Key phrase: **if policy allows**. Không phải lỗi nào cũng fallback được.
+
+## Retry vs fallback vs degradation
+
+| Mechanism | Purpose | Example | Risk |
+|---|---|---|---|
+| Retry | thử lại cùng provider/model | 503 retry | retry storm |
+| Fallback | đổi provider/model/path | GPT → Claude | behavior/schema drift |
+| Cache fallback | dùng answer cached | outage | stale answer |
+| Degraded response | trả answer đơn giản hơn | no citations | lower quality |
+| Fail closed | từ chối an toàn | sensitive data | UX friction |
+
+## Error taxonomy
+
+| Error | Retry? | Fallback? | Notes |
+|---|---|---|---|
+| 400 invalid request | no | no | fix code/payload |
+| 401/403 auth | no | no | key/permission issue |
+| 429 rate limit | yes | maybe | respect Retry-After |
+| 408/timeout | yes | yes | bounded retry budget |
+| 500/502/503/504 | yes | yes | provider unhealthy |
+| context overflow | no | maybe | reduce context or long-context fallback |
+| invalid JSON | repair/retry | maybe | schema-compatible fallback |
+| tool args invalid | repair/retry | maybe | validate before execute |
+| safety refusal | usually no | policy-dependent | do not bypass safety blindly |
+| streaming interrupted | depends | difficult | partial output problem |
+| budget exceeded | no | cheaper fallback | user tier policy |
+
+<Callout type="danger" title="Safety refusal không phải lỗi kỹ thuật bình thường">
+Fallback sang model khác để “né refusal” có thể là policy violation. Safety refusal cần route policy rõ, không được bypass mù quáng.
+</Callout>
+
+## Designing task-specific fallback cascades
+
+### Reasoning task
+
+```text
+strong reasoning primary
+  → strong reasoning secondary
+  → ask clarification / human review
+```
+
+Không nên fallback xuống model yếu nếu answer high-stakes.
+
+### JSON extraction
+
+```text
+schema-native model
+  → repair loop
+  → schema-reliable fallback
+  → manual review / controlled error
+```
+
+### Sensitive data
+
+```text
+private/compliant model
+  → private fallback
+  → fail closed
+```
+
+Không fallback sang external provider nếu tenant policy không cho phép.
+
+### RAG answer
+
+```text
+primary model
+  → fallback model with same context
+  → cached answer if source unchanged
+  → say unavailable / ask user retry
+```
+
+## Fallback policy constraints
+
+Fallback candidate phải pass constraints:
+
+- provider allowed by tenant policy,
+- context window đủ,
+- supports required output schema,
+- supports required tools,
+- cost within budget,
+- latency acceptable,
+- safety profile acceptable,
+- prompt compatible enough,
+- data region allowed.
+
+```python
+def fallback_allowed(candidate, req):
+    return (
+        candidate.allowed_for_tenant(req.tenant)
+        and candidate.context_window >= req.required_context
+        and (not req.requires_json or candidate.supports_json)
+        and candidate.estimated_cost(req) <= req.max_cost
+    )
+```
+
+## Circuit breaker pattern
+
+Circuit breaker ngăn app tiếp tục gọi provider đang lỗi.
+
+States:
+
+```text
+Closed: provider healthy, calls pass normally
+Open: provider unhealthy, fail fast / route fallback
+Half-open: send limited probe calls to test recovery
+```
+
+Signals:
+
+- consecutive failures,
+- error rate over time window,
+- timeout rate,
+- p95 latency spike,
+- 429 rate,
+- invalid response rate.
+
+Pseudocode:
+
+```python
+class CircuitBreaker:
+    def __init__(self, failure_threshold=5):
+        self.state = "closed"
+        self.failures = 0
+        self.failure_threshold = failure_threshold
+
+    def allow_request(self):
+        return self.state in {"closed", "half_open"}
+
+    def record_success(self):
+        self.failures = 0
+        self.state = "closed"
+
+    def record_failure(self):
+        self.failures += 1
+        if self.failures >= self.failure_threshold:
+            self.state = "open"
+```
+
+## Fallback and streaming
+
+Streaming khó fallback hơn non-streaming.
+
+Case 1: fail before first token.
+
+```text
+safe to retry/fallback, user chưa thấy gì
+```
+
+Case 2: fail after partial output.
+
+```text
+user đã thấy một phần answer
+fallback có thể duplicate/mâu thuẫn
+```
+
+Options:
+
+- show partial + retry button,
+- restart with notice,
+- buffer output until validation for high-stakes tasks,
+- avoid streaming for strict JSON extraction,
+- use resumable protocol nếu provider hỗ trợ.
+
+## Fallback and structured output
+
+Structured output cần validation gate sau mỗi attempt.
+
+```text
+primary output → JSON parse → schema validate → business validate
+```
+
+Nếu fail:
+
+```text
+repair prompt → retry → fallback schema-capable model → controlled error
+```
+
+Never return invalid JSON to app layer.
+
+## Cache fallback
+
+Cache fallback hữu ích khi provider down và answer không thay đổi nhanh.
+
+Safe-ish:
+
+- public FAQ,
+- static policy with version,
+- deterministic classification results.
+
+Dangerous:
+
+- personalized sensitive advice,
+- financial/legal current data,
+- tool-action workflows,
+- stale permissions.
+
+Cache fallback phải include:
+
+```text
+data_version + prompt_version + model + tenant/user permission version
+```
+
+## Observability for fallback
+
+Trace fields:
+
+```json
+{
+  "request_id": "req_123",
+  "primary_model": "gpt-4o",
+  "attempts": 2,
+  "errors": ["timeout", "timeout"],
+  "fallback_model": "claude-sonnet",
+  "fallback_reason": "primary_timeout",
+  "circuit_state": "half_open",
+  "validation_status": "passed",
+  "total_cost": 0.031,
+  "user_visible_degradation": false
+}
+```
+
+Metrics:
+
+- fallback rate,
+- fallback success rate,
+- retry count,
+- circuit open time,
+- cost increase due to retries,
+- validation failure rate after fallback.
+
+## Implementation lab: fallback manager with circuit breaker
+
+```python
+import random
+from dataclasses import dataclass
+
+
+@dataclass
+class ProviderResult:
+    ok: bool
+    text: str | None = None
+    error: str | None = None
+
+
+class FakeProvider:
+    def __init__(self, name, fail_rate=0.2, invalid_rate=0.1):
+        self.name = name
+        self.fail_rate = fail_rate
+        self.invalid_rate = invalid_rate
+
+    def call(self):
+        r = random.random()
+        if r < self.fail_rate:
+            return ProviderResult(ok=False, error="timeout")
+        if r < self.fail_rate + self.invalid_rate:
+            return ProviderResult(ok=True, text="not json")
+        return ProviderResult(ok=True, text='{"answer":"ok"}')
+
+
+def validate_json_like(text):
+    return text and text.strip().startswith("{")
+
+
+def call_with_fallback(primary, fallback):
+    trace = []
+
+    first = primary.call()
+    trace.append((primary.name, first.error or "ok"))
+    if first.ok and validate_json_like(first.text):
+        return first, trace
+
+    second = fallback.call()
+    trace.append((fallback.name, second.error or "ok"))
+    if second.ok and validate_json_like(second.text):
+        return second, trace
+
+    return ProviderResult(ok=False, error="all_failed"), trace
+
+
+primary = FakeProvider("primary", fail_rate=0.5)
+fallback = FakeProvider("fallback", fail_rate=0.1)
+result, trace = call_with_fallback(primary, fallback)
+print(result, trace)
+```
+
+Extend lab:
+
+1. Add retry before fallback.
+2. Add circuit breaker state.
+3. Add cost tracking per attempt.
+4. Add schema validation.
+5. Run 1,000 simulations and report fallback rate.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: fallback sang model không support schema">
+Nếu downstream cần JSON/schema, fallback model phải có khả năng tương đương hoặc bạn cần repair/validation gate.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: không log fallback path">
+Khi quality giảm hoặc cost tăng, bạn cần biết request đã đi qua models nào và vì sao.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: fallback bypass compliance hoặc safety">
+Fallback không được gửi data sang provider bị cấm hoặc né safety refusal. Policy constraints phải áp dụng cho cả fallback.
+</Callout>
+
+Checklist:
+
+1. Có error taxonomy không?
+2. Retry và fallback có tách biệt không?
+3. Fallback có schema-compatible không?
+4. Fallback có data-policy-compatible không?
+5. Có circuit breaker không?
+6. Có xử lý streaming partial failure không?
+7. Có validation sau fallback không?
+8. Có trace fallback path không?
+9. Có cost cap cho retries/fallback không?
+10. Có fail closed cho sensitive workflows không?
+
+## Practice exercises
+
+1. Viết fallback cascade cho RAG QA, JSON extraction, sensitive data.
+2. Tạo retry/fallback matrix cho 12 error types.
+3. Implement circuit breaker closed/open/half-open.
+4. Simulate fallback cost increase với 1,000 requests.
+5. Thiết kế user-visible message khi fallback degraded.
+6. Viết trace schema cho fallback manager.
+7. Phân tích safety refusal: khi nào fallback allowed vs blocked.
+
+## Knowledge check
+
+1. Retry khác fallback thế nào?
+2. Controlled degradation nghĩa là gì?
+3. Vì sao fallback phải preserve output contract?
+4. Circuit breaker có những states nào?
+5. Streaming fallback khó ở điểm nào?
+6. Cache fallback nguy hiểm khi nào?
+7. Safety refusal có nên fallback sang model khác không?
+8. Trace fallback nên log gì?
+
+## Answer key
+
+1. Retry gọi lại cùng provider/model; fallback đổi model/provider/path.
+2. Giảm khả năng/chất lượng một cách có kiểm soát, vẫn giữ policy và user-safe response.
+3. Downstream parser/business logic phụ thuộc schema/contract; phá contract tạo lỗi muộn hơn.
+4. Closed, open, half-open.
+5. Nếu đã stream partial output, retry/fallback có thể duplicate hoặc mâu thuẫn với phần user đã thấy.
+6. Khi data personalized, stale, permission thay đổi, hoặc high-stakes/current data.
+7. Không được bypass mù quáng; chỉ theo policy rõ và safety constraints.
+8. Primary, attempts, errors, fallback model, reason, circuit state, validation, cost, degradation.
+
+## Mini-project: Fallback manager
+
+**Task:** Build fallback manager simulation cho 3 providers.
+
+**Deliverables:**
+
+- Error taxonomy.
+- Retry policy with jitter.
+- Fallback cascade per task type.
+- Circuit breaker.
+- Schema validation gate.
+- Trace logs.
+- Metrics report: fallback rate, success rate, cost, p95 latency.
+
+**Success criteria:**
+
+- Fallback không vi phạm compliance constraints.
+- Invalid JSON không đi ra app layer.
+- Circuit breaker giảm calls tới provider unhealthy.
+- Có analysis cost increase do retry/fallback.
+- Có fail-closed policy cho sensitive data.
+
+## Điểm cần nhớ
+
+- Fallback là controlled degradation, không phải thử model khác bừa.
+- Retry, fallback, cache fallback, degraded response và fail closed là cơ chế khác nhau.
+- Fallback phải giữ schema, safety, compliance, context và cost constraints.
+- Circuit breaker bảo vệ hệ thống khỏi provider unhealthy.
+- Streaming fallback cần xử lý partial output cẩn thận.
+- Observability fallback path là bắt buộc để debug reliability và cost.
+
+## Next chapter bridge
+
+Routing và fallback quyết định model nào chạy và phục hồi khi lỗi. Nhưng agentic systems còn cần chuẩn hóa cách model truy cập tools, resources và prompts. Chương tiếp theo: **Model Context Protocol (MCP)** — protocol layer cho AI-tool connectivity.
