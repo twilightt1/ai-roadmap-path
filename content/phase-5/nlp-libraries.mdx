@@ -1,30 +1,148 @@
-NLP production không chỉ là thuật toán — bạn cần biết thư viện nào dùng cho việc gì. Bài này map các tool chính: NLTK, spaCy, HuggingFace Transformers/Datasets, sentence-transformers, tiktoken, evaluate — và khi nào chọn cái nào.
+NLP production không chỉ là thuật toán. Bạn cần biết thư viện nào dùng cho việc gì, tradeoff ra sao, và cách ghép chúng thành pipeline có thể chạy ổn định. Chương này map các tool chính: NLTK, spaCy, Hugging Face Transformers/Datasets, sentence-transformers, tiktoken, evaluate — cùng cách chọn tool đúng việc.
+
+## Why this matters
+
+Một AI Engineer thường phải làm nhiều việc khác nhau trong cùng một project:
+
+```text
+clean text → tokenize → train/evaluate model → generate embeddings → retrieve → evaluate → deploy
+```
+
+Không có một thư viện duy nhất tốt nhất cho tất cả. Ví dụ:
+
+- NLTK tốt để học classic NLP.
+- spaCy tốt cho preprocessing/NER production nhẹ.
+- Hugging Face Transformers tốt để dùng/fine-tune pretrained models.
+- sentence-transformers tốt cho embeddings/RAG prototype.
+- tiktoken tốt để đếm token OpenAI models.
+- evaluate tốt để chuẩn hóa metrics.
+
+<Callout type="tip" title="Tool đúng giúp giảm complexity">
+Nhiều hệ thống lỗi không phải vì model yếu, mà vì chọn sai tool: dùng LLM lớn cho tokenization đơn giản, tự viết NER rules khó maintain, hoặc không đếm token trước khi gọi API.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Biết NLTK phù hợp học classic NLP và prototyping nhỏ.
+2. Dùng spaCy cho sentence segmentation, NER, POS, dependency parsing và rule matching.
+3. Dùng Hugging Face Transformers cho pretrained models, pipelines và fine-tuning.
+4. Dùng Hugging Face Datasets để load/map/process datasets lớn.
+5. Dùng sentence-transformers để tạo sentence/chunk embeddings.
+6. Dùng tiktoken để count tokens/cost/context budget cho OpenAI-style models.
+7. Dùng evaluate để chạy metrics như F1, BLEU, ROUGE, BERTScore.
+8. Chọn tool theo task, latency, scale, production constraints.
+9. Thiết kế một NLP/RAG pipeline dùng nhiều thư viện đúng vai trò.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Python virtual environment và `pip`.
+- Text preprocessing/tokenization cơ bản.
+- Transformers/embeddings/RAG ở mức khái niệm.
+- Metrics từ chương trước.
+- pandas/numpy/sklearn cơ bản là lợi thế.
+
+## Core intuition: libraries are pipeline components
+
+Một NLP app production thường gồm nhiều component:
+
+```text
+Data loading     → Datasets / pandas
+Preprocessing    → regex / spaCy / custom cleaners
+Token counting   → tiktoken / HF tokenizer
+Model inference  → Transformers / API SDK / vLLM
+Embeddings       → sentence-transformers / provider API
+Evaluation       → sklearn / evaluate / custom rubric
+Serving          → FastAPI / batch jobs / queues
+```
+
+Mục tiêu là chọn tool đúng layer, không ép một tool làm mọi thứ.
+
+## Setup recommendation
+
+Tạo environment riêng:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # macOS/Linux
+# .venv\Scripts\activate   # Windows PowerShell
+
+pip install -U pip
+```
+
+Cài theo nhu cầu:
+
+```bash
+pip install nltk spacy transformers datasets sentence-transformers evaluate tiktoken scikit-learn
+python -m spacy download en_core_web_sm
+```
+
+<Callout type="warning" title="Cài tất cả không phải lúc nào cũng tốt">
+Transformers, torch, sentence-transformers có thể nặng. Với production Docker image, chỉ cài thư viện thật sự cần để giảm image size, cold start và attack surface.
+</Callout>
 
 ## NLTK
 
-NLTK là thư viện classic NLP cho học thuật/giáo dục:
+NLTK là thư viện classic NLP nổi tiếng trong học thuật/giáo dục.
 
-- Tokenization.
-- Stopwords.
-- Stemming/lemmatization.
-- Corpora.
+Phù hợp cho:
+
+- học tokenization/stemming/lemmatization,
+- stopwords,
+- corpora toy,
+- demos classic NLP,
+- bài tập NLP cơ bản.
+
+Ví dụ tokenization:
 
 ```python
 import nltk
 from nltk.tokenize import word_tokenize
 
 nltk.download("punkt")
-word_tokenize("Hello, world!")
+print(word_tokenize("Hello, world! NLP is fun."))
 ```
 
-NLTK tốt để học NLP classic, nhưng production thường dùng spaCy/HF.
+Ví dụ stopwords/stemming:
+
+```python
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer
+
+nltk.download("stopwords")
+
+stop = set(stopwords.words("english"))
+stemmer = PorterStemmer()
+
+text = ["running", "runs", "easily", "the"]
+print([stemmer.stem(w) for w in text if w not in stop])
+```
+
+Ưu điểm:
+
+- Dễ học.
+- Nhiều tài nguyên classic NLP.
+- Tốt cho notebook/education.
+
+Nhược điểm:
+
+- Không phải lựa chọn production chính cho pipeline hiện đại.
+- Một số API/corpora cần download runtime nếu không chuẩn bị trước.
+- Performance/ergonomics kém hơn spaCy cho nhiều task production.
 
 ## spaCy
 
-spaCy hướng production: nhanh, pipeline rõ ràng, hỗ trợ NER/POS/dependency parsing.
+spaCy hướng production: nhanh, pipeline rõ, model nhỏ dễ deploy, hỗ trợ NER/POS/dependency parsing/sentence segmentation.
+
+Ví dụ:
 
 ```python
 import spacy
+
 nlp = spacy.load("en_core_web_sm")
 doc = nlp("OpenAI is based in San Francisco.")
 
@@ -32,107 +150,614 @@ for ent in doc.ents:
     print(ent.text, ent.label_)
 ```
 
-<Callout type="tip" title="spaCy cho preprocessing production">
-Nếu cần sentence segmentation, NER, rule-based matcher tốc độ cao trong API, spaCy rất phù hợp. Nó nhẹ hơn transformer lớn và dễ deploy.
+Sentence segmentation:
+
+```python
+doc = nlp("Dr. Smith works at OpenAI. He builds NLP systems.")
+for sent in doc.sents:
+    print(sent.text)
+```
+
+Rule-based matching:
+
+```python
+import spacy
+from spacy.matcher import Matcher
+
+nlp = spacy.load("en_core_web_sm")
+matcher = Matcher(nlp.vocab)
+
+pattern = [{"LOWER": "refund"}, {"LOWER": {"IN": ["policy", "request"]}}]
+matcher.add("REFUND_PATTERN", [pattern])
+
+doc = nlp("Where is the refund policy?")
+for match_id, start, end in matcher(doc):
+    print(nlp.vocab.strings[match_id], doc[start:end].text)
+```
+
+<Callout type="tip" title="spaCy rất tốt cho preprocessing trước RAG">
+Nếu cần sentence segmentation, NER để mask PII, hoặc rules tốc độ cao trước chunking/embedding, spaCy thường nhẹ và ổn định hơn gọi LLM.
 </Callout>
 
-## HuggingFace Transformers
+Ưu điểm:
 
-Transformers là chuẩn để dùng model pretrained:
+- Production-friendly.
+- Nhanh.
+- Pipeline components rõ ràng.
+- Rule-based + statistical models kết hợp tốt.
+- Dễ package model vào Docker nếu chuẩn bị đúng.
+
+Nhược điểm:
+
+- Model nhỏ không hiểu sâu như transformer lớn.
+- Multilingual/domain support phụ thuộc model.
+- Fine-tuning cần học workflow riêng.
+
+## Hugging Face Transformers
+
+Transformers là thư viện chuẩn để dùng pretrained transformer models.
+
+### Pipeline API
+
+Dễ dùng cho demo/prototype:
 
 ```python
 from transformers import pipeline
 
 clf = pipeline("sentiment-analysis")
-clf("I love this roadmap!")
+print(clf("I love this roadmap!"))
 ```
 
-Dùng API thấp hơn khi fine-tune:
+Các pipeline phổ biến:
+
+- `sentiment-analysis`,
+- `text-classification`,
+- `token-classification`,
+- `question-answering`,
+- `summarization`,
+- `translation`,
+- `text-generation`,
+- `feature-extraction`.
+
+### AutoTokenizer and AutoModel
+
+Dùng API thấp hơn khi cần control/fine-tune:
 
 ```python
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-tok = AutoTokenizer.from_pretrained("distilbert-base-uncased")
-model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased")
+checkpoint = "distilbert-base-uncased"
+tok = AutoTokenizer.from_pretrained(checkpoint)
+model = AutoModelForSequenceClassification.from_pretrained(checkpoint)
+
+batch = tok(
+    ["I love this roadmap!", "This is confusing."],
+    padding=True,
+    truncation=True,
+    return_tensors="pt",
+)
+
+out = model(**batch)
+print(out.logits.shape)
 ```
 
-## HuggingFace Datasets
+### Generation
 
-Datasets load và xử lý dataset lớn hiệu quả:
+```python
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+checkpoint = "gpt2"
+tok = AutoTokenizer.from_pretrained(checkpoint)
+model = AutoModelForCausalLM.from_pretrained(checkpoint)
+
+inputs = tok("The future of AI is", return_tensors="pt")
+ids = model.generate(
+    **inputs,
+    max_new_tokens=30,
+    do_sample=True,
+    temperature=0.8,
+    top_p=0.9,
+)
+
+print(tok.decode(ids[0], skip_special_tokens=True))
+```
+
+<Callout type="warning" title="Pipeline tiện nhưng không phải luôn production-ready">
+`pipeline()` rất tốt để prototype. Production thường cần control batching, device placement, token limits, error handling, model loading lifecycle và monitoring.
+</Callout>
+
+## Hugging Face Datasets
+
+Datasets giúp load, transform và cache datasets hiệu quả.
+
+Ví dụ:
 
 ```python
 from datasets import load_dataset
 
 ds = load_dataset("imdb")
+print(ds)
 print(ds["train"][0])
+```
+
+Tokenize dataset:
+
+```python
+from transformers import AutoTokenizer
+from datasets import load_dataset
+
+checkpoint = "distilbert-base-uncased"
+tok = AutoTokenizer.from_pretrained(checkpoint)
+ds = load_dataset("imdb")
+
 
 def tokenize(batch):
     return tok(batch["text"], truncation=True)
 
+
 ds_tok = ds.map(tokenize, batched=True)
+print(ds_tok["train"][0].keys())
 ```
+
+Ưu điểm:
+
+- Lazy/cached processing.
+- `.map()` parallel/batched processing.
+- Tích hợp tốt với Transformers Trainer.
+- Nhiều public datasets.
+
+Nhược điểm:
+
+- Cần hiểu cache/disk usage.
+- Dataset lớn vẫn cần data engineering nghiêm túc.
+- Schema bẩn từ nguồn thực tế cần cleaning riêng.
 
 ## sentence-transformers
 
-Thư viện tạo sentence/document embeddings dễ dàng:
+sentence-transformers giúp tạo sentence/chunk/document embeddings nhanh.
+
+Dùng cho:
+
+- semantic search,
+- clustering,
+- deduplication,
+- RAG prototype,
+- similarity scoring,
+- reranking với CrossEncoder variants.
+
+Ví dụ embedding search:
 
 ```python
 from sentence_transformers import SentenceTransformer
+import numpy as np
+
+texts = [
+    "Refunds are available within 30 days.",
+    "Reset your password from account settings.",
+    "Kubernetes pods can restart after crashes.",
+]
+query = "How can I get my money back?"
 
 model = SentenceTransformer("all-MiniLM-L6-v2")
-embeddings = model.encode(texts, normalize_embeddings=True)
+doc_emb = model.encode(texts, normalize_embeddings=True)
+query_emb = model.encode([query], normalize_embeddings=True)[0]
+
+scores = doc_emb @ query_emb
+for idx in np.argsort(scores)[::-1]:
+    print(float(scores[idx]), texts[idx])
 ```
 
-Dùng cho semantic search, clustering, RAG prototype.
+<Callout type="warning" title="Chọn embedding model theo ngôn ngữ/domain">
+`all-MiniLM-L6-v2` tốt để học/prototype tiếng Anh, nhưng không phải luôn tốt cho tiếng Việt, code, legal, medical hoặc domain nội bộ. Hãy benchmark với eval set của bạn.
+</Callout>
+
+Cross-encoder reranking:
+
+```python
+from sentence_transformers import CrossEncoder
+
+pairs = [
+    ("How can I get my money back?", "Refunds are available within 30 days."),
+    ("How can I get my money back?", "Reset your password in settings."),
+]
+
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+print(reranker.predict(pairs))
+```
+
+Bi-encoder nhanh cho retrieval. Cross-encoder chậm hơn nhưng chính xác hơn để rerank top-k.
 
 ## tiktoken
 
-`tiktoken` là tokenizer OpenAI, dùng để đếm token/cost:
+`tiktoken` là tokenizer nhanh cho OpenAI-style models, thường dùng để đếm token/cost/context budget.
+
+Ví dụ:
 
 ```python
 import tiktoken
-enc = tiktoken.encoding_for_model("gpt-4")
-num_tokens = len(enc.encode(prompt))
+
+enc = tiktoken.encoding_for_model("gpt-4o-mini")
+prompt = "Tôi đang học NLP và tokenization 🚀"
+
+ids = enc.encode(prompt)
+print(len(ids))
+print(enc.decode(ids))
 ```
 
-<Callout type="warning" title="Đếm token trước khi gọi API">
-Đếm token để tránh vượt context window và ước tính cost. Với multi-provider, mỗi provider/model tokenizer khác nhau — đừng dùng tokenizer OpenAI để ước tính Claude/Gemini một cách tuyệt đối.
+Function reusable:
+
+```python
+import tiktoken
+
+
+def count_tokens(text: str, model_name: str = "gpt-4o-mini") -> int:
+    try:
+        enc = tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        enc = tiktoken.get_encoding("cl100k_base")
+    return len(enc.encode(text))
+```
+
+Use cases:
+
+- tránh vượt context window,
+- estimate cost,
+- trim RAG context,
+- log token usage,
+- compare chunk sizes.
+
+<Callout type="danger" title="Không dùng tiktoken cho mọi provider một cách tuyệt đối">
+Claude, Gemini, Hugging Face models có tokenizer khác. `tiktoken` tốt cho OpenAI-compatible counting, nhưng multi-provider apps cần token counter/provider-specific estimates.
 </Callout>
 
 ## evaluate
 
-HuggingFace `evaluate` load metrics chuẩn:
+Hugging Face `evaluate` load metrics chuẩn như accuracy, F1, BLEU, ROUGE, BERTScore.
+
+Ví dụ F1:
 
 ```python
 import evaluate
 
 f1 = evaluate.load("f1")
-rouge = evaluate.load("rouge")
-bertscore = evaluate.load("bertscore")
+print(f1.compute(predictions=[0, 1, 1], references=[0, 1, 0]))
 ```
 
-Tốt cho evaluation pipeline reproducible.
+ROUGE:
 
-## Chọn thư viện nào?
+```python
+import evaluate
 
-| Nhu cầu | Tool |
+rouge = evaluate.load("rouge")
+print(rouge.compute(
+    predictions=["The cat is on the mat."],
+    references=["A cat sat on the mat."],
+))
+```
+
+BERTScore:
+
+```python
+import evaluate
+
+bertscore = evaluate.load("bertscore")
+print(bertscore.compute(
+    predictions=["Customers can get their money back."],
+    references=["Refunds are available."],
+    lang="en",
+))
+```
+
+Ưu điểm:
+
+- Reproducible metrics.
+- Dễ tích hợp eval script.
+- Hỗ trợ nhiều metrics NLP phổ biến.
+
+Nhược điểm:
+
+- Metric package có thể cài dependencies riêng.
+- Không thay thế custom task metrics/human eval.
+- Cần hiểu metric trước khi dùng.
+
+## scikit-learn in NLP
+
+Dù không phải NLP-specific library, scikit-learn vẫn rất quan trọng:
+
+- TF-IDF baselines,
+- logistic regression/SVM classifiers,
+- clustering,
+- train/test split,
+- classification metrics.
+
+Ví dụ baseline mạnh:
+
+```python
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+
+pipe = Pipeline([
+    ("tfidf", TfidfVectorizer(ngram_range=(1, 2), max_features=20000)),
+    ("clf", LogisticRegression(max_iter=1000)),
+])
+
+pipe.fit(train_texts, train_labels)
+print(pipe.score(test_texts, test_labels))
+```
+
+<Callout type="tip" title="Luôn có baseline classic">
+Trước khi fine-tune transformer hoặc gọi LLM API, hãy thử TF-IDF + Logistic Regression cho classification. Baseline này nhanh, rẻ, explainable và đôi khi rất khó đánh bại.
+</Callout>
+
+## Tool selection by task
+
+| Nhu cầu | Tool gợi ý |
 |---|---|
 | Học classic NLP | NLTK |
-| NER/parsing production nhẹ | spaCy |
-| Pretrained transformer/fine-tune | HuggingFace Transformers |
-| Dataset lớn | HuggingFace Datasets |
-| Sentence embedding/RAG prototype | sentence-transformers |
-| Đếm token OpenAI | tiktoken |
-| Metrics chuẩn | evaluate |
+| Sentence segmentation production | spaCy |
+| NER/POS/dependency parsing nhẹ | spaCy |
+| Rule-based matching | spaCy Matcher/EntityRuler |
+| Pretrained transformer inference | Hugging Face Transformers |
+| Fine-tune BERT/T5/GPT-style model | Transformers + Datasets + Trainer/Accelerate |
+| Dataset processing lớn | Hugging Face Datasets |
+| Sentence embeddings/RAG prototype | sentence-transformers |
+| Reranking top-k | sentence-transformers CrossEncoder hoặc reranker model |
+| Count OpenAI tokens | tiktoken |
+| Metrics chuẩn | evaluate + sklearn |
+| Classic baseline | scikit-learn |
+
+## Example pipeline: RAG ingestion
+
+Một ingestion pipeline có thể dùng:
+
+```text
+PDF/HTML text
+→ custom cleaning/regex
+→ spaCy sentence segmentation
+→ token-aware chunking with tiktoken/HF tokenizer
+→ sentence-transformers embeddings
+→ vector DB
+→ evaluate retrieval recall@k
+```
+
+Pseudo-code:
+
+```python
+import re
+import spacy
+import tiktoken
+from sentence_transformers import SentenceTransformer
+
+nlp = spacy.load("en_core_web_sm")
+enc = tiktoken.encoding_for_model("gpt-4o-mini")
+embedder = SentenceTransformer("all-MiniLM-L6-v2")
+
+
+def clean(text):
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def sentences(text):
+    return [sent.text for sent in nlp(text).sents]
+
+
+def token_len(text):
+    return len(enc.encode(text))
+
+
+def chunk_sentences(sents, max_tokens=300):
+    chunks = []
+    current = []
+    current_tokens = 0
+
+    for sent in sents:
+        n = token_len(sent)
+        if current and current_tokens + n > max_tokens:
+            chunks.append(" ".join(current))
+            current = []
+            current_tokens = 0
+        current.append(sent)
+        current_tokens += n
+
+    if current:
+        chunks.append(" ".join(current))
+    return chunks
+
+
+raw = "Refunds are available within 30 days. Contact support for details."
+text = clean(raw)
+chunks = chunk_sentences(sentences(text))
+embeddings = embedder.encode(chunks, normalize_embeddings=True)
+
+print(chunks)
+print(embeddings.shape)
+```
+
+## Example pipeline: text classification
+
+```text
+labeled CSV
+→ train/test split
+→ TF-IDF baseline
+→ transformer fine-tune if needed
+→ classification_report
+→ error analysis
+```
+
+Start simple:
+
+```python
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+
+X_train, X_test, y_train, y_test = train_test_split(
+    texts,
+    labels,
+    test_size=0.2,
+    random_state=42,
+    stratify=labels,
+)
+
+pipe = Pipeline([
+    ("tfidf", TfidfVectorizer(ngram_range=(1, 2), min_df=2)),
+    ("clf", LogisticRegression(max_iter=1000)),
+])
+
+pipe.fit(X_train, y_train)
+print(classification_report(y_test, pipe.predict(X_test)))
+```
+
+Nếu baseline không đủ, chuyển sang Transformers fine-tuning.
+
+## Production considerations
+
+Khi đưa NLP libraries vào production, kiểm tra:
+
+- model loading time,
+- CPU/GPU memory,
+- batching,
+- concurrency,
+- Docker image size,
+- model/cache download at build time vs runtime,
+- deterministic versions,
+- monitoring latency/error rate,
+- fallback khi model/service lỗi,
+- data privacy và logging.
+
+Pin versions:
+
+```text
+transformers==x.y.z
+torch==x.y.z
+spacy==x.y.z
+sentence-transformers==x.y.z
+```
+
+Không nên để production tự tải model từ internet ở runtime nếu môi trường cần ổn định.
+
+<Callout type="danger" title="Model artifacts là dependency production">
+Tokenizer/model weights/spaCy models cũng là dependency. Version mismatch giữa tokenizer và model có thể gây bug khó debug.
+</Callout>
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: bỏ qua baseline scikit-learn">
+Nhiều bài toán classification/search có thể có baseline TF-IDF rất mạnh. Nếu không baseline, bạn không biết transformer/LLM có thật sự đáng cost không.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: load model trong mỗi request">
+Load transformer/spaCy model trong request handler sẽ làm latency cực tệ. Load một lần khi app start, tái sử dụng object model.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: tokenizer/model mismatch">
+Dùng tokenizer khác checkpoint hoặc khác provider để count/chunk có thể làm truncation, cost và model input sai. Luôn gắn tokenizer với model.
+</Callout>
+
+Checklist:
+
+1. Tool có phù hợp task không?
+2. Có baseline đơn giản chưa?
+3. Model/tokenizer versions có pin không?
+4. Model artifacts có được tải ở build/deploy time không?
+5. Có batch inference không?
+6. Có log latency/token count/error không?
+7. Có fallback nếu model/API lỗi không?
+8. Tokenizer dùng để chunk/count có đúng model/provider không?
+9. Evaluation pipeline có reproducible không?
+10. Docker image có quá nặng không?
+11. License của model/library có phù hợp không?
+
+## Practice exercises
+
+1. Dùng NLTK tokenize và stem 5 câu tiếng Anh.
+2. Dùng spaCy tách câu một đoạn có abbreviation như `Dr.`.
+3. Dùng spaCy Matcher bắt pattern liên quan refund/password.
+4. Dùng Transformers pipeline chạy sentiment analysis trên 10 câu.
+5. Load IMDB dataset bằng Hugging Face Datasets và tokenize 100 samples.
+6. Dùng sentence-transformers build semantic search cho 20 FAQ entries.
+7. Dùng tiktoken count token cho 10 chunks và tìm chunk dài nhất.
+8. Dùng evaluate tính ROUGE/BERTScore cho 5 summaries.
+9. Build TF-IDF baseline cho một dataset classification nhỏ.
+10. Viết bảng chọn tool cho một RAG product của bạn.
+
+## Knowledge check
+
+1. NLTK phù hợp nhất cho mục đích gì?
+2. spaCy mạnh ở những task production nào?
+3. Khi nào dùng `pipeline()` của Transformers?
+4. Vì sao production thường cần API thấp hơn `pipeline()`?
+5. Hugging Face Datasets giúp gì?
+6. sentence-transformers khác Transformers chung ở điểm nào?
+7. tiktoken dùng để làm gì và giới hạn là gì?
+8. evaluate có thay thế human eval không?
+9. Vì sao cần baseline scikit-learn?
+10. Vì sao không nên load model trong mỗi request?
+
+## Answer key
+
+1. Học/prototype classic NLP như tokenization, stopwords, stemming, corpora.
+2. Sentence segmentation, NER, POS, dependency parsing, rule-based matching tốc độ cao.
+3. Demo/prototype nhanh với pretrained tasks.
+4. Cần control batching, device, token limits, error handling, lifecycle và monitoring.
+5. Load/map/cache/process datasets lớn, tích hợp tốt với Transformers.
+6. Nó tập trung vào sentence/chunk embeddings và similarity/retrieval workflows.
+7. Count tokens/cost/context cho OpenAI-style tokenizers; không chính xác tuyệt đối cho provider/model khác.
+8. Không. Nó cung cấp metrics chuẩn nhưng open-ended generation vẫn cần rubric/human/LLM judge có kiểm soát.
+9. Baseline nhanh/rẻ/explainable giúp biết model phức tạp có đáng dùng không.
+10. Model loading rất chậm và tốn memory; phải load một lần và reuse.
+
+## Mini-project: NLP toolkit pipeline
+
+**Task:** Build một mini NLP toolkit cho support tickets.
+
+**Deliverables:**
+
+- Text cleaner + PII masking.
+- spaCy sentence segmentation và optional NER.
+- TF-IDF + Logistic Regression intent classifier baseline.
+- sentence-transformers semantic search trên FAQ.
+- tiktoken token budget report cho RAG context.
+- evaluate/sklearn metrics report.
+- README giải thích tool nào dùng cho việc gì.
+
+**Success criteria:**
+
+- Pipeline chạy end-to-end trên ít nhất 100 tickets/FAQ entries.
+- Có baseline classification report.
+- Semantic search trả về top-5 FAQ cho query.
+- Token budget không vượt context limit giả định.
+- Có checklist production issues: versions, model loading, caching, logging.
 
 ## Điểm cần nhớ
 
-- NLTK tốt để học, không phải lựa chọn production chính.
-- spaCy nhanh, production-friendly cho NER/POS/sentence segmentation.
-- HuggingFace Transformers là chuẩn dùng/fine-tune pretrained models.
-- Datasets giúp load/map dataset lớn hiệu quả.
-- sentence-transformers tạo embedding nhanh cho semantic search/RAG.
-- tiktoken giúp đếm token/cost OpenAI.
-- evaluate chuẩn hóa metrics như F1/ROUGE/BERTScore.
+- NLP production cần nhiều tools đúng vai trò, không có một thư viện tốt nhất cho mọi việc.
+- NLTK tốt để học classic NLP; spaCy tốt cho preprocessing/NER/rules production nhẹ.
+- Hugging Face Transformers là chuẩn để dùng/fine-tune pretrained models.
+- Hugging Face Datasets giúp xử lý dataset lớn hiệu quả.
+- sentence-transformers giúp tạo embeddings cho semantic search/RAG nhanh.
+- tiktoken giúp count tokens/cost/context cho OpenAI-style models.
+- evaluate + sklearn giúp chuẩn hóa evaluation, nhưng không thay thế rubric/human eval cho generation.
+- Production cần pin versions, quản lý model artifacts, batching, monitoring và tokenizer/model consistency.
 
-Tổng kết Phase 5: bạn đã hiểu text preprocessing, sparse/dense representation, embeddings, tokenization, transformer architecture, language modeling, model families, metrics và tooling. Đây là nền trực tiếp để bước vào Phase 6 — Large Language Models & AI Engineering.
+## Phase 5 wrap-up
+
+Bạn đã hoàn thành nền tảng NLP & Transformers:
+
+1. Text preprocessing: làm sạch nhưng giữ meaning.
+2. Classical text representation: BoW, TF-IDF, sparse search.
+3. Word embeddings: dense semantic vectors.
+4. Subword tokenization: text → token IDs.
+5. Transformer architecture: attention, Q/K/V, masking.
+6. Language modeling: next-token prediction và decoding.
+7. Key pretrained models: BERT/GPT/T5/LLaMA/API/open-weight.
+8. NLP evaluation: metrics, retrieval eval, human/LLM-as-judge.
+9. NLP libraries: tools để build pipeline thật.
+
+## Next phase bridge
+
+Phase 6 sẽ đi sâu vào **Large Language Models & AI Engineering**: prompt engineering, RAG production, agents/tool calling, structured outputs, fine-tuning, evaluation, safety, cost optimization và deployment patterns.

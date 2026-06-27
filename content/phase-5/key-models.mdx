@@ -1,37 +1,181 @@
-Không phải model nào cũng giống nhau. BERT, GPT, Claude, Gemini, T5, LLaMA, Mistral, Qwen khác nhau ở kiến trúc, dữ liệu, context, khả năng generation/understanding/multimodal. AI Engineer cần biết **chọn model đúng việc**, không chỉ chọn model nổi tiếng nhất.
+Không phải pretrained model nào cũng giống nhau. BERT, GPT, Claude, Gemini, T5, LLaMA, Mistral, Qwen khác nhau ở kiến trúc, objective, dữ liệu, context window, khả năng generation/understanding/multimodal và cách deploy. AI Engineer cần biết **chọn model đúng việc**, không chỉ chọn model nổi tiếng nhất.
 
-## Encoder-only: BERT
+## Why this matters
 
-BERT dùng transformer encoder, attention hai chiều. Tốt cho:
+Trong production, chọn model sai có thể làm hệ thống:
 
-- Text classification.
-- NER.
-- Extractive QA.
-- Sentence embedding (bi-encoder variants).
+- chậm hơn cần thiết,
+- đắt hơn nhiều lần,
+- khó deploy/fine-tune,
+- fail với ngôn ngữ/domain,
+- không đáp ứng privacy/compliance,
+- kém ở task thật dù benchmark marketing cao.
 
-```python
-from transformers import AutoModelForSequenceClassification
-model = AutoModelForSequenceClassification.from_pretrained("bert-base-uncased")
+Ví dụ:
+
+```text
+Task: classify support tickets into 20 labels
+Bad default: gọi frontier chat LLM cho từng ticket
+Better: fine-tuned small encoder hoặc logistic regression/TF-IDF baseline
 ```
 
-BERT không tối ưu cho free-form generation.
+```text
+Task: chatbot có tool calling + long context + multimodal screenshots
+Bad default: BERT
+Better: decoder/chat LLM API hoặc self-host instruct model hỗ trợ tool format
+```
+
+<Callout type="tip" title="Best model = best fit under constraints">
+Model tốt nhất không chỉ là model thông minh nhất. Nó là model đạt quality đủ tốt với cost, latency, privacy, context, tooling và vận hành phù hợp.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Phân biệt encoder-only, decoder-only và encoder-decoder models.
+2. Biết BERT mạnh ở understanding tasks nhưng không tối ưu cho generation.
+3. Hiểu GPT/Claude/LLaMA-style decoder-only models mạnh ở chat/generation.
+4. Biết T5/BART-style encoder-decoder phù hợp seq2seq.
+5. Phân biệt API models và open-weight/self-host models.
+6. Hiểu multimodal models dùng cho text + image/audio/video tasks.
+7. Chọn model theo task, cost, latency, privacy và deployment constraints.
+8. Biết khi nào dùng small model thay vì frontier LLM.
+9. Thiết kế model selection matrix cho một AI product.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Transformer encoder/decoder từ chương trước.
+- Language modeling objective.
+- Embeddings/RAG ở mức cơ bản.
+- Fine-tuning vs prompting ở mức khái niệm.
+- API serving và latency/cost là gì.
+
+## Core intuition: architecture shapes behavior
+
+Model family thường gắn với kiến trúc/objective:
+
+```text
+Encoder-only     → understand input
+Decoder-only     → generate continuation
+Encoder-decoder  → transform input text to output text
+```
+
+Không phải ranh giới tuyệt đối, nhưng là rule of thumb tốt.
+
+| Architecture | Training style | Strength |
+|---|---|---|
+| Encoder-only | masked/bidirectional | classification, NER, retrieval |
+| Decoder-only | next-token/causal | chat, generation, code |
+| Encoder-decoder | seq2seq/text-to-text | translation, summarization |
+
+## Encoder-only: BERT family
+
+BERT dùng transformer encoder với bidirectional attention. Mỗi token có thể nhìn trái và phải.
+
+Mạnh ở:
+
+- text classification,
+- sentiment/intent detection,
+- NER,
+- extractive QA,
+- reranking,
+- sentence embeddings qua variants như Sentence-BERT.
+
+Ví dụ Hugging Face:
+
+```python
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+checkpoint = "bert-base-uncased"
+tok = AutoTokenizer.from_pretrained(checkpoint)
+model = AutoModelForSequenceClassification.from_pretrained(checkpoint)
+
+batch = tok(["I love this roadmap!"], padding=True, truncation=True, return_tensors="pt")
+out = model(**batch)
+print(out.logits.shape)
+```
+
+BERT không tối ưu cho free-form generation vì nó không được train để generate token tiếp theo liên tục.
+
+<Callout type="info" title="BERT vẫn rất hữu ích trong production">
+Dù decoder LLM nổi bật hơn, BERT-style models vẫn mạnh cho classification/reranking/NER khi cần latency thấp, cost rẻ và output có nhãn rõ ràng.
+</Callout>
+
+## BERT variants
+
+Một số model liên quan:
+
+| Model | Ý tưởng chính |
+|---|---|
+| RoBERTa | train BERT mạnh hơn với recipe/data tốt hơn |
+| DistilBERT | nhỏ/nhanh hơn nhờ distillation |
+| DeBERTa | cải tiến attention/position representations |
+| Sentence-BERT | fine-tune để tạo sentence embeddings |
+| Modern embedding/reranker models | thường dùng encoder/bi-encoder/cross-encoder variants |
+
+Khi cần embedding retrieval, bạn thường không dùng `bert-base` raw pooling tùy tiện; hãy dùng model được train cho sentence embeddings.
 
 ## Decoder-only: GPT, Claude, LLaMA, Mistral, Qwen
 
-Decoder-only autoregressive dự đoán next token. Tốt cho:
+Decoder-only autoregressive models dự đoán next token:
 
-- Chat/generation.
-- Code generation.
-- Reasoning.
-- Tool calling (với API model hỗ trợ).
+```text
+P(next_token | previous_tokens)
+```
 
-GPT/Claude/Gemini API dùng cho production apps. LLaMA/Mistral/Qwen open-source dùng khi cần self-host, fine-tune, cost/control.
+Mạnh ở:
 
-<Callout type="tip" title="Open-source vs API">
-API model nhanh triển khai, chất lượng cao, không lo infra. Open-source cho privacy, fine-tuning sâu, cost control ở scale, nhưng cần serving infra (vLLM/TGI/GPU).
+- chat/generation,
+- instruction following,
+- summarization flexible,
+- code generation,
+- reasoning tasks,
+- tool/function calling nếu model/API hỗ trợ,
+- agent workflows.
+
+Các nhóm phổ biến:
+
+| Family | Deployment thường gặp | Ghi chú |
+|---|---|---|
+| GPT/OpenAI | API | mạnh, tooling tốt, structured outputs/tool calling |
+| Claude/Anthropic | API | mạnh về writing, long context, safety style |
+| Gemini/Google | API | multimodal, long context, Google ecosystem |
+| LLaMA/Meta | open-weight | self-host/fine-tune phổ biến |
+| Mistral/Mixtral | open/API | efficient, MoE variants |
+| Qwen/Alibaba | open/API | mạnh multilingual/code ở nhiều size |
+| DeepSeek-style models | open/API tùy model | reasoning/code tùy phiên bản |
+
+<Callout type="warning" title="Tên family không đủ để chọn model">
+Cùng một family có nhiều size, instruct/base variants, context lengths và quantization levels. Luôn kiểm tra model card, license, benchmark phù hợp task và eval nội bộ.
 </Callout>
 
-## Encoder-Decoder: T5
+## Base vs instruct/chat models
+
+Base model học next-token prediction trên corpus lớn. Nó hoàn thành text, không nhất thiết follow instruction tốt.
+
+```text
+Prompt: "Explain transformers"
+Base model: có thể tiếp tục như một article ngẫu nhiên
+```
+
+Instruct/chat model được instruction-tuned/RLHF/DPO để trả lời theo yêu cầu.
+
+```text
+Prompt: "Explain transformers in 5 bullets"
+Chat model: trả lời đúng format hơn
+```
+
+Rule of thumb:
+
+- Dùng **instruct/chat model** cho assistant, RAG, tool calling.
+- Dùng **base model** khi nghiên cứu pretraining/fine-tuning sâu hoặc cần continuation behavior đặc biệt.
+
+## Encoder-Decoder: T5 and BART family
+
+Encoder-decoder có encoder đọc input và decoder generate output.
 
 T5 biến mọi task thành text-to-text:
 
@@ -41,39 +185,327 @@ summarize: long text → summary
 classify sentiment: text → positive
 ```
 
-Tốt cho seq2seq như translation/summarization, nhưng decoder-only LLM hiện nay linh hoạt hơn cho chat.
+Mạnh ở:
 
-## Multimodal: Gemini, GPT-4V/4o, Claude Vision
+- translation,
+- summarization,
+- structured seq2seq,
+- data-to-text,
+- text normalization.
 
-Multimodal model nhận text + image/video/audio tùy provider. Dùng cho:
+Ví dụ:
 
-- Image QA.
-- Document understanding.
-- Chart/table extraction.
-- Video/audio reasoning.
+```python
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
-<Callout type="warning" title="Multimodal cost và latency">
-Image/video input tốn token/compute hơn text. Thiết kế app cần downscale/crop, cache, và chỉ gửi phần hình cần thiết. Đừng gửi PDF scan 100 trang thẳng vào model nếu có pipeline OCR/RAG tốt hơn.
+checkpoint = "t5-small"
+tok = AutoTokenizer.from_pretrained(checkpoint)
+model = AutoModelForSeq2SeqLM.from_pretrained(checkpoint)
+
+inputs = tok("translate English to German: Hello world", return_tensors="pt")
+ids = model.generate(**inputs, max_new_tokens=20)
+print(tok.decode(ids[0], skip_special_tokens=True))
+```
+
+Hiện nay decoder-only chat LLM rất linh hoạt, nhưng encoder-decoder vẫn quan trọng cho seq2seq pipelines và research.
+
+## Multimodal models
+
+Multimodal models nhận nhiều loại input:
+
+```text
+text + image
+text + audio
+text + video
+text + document pages
+```
+
+Ví dụ capability:
+
+- image QA,
+- screenshot understanding,
+- chart/table extraction,
+- scanned document understanding,
+- video/audio summarization,
+- UI automation with screenshots.
+
+Các model/API phổ biến có thể gồm GPT-4o/GPT vision, Claude Vision, Gemini multimodal và open multimodal models tùy thời điểm.
+
+<Callout type="danger" title="Multimodal không thay thế pipeline tài liệu tốt">
+Gửi PDF scan 100 trang thẳng vào vision model có thể rất đắt/chậm. Production thường cần OCR, layout parsing, chunking, caching và RAG trước khi gọi model lớn.
 </Callout>
 
-## Model selection by task
+## API models vs open-weight/self-host models
 
-| Task | Model type gợi ý |
-|---|---|
-| Classification nhanh/rẻ | BERT/logistic regression/fine-tuned small model |
-| Chat/general reasoning | GPT/Claude/Gemini decoder LLM |
-| Long document | Claude/Gemini long-context + RAG |
-| Self-host chat | LLaMA/Qwen/Mistral via vLLM |
-| Translation/summarization structured | T5/seq2seq hoặc LLM API |
-| Vision QA | GPT-4o/Claude Vision/Gemini |
+### API models
+
+Ưu điểm:
+
+- Triển khai nhanh.
+- Chất lượng cao.
+- Không cần vận hành GPU.
+- Tooling tốt: structured outputs, tool calling, batch API, safety.
+- Model updates từ provider.
+
+Nhược điểm:
+
+- Dữ liệu đi qua bên thứ ba.
+- Cost tăng theo usage.
+- Ít control internals.
+- Vendor lock-in.
+- Rate limits/region constraints.
+
+### Open-weight/self-host models
+
+Ưu điểm:
+
+- Control privacy/data locality.
+- Fine-tuning sâu hơn.
+- Cost control ở scale nếu vận hành tốt.
+- Có thể custom serving/quantization.
+- Tránh phụ thuộc hoàn toàn vào một provider.
+
+Nhược điểm:
+
+- Cần GPU/infra.
+- Serving phức tạp: vLLM/TGI/SGLang, batching, KV cache.
+- Quality có thể thấp hơn frontier API tùy task.
+- Phải tự lo monitoring/safety/updates.
+
+<Callout type="tip" title="Hybrid deployment thường thực tế nhất">
+Nhiều team dùng API frontier model cho task khó/low volume, và self-host small/open model cho task lặp lại/high volume/nhạy dữ liệu.
+</Callout>
+
+## Model size, quantization and serving
+
+Model lớn thường chất lượng hơn nhưng:
+
+- latency cao hơn,
+- VRAM nhiều hơn,
+- cost/token cao hơn,
+- throughput thấp hơn.
+
+Quantization giảm precision trọng số:
+
+```text
+FP16/BF16 → INT8 → INT4
+```
+
+Ưu điểm:
+
+- giảm VRAM,
+- tăng khả năng chạy local,
+- rẻ hơn.
+
+Tradeoff:
+
+- có thể giảm quality,
+- một số task nhạy hơn task khác,
+- cần benchmark nội bộ.
+
+Serving engines phổ biến cho open models:
+
+- vLLM,
+- Text Generation Inference (TGI),
+- SGLang,
+- llama.cpp cho local/edge CPU/GPU nhẹ.
+
+## Context window and long-context models
+
+Context window là số tokens model có thể nhận/generate trong một request.
+
+Long context hữu ích cho:
+
+- phân tích tài liệu dài,
+- codebase context,
+- legal/financial reports,
+- multi-turn chat history.
+
+Nhưng long context không miễn phí:
+
+- latency tăng,
+- cost tăng,
+- attention/memory tăng,
+- model có thể bỏ sót thông tin giữa context,
+- retrieval vẫn thường cần thiết.
+
+<Callout type="warning" title="Long context không tự động tốt hơn RAG">
+Nếu bạn có 500 trang tài liệu, nhồi tất cả vào prompt thường tệ hơn retrieval/reranking tốt. Long context nên dùng có chọn lọc.
+</Callout>
+
+## Task-based model selection
+
+| Task | Model type gợi ý | Notes |
+|---|---|---|
+| Classification nhanh/rẻ | Logistic regression, BERT/DistilBERT | fine-tune nếu có labels |
+| NER/POS/parsing | spaCy hoặc BERT token classifier | spaCy nếu cần nhẹ/nhanh |
+| Semantic search | Sentence embedding model | chọn multilingual/domain nếu cần |
+| Reranking | Cross-encoder/reranker | tốt sau retrieval top-k |
+| Chat assistant | GPT/Claude/Gemini hoặc instruct open model | cần eval instruction following |
+| RAG QA | Chat LLM + embedding + reranker | model phải grounded tốt |
+| Code generation | code-capable decoder LLM | test bằng unit tests |
+| Translation/summarization | T5/BART hoặc chat LLM | tùy format/cost |
+| Vision QA/document images | Multimodal LLM + OCR/layout | tối ưu input image |
+| High-volume extraction | small fine-tuned model hoặc structured LLM | schema validation |
+| Sensitive/private data | self-host/open model hoặc compliant API | review policy/security |
+
+## Decision framework
+
+Khi chọn model, hỏi theo thứ tự:
+
+1. Task là classification, extraction, retrieval, generation hay multimodal?
+2. Output có cần tự do hay schema cố định?
+3. Quality target là gì và đo bằng metric nào?
+4. Latency budget bao nhiêu?
+5. Cost/request tối đa bao nhiêu?
+6. Data có ràng buộc privacy/compliance không?
+7. Có cần fine-tune không?
+8. Có cần tool calling/structured output không?
+9. Context length cần bao nhiêu tokens?
+10. Team có khả năng vận hành GPU không?
+
+Nếu câu trả lời cho output là “nhãn cố định”, đừng mặc định dùng frontier LLM. Nếu câu trả lời là “reasoning/generation phức tạp”, small classifier có thể không đủ.
+
+## Implementation lab: model selection matrix
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass
+class ModelOption:
+    name: str
+    quality: int      # 1-5
+    latency: int      # 1-5, higher is faster
+    cost: int         # 1-5, higher is cheaper
+    privacy: int      # 1-5
+    ops: int          # 1-5, higher is easier to operate
+
+    def score(self, weights):
+        return (
+            self.quality * weights["quality"] +
+            self.latency * weights["latency"] +
+            self.cost * weights["cost"] +
+            self.privacy * weights["privacy"] +
+            self.ops * weights["ops"]
+        )
+
+
+options = [
+    ModelOption("frontier-api", quality=5, latency=3, cost=2, privacy=3, ops=5),
+    ModelOption("self-host-llama", quality=4, latency=3, cost=4, privacy=5, ops=2),
+    ModelOption("fine-tuned-distilbert", quality=3, latency=5, cost=5, privacy=5, ops=4),
+]
+
+weights = {
+    "quality": 0.40,
+    "latency": 0.20,
+    "cost": 0.15,
+    "privacy": 0.15,
+    "ops": 0.10,
+}
+
+ranked = sorted(options, key=lambda m: m.score(weights), reverse=True)
+for model in ranked:
+    print(model.name, round(model.score(weights), 2))
+```
+
+Đây không phải công thức tuyệt đối. Nó ép team nói rõ tradeoffs thay vì chọn theo hype.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: dùng LLM lớn cho mọi thứ">
+Nếu task là classification nhãn cố định hoặc rule extraction đơn giản, model nhỏ/fine-tuned có thể rẻ, nhanh và ổn định hơn nhiều.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: chọn model theo benchmark chung">
+Benchmark tổng quát không đảm bảo model tốt trên data, ngôn ngữ, format và latency của bạn. Luôn eval bằng test set nội bộ.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: quên license/privacy/compliance">
+Open-weight không có nghĩa dùng thương mại thoải mái. API không có nghĩa dữ liệu được phép gửi. Kiểm tra license, data policy, retention, region và compliance.
+</Callout>
+
+Checklist:
+
+1. Task type có rõ không?
+2. Output cần free-form hay structured?
+3. Có baseline nhỏ/rẻ chưa?
+4. Có eval set nội bộ chưa?
+5. Model có hỗ trợ ngôn ngữ/domain không?
+6. Context window có đủ không?
+7. Latency/cost có đạt SLA không?
+8. Data policy/privacy có được duyệt không?
+9. License có phù hợp commercial use không?
+10. Có kế hoạch fallback/model routing không?
+11. Có monitoring quality/cost/drift không?
+
+## Practice exercises
+
+1. Chọn model cho ticket classification 1M tickets/ngày, giải thích tradeoffs.
+2. Chọn model cho chatbot nội bộ dùng tài liệu công ty nhạy cảm.
+3. So sánh API frontier model vs self-host 7B/14B/70B cho RAG.
+4. Tìm model card của một embedding model và ghi lại language/domain support.
+5. Tìm license của một open-weight model và kiểm tra commercial use.
+6. Thiết kế model routing: easy queries dùng small model, hard queries dùng frontier model.
+7. Benchmark latency/cost của 2 providers trên 20 prompts.
+
+## Knowledge check
+
+1. Encoder-only model mạnh ở loại task nào?
+2. Vì sao BERT không phải lựa chọn tốt cho free-form chat generation?
+3. Decoder-only model học objective gì?
+4. Base model khác instruct/chat model thế nào?
+5. Encoder-decoder phù hợp task gì?
+6. Khi nào chọn API model?
+7. Khi nào chọn open-weight/self-host model?
+8. Long context có nhược điểm gì?
+9. Vì sao model nhỏ có thể tốt hơn model lớn trong production?
+10. Những yếu tố nào cần xem ngoài benchmark quality?
+
+## Answer key
+
+1. Understanding tasks như classification, NER, reranking, embeddings variants.
+2. BERT train bằng bidirectional masked objective, không tối ưu generate token-by-token.
+3. Next-token prediction/autoregressive language modeling.
+4. Base model completion text; instruct/chat model được tune để follow instructions/chat format.
+5. Seq2seq như translation, summarization, text-to-text transformations.
+6. Khi cần triển khai nhanh, quality cao, ít vận hành infra, tooling tốt.
+7. Khi cần privacy/control/fine-tune sâu/cost control ở scale và có khả năng vận hành.
+8. Cost/latency/memory tăng, có thể vẫn bỏ sót thông tin, không thay thế retrieval tốt.
+9. Với task hẹp/nhãn cố định, small model nhanh/rẻ/ổn định và dễ kiểm soát hơn.
+10. Cost, latency, privacy, license, context, language/domain, deployment, tooling, monitoring.
+
+## Mini-project: Model selection report
+
+**Task:** Chọn model stack cho một RAG chatbot nội bộ và một pipeline ticket classification.
+
+**Deliverables:**
+
+- Requirements: quality, latency, cost, privacy, context.
+- Ít nhất 3 model options cho mỗi use case.
+- Scoring matrix có weights.
+- Eval plan với dataset/metrics.
+- Deployment plan: API/self-host/hybrid.
+- Risk analysis: privacy, license, vendor lock-in, fallback.
+
+**Success criteria:**
+
+- Không chọn model chỉ theo hype.
+- Có baseline nhỏ/rẻ.
+- Có lý do rõ cho model chính và fallback.
+- Có kế hoạch đo quality/cost sau deploy.
 
 ## Điểm cần nhớ
 
-- BERT encoder-only tốt cho understanding, không phải generation.
-- GPT/Claude/LLaMA decoder-only tốt cho generation/chat/reasoning.
-- T5 encoder-decoder biến mọi task thành text-to-text.
-- Open-source cho control/privacy/fine-tune; API cho speed/quality/no infra.
-- Multimodal mạnh nhưng cost/latency cao — tối ưu input.
-- Chọn model theo task, cost, latency, privacy, context window và deployment constraints.
+- BERT encoder-only tốt cho understanding, không phải free-form generation.
+- GPT/Claude/LLaMA/Mistral/Qwen-style decoder-only models tốt cho generation/chat/reasoning.
+- T5/BART encoder-decoder biến task thành text-to-text, mạnh cho seq2seq.
+- API models cho speed/quality/no infra; open-weight cho control/privacy/fine-tune/cost ở scale.
+- Multimodal models mạnh nhưng cost/latency/input processing cần tối ưu.
+- Chọn model theo task, quality, cost, latency, privacy, context, license và deployment constraints.
+- Luôn eval trên dữ liệu thật của bạn.
 
-Bài tiếp: NLP Evaluation Metrics — BLEU/ROUGE/BERTScore/perplexity/human eval để biết model có thật sự tốt không.
+## Next chapter bridge
+
+Chọn model xong chưa đủ. Bạn cần biết nó có thật sự tốt không. Chương tiếp theo: **NLP Evaluation Metrics** — BLEU, ROUGE, BERTScore, perplexity, exact match, F1, human eval và LLM-as-judge.

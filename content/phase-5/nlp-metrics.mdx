@@ -1,96 +1,590 @@
-NLP evaluation khó hơn ML tabular vì output là text tự do. Một câu trả lời có nhiều cách đúng. Bài này covers metrics classic (accuracy/F1), generation metrics (BLEU/ROUGE), semantic metrics (BERTScore), perplexity, exact match, và human evaluation.
+NLP evaluation khó hơn ML tabular vì output là text. Một câu trả lời có thể đúng theo nhiều cách khác nhau, paraphrase khác reference nhưng vẫn đúng, hoặc overlap nhiều từ nhưng lại sai sự thật. Chương này covers classification metrics, NER metrics, BLEU, ROUGE, BERTScore, perplexity, exact match, retrieval metrics, human evaluation và LLM-as-judge.
+
+## Why this matters
+
+Nếu không có evaluation tốt, bạn sẽ chọn model/prompt/retriever bằng cảm giác.
+
+Ví dụ một RAG answer:
+
+```text
+Reference: Refunds are available within 30 days.
+Prediction: Customers can get their money back during the first month.
+```
+
+BLEU/ROUGE có thể thấp vì ít overlap từ, nhưng answer đúng về nghĩa.
+
+Ví dụ khác:
+
+```text
+Reference: Revenue increased by 5%.
+Prediction: Revenue increased by 50%.
+```
+
+Overlap từ rất cao, nhưng factuality sai nghiêm trọng.
+
+<Callout type="danger" title="Metric sai dẫn tới model sai">
+Nếu metric thưởng nhầm hành vi, model/prompt sẽ tối ưu sai. Với NLP production, metric phải gắn với user outcome: đúng, grounded, an toàn, đúng format, đủ nhanh và đủ rẻ.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Chọn accuracy/precision/recall/F1 cho classification.
+2. Hiểu macro/micro/weighted F1 khi class imbalance.
+3. Biết NER nên dùng entity-level F1, không chỉ token accuracy.
+4. Hiểu Exact Match và token F1 cho QA ngắn.
+5. Giải thích BLEU cho translation và hạn chế của overlap metrics.
+6. Giải thích ROUGE cho summarization và hạn chế về factuality.
+7. Hiểu BERTScore dùng embeddings để bắt semantic similarity.
+8. Biết perplexity đo LM objective nhưng không đo chat quality.
+9. Dùng retrieval metrics như recall@k, MRR, nDCG cho RAG.
+10. Thiết kế human eval/LLM-as-judge với rubric rõ.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Confusion matrix, TP/FP/FN/TN cơ bản.
+- Language modeling/perplexity từ chương trước.
+- Embeddings và cosine similarity.
+- RAG pipeline: query → retrieve → generate.
+- Python/sklearn ở mức cơ bản.
+
+## Core intuition: match metric to task
+
+Không có metric NLP “tốt nhất cho mọi thứ”. Metric phụ thuộc task:
+
+| Task | Metric thường dùng |
+|---|---|
+| Classification | accuracy, precision, recall, F1, macro F1 |
+| NER | entity-level precision/recall/F1 |
+| Extractive QA | exact match, token F1 |
+| Translation | BLEU, COMET, human eval |
+| Summarization | ROUGE, factuality eval, human eval |
+| Semantic similarity | BERTScore, embedding similarity |
+| Language modeling | perplexity |
+| Retrieval/RAG | recall@k, MRR, nDCG, groundedness |
+| Chat assistant | human eval, LLM-as-judge, task success |
+
+```text
+Metric should reflect the failure you care about.
+```
 
 ## Classification metrics
 
-Với classification/NER/intent, dùng metrics quen thuộc:
+Với classification/intent/sentiment, dùng metrics quen thuộc.
 
-- Accuracy khi class cân bằng.
-- Precision/Recall/F1 khi imbalance.
-- Macro F1 để không bỏ qua class nhỏ.
+### Accuracy
+
+Accuracy là tỷ lệ prediction đúng:
+
+```text
+accuracy = correct_predictions / total_examples
+```
+
+Tốt khi classes cân bằng.
+
+Nếu dataset 95% class `not_fraud`, model luôn predict `not_fraud` có accuracy 95% nhưng vô dụng cho fraud detection.
+
+### Precision, Recall, F1
+
+```text
+precision = TP / (TP + FP)
+recall    = TP / (TP + FN)
+F1        = 2 * precision * recall / (precision + recall)
+```
+
+- Precision cao: ít false positives.
+- Recall cao: ít false negatives.
+- F1 cân bằng precision và recall.
+
+Ví dụ:
 
 ```python
 from sklearn.metrics import classification_report
+
+y_true = ["billing", "billing", "tech", "tech", "sales"]
+y_pred = ["billing", "tech", "tech", "tech", "billing"]
+
 print(classification_report(y_true, y_pred))
 ```
 
-NER thường dùng entity-level F1, không chỉ token-level accuracy.
+## Macro, micro, weighted F1
+
+| Metric | Ý nghĩa | Khi dùng |
+|---|---|---|
+| Micro F1 | gộp TP/FP/FN toàn bộ classes | khi classes cân bằng hoặc muốn overall |
+| Macro F1 | trung bình F1 từng class như nhau | khi class nhỏ cũng quan trọng |
+| Weighted F1 | trung bình theo support mỗi class | khi muốn phản ánh distribution dataset |
+
+<Callout type="warning" title="Accuracy che giấu class nhỏ">
+Nếu class hiếm nhưng quan trọng, accuracy có thể rất đẹp trong khi model fail đúng phần cần quan tâm. Luôn xem per-class precision/recall/F1.
+</Callout>
+
+## NER metrics
+
+Named Entity Recognition thường đánh giá ở entity-level, không chỉ token-level.
+
+Ví dụ:
+
+```text
+Gold: OpenAI          ORG
+Pred: OpenAI Inc.     ORG
+```
+
+Token overlap có thể cao nhưng entity boundary sai. Entity-level exact match sẽ tính là sai nếu span không khớp.
+
+NER report thường đo:
+
+- entity precision,
+- entity recall,
+- entity F1,
+- theo từng label: PERSON, ORG, LOC, DATE, PRODUCT.
+
+Dùng thư viện như `seqeval`:
+
+```python
+from seqeval.metrics import classification_report
+
+y_true = [["B-ORG", "O", "O", "B-LOC", "I-LOC"]]
+y_pred = [["B-ORG", "O", "O", "B-LOC", "O"]]
+
+print(classification_report(y_true, y_pred))
+```
+
+## Exact Match for QA
+
+Exact Match (EM) yêu cầu output khớp chính xác reference sau normalization.
+
+```text
+pred: "Paris"
+ref:  "Paris"  → EM = 1
+
+pred: "Paris, France"
+ref:  "Paris"  → EM = 0
+```
+
+EM nghiêm ngặt, phù hợp với extractive QA hoặc câu trả lời ngắn.
+
+Thường normalize trước:
+
+- lowercase,
+- bỏ punctuation,
+- trim whitespace,
+- bỏ articles trong tiếng Anh (`a`, `an`, `the`) tùy benchmark.
+
+## Token F1 for QA
+
+Token F1 mềm hơn EM. Nó đo overlap token giữa prediction và reference.
+
+```text
+pred: Paris France
+ref:  Paris
+
+precision = 1/2
+recall = 1/1
+F1 = 0.67
+```
+
+Token F1 hữu ích khi answer gần đúng nhưng thêm/bớt vài token.
+
+<Callout type="warning" title="EM/F1 không đủ cho open-ended QA">
+Nếu answer cần giải thích dài, nhiều câu trả lời đúng có thể khác reference rất nhiều. Khi đó cần semantic/human/LLM judge metrics.
+</Callout>
 
 ## BLEU — machine translation
 
-BLEU đo overlap n-gram giữa output và reference. Tốt cho translation cổ điển, nhưng hạn chế với paraphrase.
+BLEU đo n-gram overlap giữa prediction và reference, có brevity penalty để phạt output quá ngắn.
+
+Trực giác:
+
+```text
+prediction và reference dùng nhiều cụm từ giống nhau → BLEU cao
+```
+
+Ví dụ:
 
 ```python
 import evaluate
+
 bleu = evaluate.load("bleu")
-bleu.compute(predictions=["the cat is on the mat"], references=[["the cat sat on the mat"]])
+result = bleu.compute(
+    predictions=["the cat is on the mat"],
+    references=[["the cat sat on the mat"]],
+)
+print(result)
 ```
+
+BLEU từng rất phổ biến trong machine translation cổ điển.
+
+Hạn chế:
+
+- Kém với paraphrase.
+- Cần references tốt.
+- Không đo factuality sâu.
+- Không ổn định với dataset nhỏ.
 
 ## ROUGE — summarization
 
-ROUGE đo overlap giữa summary và reference:
+ROUGE đo overlap giữa generated summary và reference summary.
 
-- ROUGE-1: unigram overlap.
-- ROUGE-2: bigram overlap.
-- ROUGE-L: longest common subsequence.
+| Metric | Ý nghĩa |
+|---|---|
+| ROUGE-1 | unigram overlap |
+| ROUGE-2 | bigram overlap |
+| ROUGE-L | longest common subsequence |
 
-ROUGE phổ biến cho summarization nhưng thưởng copy text nhiều, không đo factuality tốt.
+Ví dụ:
 
-<Callout type="warning" title="ROUGE cao không đảm bảo đúng sự thật">
-Summary có thể overlap nhiều từ với reference nhưng vẫn hallucinate số liệu. Với LLM summarization production, cần thêm factuality/faithfulness evaluation hoặc human review.
+```python
+import evaluate
+
+rouge = evaluate.load("rouge")
+result = rouge.compute(
+    predictions=["The cat is sitting on a mat."],
+    references=["A cat sat on the mat."],
+)
+print(result)
+```
+
+ROUGE phổ biến cho summarization vì dễ tính và dễ so sánh benchmark.
+
+<Callout type="danger" title="ROUGE cao không đảm bảo đúng sự thật">
+Summary có thể copy nhiều từ từ source/reference nhưng hallucinate số liệu, phủ định hoặc quan hệ nhân quả. Với production summarization, cần factuality/faithfulness evaluation.
 </Callout>
-
-## Perplexity
-
-Perplexity đánh giá language model next-token prediction. PPL thấp = model ít bối rối hơn. Dùng cho pretraining/fine-tuning LM, không trực tiếp đo chất lượng chat.
 
 ## BERTScore
 
-BERTScore dùng contextual embeddings để đo semantic similarity giữa prediction và reference. Nó bắt paraphrase tốt hơn BLEU/ROUGE.
+BERTScore dùng contextual embeddings để đo semantic similarity giữa prediction và reference.
+
+Thay vì exact n-gram overlap, nó match tokens bằng embedding similarity.
 
 ```python
+import evaluate
+
 bertscore = evaluate.load("bertscore")
 result = bertscore.compute(
     predictions=["a cat sits on a mat"],
     references=["the cat is on the mat"],
     lang="en",
 )
+print(result["f1"])
 ```
 
-## Exact Match (EM)
+Ưu điểm:
 
-EM yêu cầu output khớp chính xác reference. Dùng cho QA ngắn:
+- Bắt paraphrase tốt hơn BLEU/ROUGE.
+- Có semantic signal.
+
+Nhược điểm:
+
+- Phụ thuộc embedding model.
+- Tốn compute hơn overlap metrics.
+- Vẫn không đảm bảo factuality hoặc usefulness.
+
+## Perplexity
+
+Perplexity đánh giá language model theo next-token prediction objective.
 
 ```text
-pred: "Paris"
-ref:  "Paris"  → 1
-pred: "Paris, France"
-ref:  "Paris"  → 0 (dù đúng về nghĩa)
+perplexity = exp(cross_entropy_loss)
 ```
 
-Thường dùng EM + F1 cho extractive QA.
+PPL thấp nghĩa là model dự đoán tokens trong eval corpus tự tin hơn.
+
+Dùng cho:
+
+- pretraining/fine-tuning LM,
+- so sánh checkpoints cùng setup,
+- domain adaptation.
+
+Không dùng PPL như metric duy nhất cho:
+
+- chat quality,
+- instruction following,
+- groundedness,
+- safety,
+- reasoning.
+
+<Callout type="warning" title="Perplexity chỉ công bằng khi cùng tokenizer/data">
+Tokenizer khác làm số token và loss khác. Dataset/preprocessing/context length khác cũng làm PPL không so trực tiếp được.
+</Callout>
+
+## Retrieval metrics for RAG
+
+RAG có hai phần cần đánh giá riêng:
+
+```text
+retrieval quality + generation quality
+```
+
+Nếu retriever không lấy đúng context, generator khó trả lời đúng.
+
+### Recall@k
+
+Recall@k đo: trong top-k retrieved chunks có chứa chunk đúng không?
+
+```text
+recall@5 = % queries có relevant chunk trong top 5
+```
+
+RAG thường ưu tiên recall cao ở top-k trước khi rerank.
+
+### MRR
+
+Mean Reciprocal Rank thưởng relevant result xuất hiện sớm.
+
+```text
+query 1: relevant ở rank 1 → 1/1
+query 2: relevant ở rank 4 → 1/4
+MRR = average reciprocal rank
+```
+
+### nDCG
+
+nDCG dùng graded relevance, ví dụ:
+
+```text
+0 = irrelevant
+1 = somewhat relevant
+2 = highly relevant
+```
+
+Nó phù hợp khi có nhiều mức độ liên quan.
+
+## Generation metrics for RAG
+
+RAG answer cần đo:
+
+| Dimension | Câu hỏi |
+|---|---|
+| Correctness | Answer có đúng không? |
+| Groundedness/Faithfulness | Answer có dựa trên context không? |
+| Completeness | Có trả lời đủ ý không? |
+| Citation quality | Citation có trỏ đúng nguồn không? |
+| Format adherence | Có đúng JSON/bullets/schema không? |
+| Safety | Có từ chối đúng khi cần không? |
+
+Overlap metrics thường không đủ. Cần rubric + human eval hoặc LLM-as-judge có kiểm soát.
 
 ## Human evaluation
 
-Với open-ended generation, human eval vẫn là gold standard. Rubric thường gồm:
+Human eval vẫn là gold standard cho open-ended generation.
 
-- Correctness.
-- Helpfulness.
-- Faithfulness/groundedness.
-- Safety.
-- Style/format adherence.
+Rubric nên rõ ràng, ví dụ thang 1–5:
 
-<Callout type="tip" title="LLM-as-judge cần kiểm soát bias">
-LLM-as-judge tiện và rẻ hơn human eval, nhưng có bias: thích câu dài, thích model cùng provider, nhạy prompt. Dùng pairwise comparison, blind model names, và calibration với human labels.
+| Score | Correctness |
+|---|---|
+| 1 | sai hoàn toàn |
+| 2 | nhiều lỗi nghiêm trọng |
+| 3 | đúng một phần nhưng thiếu/sai chi tiết |
+| 4 | đúng hầu hết, lỗi nhỏ |
+| 5 | đúng đầy đủ |
+
+Guidelines tốt cần:
+
+- ví dụ positive/negative,
+- định nghĩa từng score,
+- blind model names,
+- nhiều annotators nếu quan trọng,
+- đo inter-annotator agreement nếu có thể.
+
+## LLM-as-judge
+
+LLM-as-judge dùng một LLM khác để chấm output theo rubric.
+
+Ưu điểm:
+
+- Rẻ hơn human eval ở scale.
+- Nhanh.
+- Dễ chạy regression test.
+
+Rủi ro:
+
+- bias thích câu dài,
+- bias theo style/provider,
+- prompt sensitivity,
+- không đáng tin tuyệt đối với factuality phức tạp,
+- có thể bị jailbreak bởi content trong answer/context.
+
+<Callout type="tip" title="LLM-as-judge nên dùng pairwise + calibration">
+Dùng pairwise comparison, ẩn tên model, rubric cụ thể và calibrate với một tập human-labeled examples. Đừng tin judge score mù quáng.
 </Callout>
+
+## Evaluation dataset design
+
+Một eval set tốt nên gồm:
+
+- examples thật từ production,
+- edge cases,
+- adversarial cases,
+- multilingual/domain-specific cases,
+- expected answers hoặc grading rubric,
+- metadata: category, difficulty, source.
+
+Ví dụ cho RAG:
+
+```text
+query
+relevant_doc_ids
+expected_answer
+must_include
+must_not_include
+category
+difficulty
+```
+
+Chia eval theo slice:
+
+- easy vs hard,
+- language,
+- document type,
+- answer type,
+- time-sensitive queries,
+- queries cần từ chối.
+
+## Implementation lab: mini evaluation script
+
+```python
+from sklearn.metrics import classification_report
+
+# Classification eval
+labels = ["billing", "technical", "billing", "sales"]
+preds = ["billing", "technical", "sales", "sales"]
+print(classification_report(labels, preds))
+```
+
+ROUGE/BERTScore:
+
+```python
+import evaluate
+
+predictions = [
+    "Customers can request a refund within 30 days.",
+]
+references = [
+    "Refunds are available within 30 days.",
+]
+
+rouge = evaluate.load("rouge")
+print(rouge.compute(predictions=predictions, references=references))
+
+bertscore = evaluate.load("bertscore")
+print(bertscore.compute(predictions=predictions, references=references, lang="en"))
+```
+
+Retrieval recall@k:
+
+```python
+def recall_at_k(retrieved_ids, relevant_ids, k):
+    top_k = set(retrieved_ids[:k])
+    return int(bool(top_k & set(relevant_ids)))
+
+examples = [
+    {"retrieved": ["d1", "d2", "d3"], "relevant": ["d2"]},
+    {"retrieved": ["d4", "d5", "d6"], "relevant": ["d9"]},
+]
+
+scores = [recall_at_k(e["retrieved"], e["relevant"], k=3) for e in examples]
+print(sum(scores) / len(scores))
+```
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: chỉ nhìn aggregate score">
+Average score có thể tăng trong khi một slice quan trọng giảm, ví dụ tiếng Việt, queries dài, hoặc customers enterprise. Luôn phân tích theo slices.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: dùng BLEU/ROUGE cho mọi generation task">
+Overlap metrics tiện nhưng không đo tốt paraphrase, factuality, helpfulness hoặc instruction following.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: eval trên dữ liệu train/dev bị leak">
+Nếu prompt/model/retriever đã được tune trên eval set, score không còn phản ánh generalization. Giữ holdout set sạch.
+</Callout>
+
+Checklist:
+
+1. Metric có khớp task/user outcome không?
+2. Có baseline không?
+3. Eval set có đủ production examples không?
+4. Có edge cases/adversarial cases không?
+5. Có phân tích theo slices không?
+6. Với RAG, retrieval và generation có được eval riêng không?
+7. Với summarization/RAG, có đo factuality/groundedness không?
+8. LLM-as-judge có rubric và calibration không?
+9. Có human review cho sample quan trọng không?
+10. Eval set có bị leak vào prompt/model tuning không?
+
+## Practice exercises
+
+1. Tính precision/recall/F1 từ một confusion matrix nhỏ.
+2. So sánh accuracy và macro F1 trên dataset imbalance.
+3. Tính EM/token F1 cho 5 cặp QA predictions/references.
+4. Chạy BLEU và ROUGE cho 3 câu paraphrase và quan sát điểm thấp.
+5. Chạy BERTScore cho cùng 3 câu và so sánh.
+6. Tạo 20-query retrieval eval set và tính recall@3/recall@5.
+7. Viết rubric 1–5 cho groundedness trong RAG.
+8. Dùng LLM-as-judge chấm 20 answers, rồi human review 5 cases bất đồng.
+
+## Knowledge check
+
+1. Khi nào accuracy là metric nguy hiểm?
+2. Macro F1 khác weighted F1 thế nào?
+3. Vì sao NER nên dùng entity-level F1?
+4. Exact Match có hạn chế gì?
+5. BLEU đo gì và yếu với trường hợp nào?
+6. ROUGE cao vẫn có thể sai vì sao?
+7. BERTScore dùng gì để đo similarity?
+8. Perplexity đo gì?
+9. Recall@k trong RAG trả lời câu hỏi gì?
+10. LLM-as-judge có rủi ro gì?
+
+## Answer key
+
+1. Khi class imbalance hoặc class nhỏ quan trọng.
+2. Macro F1 trung bình đều mỗi class; weighted F1 trung bình theo số examples/support.
+3. Vì boundary và label của toàn entity mới là điều quan trọng, token accuracy có thể che lỗi span.
+4. Quá nghiêm ngặt, paraphrase/answer dài đúng vẫn có thể bị 0.
+5. N-gram overlap; yếu với paraphrase và references không đầy đủ.
+6. Overlap nhiều từ không đảm bảo đúng số liệu, phủ định hoặc quan hệ factual.
+7. Contextual embeddings từ model như BERT/RoBERTa.
+8. Mức bối rối của LM trên next-token prediction, `exp(cross_entropy)`.
+9. Relevant chunk có xuất hiện trong top-k retrieved results không.
+10. Bias, prompt sensitivity, thích câu dài/style nhất định, có thể sai factuality và cần calibration.
+
+## Mini-project: Evaluation suite for RAG
+
+**Task:** Xây evaluation suite cho một RAG chatbot trên 100 queries.
+
+**Deliverables:**
+
+- Dataset gồm query, relevant_doc_ids, expected_answer, category.
+- Retrieval metrics: recall@3, recall@5, MRR.
+- Generation rubric: correctness, groundedness, completeness, citation.
+- Human eval sample ít nhất 30 answers.
+- Optional LLM-as-judge với calibration trên human labels.
+- Report theo slices: easy/hard, document type, language.
+
+**Success criteria:**
+
+- Retrieval và generation được đánh giá riêng.
+- Có baseline để so sánh.
+- Có ít nhất 5 failure modes cụ thể.
+- Có recommendation cải thiện retriever/prompt/model.
+- Eval có thể chạy lại sau mỗi thay đổi pipeline.
 
 ## Điểm cần nhớ
 
-- Classification/NER dùng precision/recall/F1; macro F1 cho imbalance.
-- BLEU tốt cho translation n-gram overlap nhưng kém với paraphrase.
-- ROUGE phổ biến cho summarization nhưng không đảm bảo factuality.
+- NLP metric phải khớp task; không có metric duy nhất cho mọi output text.
+- Classification/NER dùng precision/recall/F1; macro F1 quan trọng khi imbalance.
+- BLEU/ROUGE đo overlap, tiện nhưng yếu với paraphrase và factuality.
+- BERTScore dùng embeddings để bắt semantic similarity tốt hơn.
 - Perplexity đo LM objective, không trực tiếp đo chat quality.
-- BERTScore đo semantic similarity tốt hơn overlap metrics.
-- EM nghiêm ngặt, dùng cho QA ngắn.
-- Human eval/LLM-as-judge cần rubric rõ và kiểm soát bias.
+- RAG cần eval retrieval và generation riêng.
+- Human eval/LLM-as-judge cần rubric rõ, calibration và slice analysis.
 
-Bài tiếp: NLP Libraries — NLTK, spaCy, HuggingFace, sentence-transformers, tiktoken, evaluate.
+## Next chapter bridge
+
+Bạn đã biết cách đo chất lượng NLP systems. Chương tiếp theo: **NLP Libraries** — NLTK, spaCy, Hugging Face Transformers/Datasets, sentence-transformers, tiktoken, evaluate và cách chọn tool đúng việc.

@@ -1,117 +1,542 @@
-LLM không đọc text trực tiếp. Nó đọc **token IDs**. Tokenization là bước biến text thành chuỗi số. Subword tokenization là lý do model xử lý từ hiếm, multilingual và code tốt hơn word-level tokenizer. Bài này covers BPE, WordPiece, SentencePiece, special tokens và vocabulary tradeoffs.
+LLM không đọc raw text trực tiếp. Nó đọc **token IDs**. Tokenization là bước biến text thành chuỗi số mà model có thể xử lý. Subword tokenization là lý do LLM xử lý từ hiếm, tên riêng, multilingual text, emoji và code tốt hơn word-level tokenizer.
 
-## Vì sao subword?
+## Why this matters
 
-Word-level tokenizer gặp vấn đề OOV (out-of-vocabulary): từ mới không có trong vocab. Character-level thì sequence quá dài. Subword cân bằng: từ phổ biến giữ nguyên, từ hiếm tách thành mảnh.
+Khi gọi LLM API, bạn trả tiền theo token, bị giới hạn bởi context window và model chỉ hiểu input thông qua tokenizer của nó.
+
+Ví dụ cùng một câu có thể có token count khác nhau giữa các model:
+
+```text
+"Tôi đang học transformer tokenization 🚀"
+```
+
+Một tokenizer có thể tách tiếng Việt/emoji thành nhiều tokens hơn tokenizer khác. Nếu bạn ước lượng bằng số từ, bạn sẽ tính sai cost, chunk sai hoặc vượt context length.
+
+<Callout type="danger" title="Tokenizer mismatch có thể phá model">
+Tokenizer là một phần của model. Token IDs phải khớp với embedding matrix mà model đã train. Đổi tokenizer tùy tiện khiến cùng text thành IDs khác, model hiểu sai hoàn toàn.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích text → tokens → token IDs → embeddings.
+2. Phân biệt word-level, character-level và subword tokenization.
+3. Hiểu vì sao subword giảm OOV nhưng không làm sequence quá dài như char-level.
+4. Hiểu BPE, WordPiece và SentencePiece ở mức trực giác.
+5. Biết vai trò của special tokens như `[CLS]`, `[SEP]`, `<bos>`, `<eos>`, `[PAD]`.
+6. Dùng `attention_mask` cho padding.
+7. Hiểu vocab size tradeoff.
+8. Tính token count bằng tokenizer đúng model/provider.
+9. Nhận diện tokenization pitfalls trong RAG/LLM apps.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- String processing cơ bản.
+- Word embeddings từ chương trước.
+- Transformer/LLM ở mức khái niệm.
+- RAG/chunking và context window là gì.
+
+## Core intuition: model thấy IDs, không thấy chữ
+
+Pipeline input của LLM:
+
+```text
+raw text → tokenizer → token strings/pieces → token IDs → embedding lookup → transformer
+```
+
+Ví dụ minh họa:
+
+```text
+"Hello AI engineer"
+```
+
+Có thể thành:
+
+```text
+tokens: ["Hello", " AI", " engineer"]
+ids:    [9906, 15592, 13452]
+```
+
+Các IDs này được dùng để lookup embedding vectors:
+
+```text
+embedding_matrix[9906]  → vector cho "Hello"
+embedding_matrix[15592] → vector cho " AI"
+```
+
+<Callout type="info" title="Space cũng là tín hiệu">
+Nhiều tokenizer encode cả dấu cách trong token, ví dụ token `" AI"` khác `"AI"`. Vì vậy thêm/bớt whitespace có thể đổi tokenization.
+</Callout>
+
+## Word-level vs character-level vs subword
+
+### Word-level tokenization
+
+```text
+"unbelievable results" → ["unbelievable", "results"]
+```
+
+Ưu điểm:
+
+- Dễ hiểu.
+- Sequence ngắn.
+
+Nhược điểm:
+
+- OOV: từ mới không có trong vocabulary.
+- Vocabulary rất lớn nếu muốn cover nhiều từ.
+- Khó xử lý typo, tên riêng, code, multilingual.
+
+### Character-level tokenization
+
+```text
+"cat" → ["c", "a", "t"]
+```
+
+Ưu điểm:
+
+- Gần như không OOV.
+- Vocabulary nhỏ.
+
+Nhược điểm:
+
+- Sequence rất dài.
+- Model phải học meaning từ ký tự nhỏ lẻ, khó hơn và tốn context.
+
+### Subword tokenization
 
 ```text
 "unbelievable" → ["un", "believ", "able"]
-"ChatGPT" → ["Chat", "G", "PT"]  (tùy tokenizer)
+"ChatGPT"      → ["Chat", "G", "PT"]  # tùy tokenizer
+```
+
+Ưu điểm:
+
+- Từ phổ biến có thể giữ nguyên.
+- Từ hiếm được tách thành mảnh.
+- OOV thấp.
+- Sequence ngắn hơn character-level.
+
+```text
+subword = balance giữa word-level và character-level
 ```
 
 ## Byte Pair Encoding (BPE)
 
-BPE bắt đầu từ ký tự/byte, rồi merge cặp xuất hiện nhiều nhất:
+BPE bắt đầu từ ký tự hoặc byte, rồi lặp lại việc merge cặp xuất hiện nhiều nhất.
+
+Corpus toy:
 
 ```text
 l o w
 l o w e r
 n e w e s t
-
-merge: l+o -> lo, lo+w -> low, e+r -> er, ...
+w i d e s t
 ```
 
-GPT family dùng BPE/byte-level BPE (tiktoken).
+Nếu cặp `l o` xuất hiện nhiều, merge:
+
+```text
+l o → lo
+```
+
+Sau đó có thể merge tiếp:
+
+```text
+lo w → low
+e r  → er
+```
+
+Kết quả:
+
+```text
+lower → low er
+newest → new est
+```
+
+Trực giác:
+
+```text
+frequent patterns become tokens
+rare words are decomposed
+```
+
+GPT-family thường dùng BPE hoặc byte-level BPE. `tiktoken` là tokenizer phổ biến cho OpenAI models.
 
 ```python
 import tiktoken
-enc = tiktoken.encoding_for_model("gpt-4")
-ids = enc.encode("Hello AI engineer")
+
+enc = tiktoken.encoding_for_model("gpt-4o-mini")
+text = "Hello AI engineer"
+
+ids = enc.encode(text)
 print(ids)
 print(enc.decode(ids))
+print(len(ids))
 ```
+
+<Callout type="tip" title="Byte-level BPE giúp giảm unknown tokens">
+Byte-level tokenizer có thể biểu diễn hầu như mọi Unicode text bằng bytes. Điều này hữu ích cho emoji, code, ký tự lạ và multilingual input.
+</Callout>
 
 ## WordPiece
 
-WordPiece (BERT) giống BPE nhưng chọn merge tối đa likelihood của corpus. Token con thường đánh dấu bằng `##`:
+WordPiece được dùng trong BERT-style models. Nó giống BPE ở tinh thần merge subwords, nhưng chọn merge dựa trên likelihood/objective khác.
+
+BERT thường đánh dấu subword không đứng đầu bằng `##`:
 
 ```text
-playing → play ##ing
+playing      → play ##ing
 unaffordable → una ##ff ##ord ##able
 ```
+
+Ví dụ:
 
 ```python
 from transformers import AutoTokenizer
 
 tok = AutoTokenizer.from_pretrained("bert-base-uncased")
-print(tok.tokenize("unaffordable"))
+print(tok.tokenize("unaffordable playing"))
+print(tok("unaffordable playing")["input_ids"])
 ```
+
+`bert-base-uncased` còn lowercase input vì tokenizer/model được train theo dạng uncased.
+
+<Callout type="warning" title="Cased vs uncased là quyết định của model">
+`bert-base-uncased` và `bert-base-cased` có tokenizer/model khác nhau. Nếu task cần tên riêng, acronym hoặc code identifier, casing có thể quan trọng.
+</Callout>
 
 ## SentencePiece
 
-SentencePiece tokenizes text thô, không cần tách space trước. Nó dùng ký hiệu `▁` để biểu thị space. T5/LLaMA dùng SentencePiece hoặc biến thể.
+SentencePiece tokenizes raw text trực tiếp, không cần tách space trước. Nó thường dùng ký hiệu `▁` để biểu thị khoảng trắng trước token.
+
+```text
+"Hello world" → ["▁Hello", "▁world"]
+```
+
+SentencePiece có thể train BPE hoặc Unigram LM. T5, ALBERT, nhiều LLaMA-family/tokenizer variants dùng SentencePiece hoặc biến thể tương tự.
 
 ```python
 from transformers import AutoTokenizer
 
 tok = AutoTokenizer.from_pretrained("t5-small")
 print(tok.tokenize("Hello world"))
+print(tok("Hello world"))
 ```
 
-<Callout type="info" title="Tokenizer là một phần của model">
-Không đổi tokenizer tùy tiện. Embedding matrix của model có hàng tương ứng với vocab tokenizer. Tokenizer khác → token IDs khác → model hiểu sai hoàn toàn.
-</Callout>
+Điểm mạnh:
+
+- Không phụ thuộc pre-tokenization bằng whitespace.
+- Hữu ích cho multilingual text.
+- Xử lý ngôn ngữ không dùng space rõ như tiếng Nhật/Trung tốt hơn word split đơn giản.
 
 ## Special tokens
 
+Special tokens có nghĩa riêng trong input format.
+
 | Token | Vai trò |
 |---|---|
-| `[CLS]` | đại diện câu trong BERT |
-| `[SEP]` | phân tách câu |
-| `[PAD]` | padding batch |
-| `[MASK]` | masked LM training |
+| `[CLS]` | đại diện sequence trong BERT classification |
+| `[SEP]` | phân tách câu/segments trong BERT |
+| `[PAD]` | padding batch cho cùng length |
+| `[MASK]` | masked language modeling |
 | `<bos>` | beginning of sequence |
 | `<eos>` | end of sequence |
+| `<unk>` | unknown token nếu tokenizer có OOV |
 
-```python
-encoded = tok(
-    "Hello world",
-    padding=True,
-    truncation=True,
-    max_length=128,
-    return_tensors="pt",
-)
-print(encoded["input_ids"], encoded["attention_mask"])
+Ví dụ BERT pair input:
+
+```text
+[CLS] question tokens [SEP] passage tokens [SEP]
 ```
 
-`attention_mask` cho model biết token nào thật, token nào padding.
+Ví dụ decoder/generative model:
+
+```text
+<bos> prompt tokens response tokens <eos>
+```
+
+<Callout type="warning" title="Chat models còn có chat template">
+Chat LLM không chỉ nhận text plain. Tokenizer có thể thêm special tokens cho role như system/user/assistant. Khi fine-tune hoặc count token, phải dùng đúng chat template của model.
+</Callout>
+
+## Padding, truncation và attention_mask
+
+Batch training/inference thường cần các sequence cùng length. Ta dùng padding:
+
+```text
+seq1: [101, 7592, 102, 0, 0]
+seq2: [101, 2023, 2003, 1037, 102]
+```
+
+`attention_mask` cho model biết token nào thật, token nào padding:
+
+```text
+seq1 mask: [1, 1, 1, 0, 0]
+seq2 mask: [1, 1, 1, 1, 1]
+```
+
+Code:
+
+```python
+from transformers import AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained("bert-base-uncased")
+
+encoded = tok(
+    ["Hello world", "This is a longer sentence"],
+    padding=True,
+    truncation=True,
+    max_length=12,
+    return_tensors="pt",
+)
+
+print(encoded["input_ids"])
+print(encoded["attention_mask"])
+```
+
+Nếu quên attention mask, model có thể attend vào padding tokens và output nhiễu.
 
 ## Vocabulary size tradeoff
 
 Vocab lớn:
 
-- Token sequence ngắn hơn.
+- Sequence ngắn hơn.
+- Ít split từ phổ biến/hiếm hơn.
 - Embedding matrix lớn hơn.
-- Ít split từ hiếm.
+- Output softmax lớn hơn với language model.
 
 Vocab nhỏ:
 
-- Model nhẹ hơn.
+- Embedding matrix nhỏ hơn.
 - Sequence dài hơn.
-- Tốt hơn cho rare/multilingual nếu subword tốt.
+- Nhiều từ bị split thành nhiều pieces.
+- Có thể linh hoạt hơn với rare/multilingual nếu subword tốt.
 
-<Callout type="warning" title="Token count không bằng word count">
-Một từ có thể thành nhiều token. Tiếng Việt, code, emoji, URL thường tốn nhiều token. Khi tính cost LLM, luôn dùng tokenizer của provider (`tiktoken`, tokenizer HF), không ước lượng bằng số từ.
+Embedding matrix size:
+
+```text
+vocab_size × d_model
+```
+
+Ví dụ:
+
+```text
+50,000 vocab × 4,096 dim ≈ 204.8M parameters
+```
+
+Chỉ riêng token embeddings đã có thể rất lớn.
+
+## Token count không bằng word count
+
+Câu tiếng Anh đơn giản thường gần số từ hơn:
+
+```text
+"The model is fast." → vài tokens
+```
+
+Nhưng các loại text sau có thể tốn nhiều tokens:
+
+- tiếng Việt có dấu,
+- emoji,
+- URL dài,
+- JSON/code,
+- UUID/API keys,
+- base64,
+- bảng copy từ PDF,
+- text bị lỗi encoding.
+
+<Callout type="danger" title="Đừng chunk theo số từ khi deploy LLM">
+Context window, cost và truncation đều tính theo token. Chunking RAG nên dùng tokenizer của model/provider, không dùng word count ước lượng.
 </Callout>
+
+## Worked example: token budget for RAG
+
+Giả sử model có context window 8,192 tokens.
+
+Bạn cần chừa budget cho:
+
+```text
+system prompt:       500 tokens
+user question:       100 tokens
+answer budget:     1,000 tokens
+format/instructions: 300 tokens
+```
+
+Budget còn lại cho retrieved context:
+
+```text
+8192 - 500 - 100 - 1000 - 300 = 6292 tokens
+```
+
+Nếu mỗi chunk khoảng 700 tokens, bạn có thể đưa khoảng:
+
+```text
+floor(6292 / 700) = 8 chunks
+```
+
+Nếu bạn tính bằng số từ và sai 30–50%, prompt có thể bị truncation.
+
+## Implementation lab: token counter and chunk guard
+
+Cài đặt:
+
+```bash
+pip install tiktoken
+```
+
+Code:
+
+```python
+import tiktoken
+
+
+def get_encoder(model_name: str):
+    try:
+        return tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        return tiktoken.get_encoding("cl100k_base")
+
+
+def count_tokens(text: str, model_name: str = "gpt-4o-mini") -> int:
+    enc = get_encoder(model_name)
+    return len(enc.encode(text))
+
+
+def trim_to_token_budget(text: str, budget: int, model_name: str = "gpt-4o-mini") -> str:
+    enc = get_encoder(model_name)
+    ids = enc.encode(text)
+    return enc.decode(ids[:budget])
+
+sample = "Tôi đang học transformer tokenization 🚀 https://example.com/a/b/c"
+print(count_tokens(sample))
+print(trim_to_token_budget(sample, budget=10))
+```
+
+Use cases:
+
+- Count prompt cost.
+- Guard RAG context length.
+- Trim long user input safely by token budget.
+- Compare tokenization across providers/models.
+
+## Tokenization and multilingual/code data
+
+Tokenizer quality ảnh hưởng trực tiếp tới hiệu quả model.
+
+Nếu tiếng Việt bị tách quá vụn:
+
+```text
+"trí tuệ nhân tạo" → nhiều subword pieces
+```
+
+Sequence dài hơn, cost cao hơn, context ít hơn. Với code:
+
+```text
+getUserById, HTTP_404_NOT_FOUND, snake_case_variable
+```
+
+Tokenizer có thể split identifier thành nhiều pieces. Điều này không sai, nhưng bạn cần biết khi:
+
+- chunk code,
+- search exact identifiers,
+- fine-tune model cho code/domain,
+- tính cost.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: dùng tokenizer khác model">
+Token IDs chỉ có nghĩa với đúng model/tokenizer pair. Khi dùng Hugging Face, luôn load tokenizer cùng checkpoint với model.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: ước lượng token bằng số từ">
+Word count có thể sai mạnh với tiếng Việt, code, URL, emoji và data bẩn. Dùng tokenizer thật.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: quên truncation/padding behavior">
+Silent truncation có thể cắt mất phần quan trọng của prompt/context. Luôn log token count và kiểm tra input sau truncation trong pipeline quan trọng.
+</Callout>
+
+Checklist:
+
+1. Tokenizer có đúng model/checkpoint không?
+2. Có dùng đúng chat template cho chat model không?
+3. Token count có được đo bằng tokenizer thật không?
+4. RAG chunk size tính theo tokens chưa?
+5. Có chừa answer budget trong context window không?
+6. Có log truncation không?
+7. `attention_mask` có đúng khi padding không?
+8. Special tokens có được thêm đúng không?
+9. Multilingual/code/URL có bị token hóa quá dài không?
+
+## Practice exercises
+
+1. Dùng `tiktoken` count tokens cho 10 câu tiếng Anh và 10 câu tiếng Việt.
+2. So sánh token count của một URL ngắn và một URL dài.
+3. Dùng BERT tokenizer xem `playing`, `unaffordable`, `ChatGPT` bị split thế nào.
+4. Dùng T5 tokenizer quan sát ký hiệu `▁` trong SentencePiece.
+5. Viết function trim text theo token budget.
+6. Tính RAG budget cho model context window 32k tokens.
+7. Kiểm tra tokenization của một đoạn code Python/TypeScript.
+
+## Knowledge check
+
+1. LLM đọc raw text hay token IDs?
+2. Vì sao word-level tokenizer có OOV problem?
+3. Vì sao character-level tokenizer làm sequence dài?
+4. Subword tokenization cân bằng hai hướng trên thế nào?
+5. BPE merge gì?
+6. WordPiece thường thấy trong model family nào?
+7. SentencePiece khác tokenizer phụ thuộc whitespace ở điểm nào?
+8. `attention_mask` dùng để làm gì?
+9. Vocab size lớn làm tăng phần nào của model?
+10. Vì sao token count không bằng word count?
+
+## Answer key
+
+1. Token IDs.
+2. Từ mới không có trong vocabulary không có ID phù hợp.
+3. Mỗi ký tự thành token, nên số bước tăng mạnh.
+4. Giữ từ/mảnh phổ biến, tách từ hiếm thành pieces.
+5. Các cặp ký tự/byte/subword xuất hiện thường xuyên.
+6. BERT-style models.
+7. Nó tokenize raw text trực tiếp và có ký hiệu biểu diễn space như `▁`.
+8. Phân biệt token thật và padding token.
+9. Embedding matrix và output projection/softmax nếu tied hoặc LM head tương ứng.
+10. Một từ có thể thành nhiều tokens; whitespace, Unicode, code, URL, emoji ảnh hưởng mạnh.
+
+## Mini-project: Token budget analyzer
+
+**Task:** Build tool phân tích token budget cho RAG prompts.
+
+**Deliverables:**
+
+- Count tokens cho system prompt, user query, từng retrieved chunk.
+- Tính budget còn lại cho answer.
+- Cảnh báo nếu context vượt limit.
+- Trim/drop chunks theo token budget.
+- Report top 10 inputs có token-per-character cao nhất.
+
+**Success criteria:**
+
+- Dùng tokenizer đúng model/provider.
+- Không chunk theo word count.
+- Có log rõ phần nào bị truncate/drop.
+- Có test với tiếng Việt, code, URL và emoji.
 
 ## Điểm cần nhớ
 
-- LLM đọc token IDs, không đọc raw text.
-- Subword cân bằng word-level và char-level, xử lý OOV tốt.
-- GPT dùng BPE/byte-level BPE; BERT dùng WordPiece; T5/LLaMA dùng SentencePiece/variant.
-- Special tokens có nghĩa riêng và ảnh hưởng input format.
+- LLM đọc token IDs, không đọc raw text trực tiếp.
+- Subword tokenization cân bằng word-level và char-level, giảm OOV mà không làm sequence quá dài.
+- GPT thường dùng BPE/byte-level BPE; BERT dùng WordPiece; T5/LLaMA-family thường dùng SentencePiece hoặc biến thể.
+- Special tokens và chat templates là một phần của input format.
 - `attention_mask` phân biệt token thật và padding.
 - Vocab size tradeoff giữa sequence length và model size.
 - Luôn tính token bằng tokenizer đúng model/provider.
 
-Bài tiếp: Transformer Architecture — nơi token IDs thành embeddings rồi đi qua self-attention Q/K/V.
+## Next chapter bridge
+
+Sau tokenization, token IDs được lookup thành embeddings rồi đi qua self-attention. Chương tiếp theo: **Transformer Architecture** — Q/K/V, attention score, multi-head attention, positional encoding và causal masking.
