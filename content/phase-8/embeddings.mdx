@@ -1,0 +1,381 @@
+Embeddings là measurement layer của semantic retrieval. Trong RAG, embedding model quyết định câu hỏi và tài liệu nào được xem là “gần nhau”. Nếu embedding space sai, toàn bộ pipeline phía sau — vector DB, reranker, prompt, LLM — chỉ đang tối ưu trên tín hiệu sai.
+
+## Why this matters
+
+Một RAG system có thể fail dù LLM rất mạnh nếu embeddings kém:
+
+- Query dùng paraphrase nhưng embedding không bắt được semantic match.
+- Domain jargon không được model hiểu.
+- Tiếng Việt/multilingual retrieval kém.
+- Code, số liệu, bảng, error IDs bị dense embeddings bỏ sót.
+- Đổi embedding model nhưng không re-embed corpus.
+- Metric trong vector DB không khớp cách normalize vectors.
+
+<Callout type="warning" title="Embedding model là architecture decision">
+Đừng chọn embedding model theo demo. Chọn bằng retrieval eval trên data thật: recall@k, MRR, latency, cost và failure cases.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích embeddings như vector space semantic.
+2. Phân biệt dense, sparse và hybrid retrieval.
+3. So sánh embedding model families.
+4. Hiểu dimension tradeoffs.
+5. Chọn similarity metric đúng.
+6. Batch embeddings an toàn trong production.
+7. Version embeddings và re-embed khi cần.
+8. Đánh giá embedding quality bằng retrieval metrics.
+9. Nhận diện embedding failure modes.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Cosine similarity, dot product, vector norm.
+- Word/sentence embeddings từ Phase 5.
+- RAG motivation từ chương trước.
+- API batching/rate limits cơ bản.
+
+## Core intuition: meaning as geometry
+
+```text
+text → embedding model → vector in R^d
+similar meaning → nearby vectors
+```
+
+Ví dụ:
+
+```text
+"How can I get my money back?"
+```
+
+nên gần:
+
+```text
+"Refunds are available within 30 days."
+```
+
+Dù không share keyword `refund`, semantic vector nên kéo chúng lại gần.
+
+## Dense vs sparse vs hybrid
+
+| Representation | Strong at | Weak at |
+|---|---|---|
+| Sparse/BM25 | exact keywords, IDs, error codes | paraphrase/synonyms |
+| Dense embeddings | semantic similarity | exact numbers, rare tokens, code identifiers |
+| Hybrid | combines both | tuning and score normalization |
+
+Production RAG thường dùng hybrid:
+
+```text
+BM25 sparse retrieval + dense vector retrieval + reranker
+```
+
+<Callout type="tip" title="Dense không thay thế sparse">
+Query `ORA-00942` hoặc `getUserById` thường cần exact match. Dense-only search có thể miss identifiers quan trọng.
+</Callout>
+
+## Embedding model families
+
+### Provider embeddings
+
+- OpenAI `text-embedding-3-small`: rẻ/nhanh hơn, phù hợp nhiều workloads.
+- OpenAI `text-embedding-3-large`: chất lượng/dimension cao hơn, cost/storage cao hơn.
+- Cohere embed models: thường được tối ưu cho retrieval/RAG, có multilingual variants.
+
+### Open-source embeddings
+
+- `all-MiniLM-L6-v2`: baseline nhẹ, tốt để học/prototype.
+- BGE family: mạnh cho retrieval, có reranker ecosystem.
+- E5 family: query/passage style embeddings.
+- GTE models: general text embeddings.
+- Multilingual/domain models: cần cho tiếng Việt, legal, medical, code.
+
+Professor-level point: tên model không đủ. Bạn cần biết model có được train cho retrieval không, ngôn ngữ nào, domain nào, query/document format nào.
+
+## Query vs document embedding format
+
+Một số embedding models khuyến nghị prefix:
+
+```text
+query: how do I reset password?
+passage: You can reset your password in account settings.
+```
+
+Nếu model được train với prefix mà bạn bỏ qua, quality có thể giảm.
+
+## Dimensions and tradeoffs
+
+Dimension cao hơn thường chứa nhiều capacity hơn, nhưng:
+
+- storage tăng,
+- memory index tăng,
+- network payload tăng,
+- search latency có thể tăng,
+- cost embedding có thể tăng,
+- returns có thể diminishing.
+
+Storage estimate:
+
+```text
+storage_bytes = num_vectors × dimensions × bytes_per_float
+```
+
+Ví dụ:
+
+```text
+10M chunks × 1536 dims × 4 bytes ≈ 61.4 GB raw vectors
+```
+
+Chưa tính metadata/index overhead.
+
+## Similarity metrics
+
+### Cosine similarity
+
+Đo cùng hướng:
+
+```python
+import numpy as np
+
+
+def cosine(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+```
+
+### Dot product
+
+Nếu vectors đã normalize norm = 1:
+
+```text
+dot product == cosine similarity
+```
+
+### Euclidean distance / L2
+
+Đo khoảng cách hình học. Với normalized vectors, liên quan chặt tới cosine.
+
+<Callout type="danger" title="Metric mismatch làm retrieval sai âm thầm">
+Nếu bạn normalize vectors nhưng index dùng metric khác, hoặc model expect dot product nhưng DB config cosine/L2 sai, retrieval quality có thể giảm mà không báo lỗi.
+</Callout>
+
+## Batch embedding in production
+
+Batching giảm overhead nhưng phải xử lý rate limits/timeouts.
+
+```python
+from hashlib import sha256
+
+
+def content_hash(text: str) -> str:
+    return sha256(text.encode("utf-8")).hexdigest()
+
+
+def batch_items(items, batch_size=64):
+    for i in range(0, len(items), batch_size):
+        yield items[i:i + batch_size]
+
+
+def embed_corpus(chunks, embed_fn, model_name: str):
+    records = []
+    for batch in batch_items(chunks, batch_size=64):
+        texts = [c["text"] for c in batch]
+        vectors = embed_fn(texts)
+        for chunk, vector in zip(batch, vectors):
+            records.append({
+                "chunk_id": chunk["chunk_id"],
+                "doc_id": chunk["doc_id"],
+                "content_hash": content_hash(chunk["text"]),
+                "embedding_model": model_name,
+                "embedding": vector,
+            })
+    return records
+```
+
+Production additions:
+
+- retries with backoff,
+- idempotent chunk IDs,
+- failed batch retry queue,
+- rate limit handling,
+- store embedding model/version,
+- do not re-embed unchanged content.
+
+## Embedding versioning metadata
+
+Mỗi vector phải biết nó đến từ đâu.
+
+```json
+{
+  "doc_id": "policy_123",
+  "chunk_id": "policy_123#chunk_007",
+  "embedding_model": "text-embedding-3-large",
+  "embedding_dim": 3072,
+  "embedding_version": "2026-06",
+  "chunking_strategy": "heading-v2",
+  "content_hash": "abc123",
+  "created_at": "2026-06-27T10:00:00Z"
+}
+```
+
+Nếu đổi model hoặc chunking strategy, vector space cũ và mới không nên trộn lẫn.
+
+## Evaluation: retrieval quality
+
+Bạn cần query set có relevance labels:
+
+```json
+{
+  "query": "How do refunds work?",
+  "relevant_chunk_ids": ["refund_policy#c3", "refund_policy#c4"]
+}
+```
+
+Metrics:
+
+| Metric | Ý nghĩa |
+|---|---|
+| recall@k | relevant chunk có nằm trong top-k không |
+| MRR | relevant result xuất hiện sớm không |
+| nDCG | ranking tốt với nhiều mức relevance không |
+| hit rate | có ít nhất một relevant result không |
+
+## Hard negatives
+
+Hard negatives là chunks nhìn gần giống nhưng không đúng.
+
+Ví dụ query:
+
+```text
+refund policy for enterprise plan
+```
+
+Hard negative:
+
+```text
+refund policy for free plan
+```
+
+Embedding eval cần hard negatives để biết model có phân biệt chi tiết quan trọng không.
+
+## Common embedding failure modes
+
+| Failure | Example | Mitigation |
+|---|---|---|
+| Exact ID miss | `ERR-1042` | hybrid BM25 |
+| Numeric confusion | 30 days vs 60 days | reranker, exact checks |
+| Table weakness | pricing table | table-aware parsing |
+| Code identifiers | `getUserById` | code-aware search/sparse |
+| Domain jargon | medical/legal terms | domain embeddings |
+| Multilingual mismatch | Vietnamese query English docs | multilingual model |
+| Short query ambiguity | “billing” | query expansion/clarification |
+| Stale index | old embeddings | versioning/reindex |
+
+## Implementation lab: embedding benchmark
+
+**Goal:** so sánh 2–3 embedding models trên corpus thật nhỏ.
+
+Steps:
+
+1. Chuẩn bị 100 chunks.
+2. Tạo 50 queries với relevant chunk IDs.
+3. Embed corpus bằng model A/B/C.
+4. Retrieve top-k.
+5. Tính recall@3, recall@5, MRR.
+6. Ghi latency và cost.
+7. Inspect 10 failures.
+
+Result table:
+
+| Model | Dim | Recall@5 | MRR | Cost | Latency | Notes |
+|---|---:|---:|---:|---:|---:|---|
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: chọn embedding model không eval">
+Model popular chưa chắc tốt cho domain/ngôn ngữ của bạn. Luôn benchmark trên query-doc pairs thật.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: đổi embedding model mà không re-embed">
+Vector spaces khác nhau. Query vector model mới so với document vectors model cũ là bug nghiêm trọng.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: quên embedding metadata/version">
+Không lưu model/version/dimension/chunking strategy khiến migration, rollback và debugging gần như bất khả thi.
+</Callout>
+
+Checklist:
+
+1. Embedding model có support ngôn ngữ/domain không?
+2. Metric DB có khớp cách normalize không?
+3. Có relevance eval set không?
+4. Có hard negatives không?
+5. Có lưu embedding model/version/dim không?
+6. Có strategy re-embed khi đổi model không?
+7. Có hybrid search cho exact identifiers không?
+8. Có monitor retrieval drift không?
+
+## Practice exercises
+
+1. Tính storage raw vectors cho 5M chunks × 1024 dims.
+2. So sánh cosine và dot product trên normalized vectors.
+3. Tạo 20 queries và label relevant chunks.
+4. Benchmark 2 embedding models bằng recall@5.
+5. Tìm 5 hard negatives trong corpus của bạn.
+6. Thiết kế metadata schema cho embedding records.
+
+## Knowledge check
+
+1. Vì sao embedding model quyết định retrieval quality?
+2. Dense retrieval yếu ở loại query nào?
+3. Vì sao hybrid search hữu ích?
+4. Metric mismatch là gì?
+5. Đổi embedding model cần làm gì?
+6. Hard negative dùng để làm gì?
+7. Dimension cao có tradeoffs gì?
+
+## Answer key
+
+1. Nó định nghĩa vector space nơi query và chunks được so sánh.
+2. Exact IDs, numbers, code identifiers, rare tokens, bảng phức tạp.
+3. Sparse bắt exact match; dense bắt semantic similarity; hai loại bổ sung nhau.
+4. Cách tính similarity trong DB không khớp assumption của vectors/model.
+5. Re-embed corpus, update index metadata, rerun retrieval eval.
+6. Kiểm tra model có phân biệt chunks gần giống nhưng sai không.
+7. Tăng storage, memory, bandwidth, latency/cost; có thể diminishing returns.
+
+## Mini-project: Embedding model bakeoff
+
+**Task:** Chọn embedding model cho knowledge base nội bộ.
+
+**Deliverables:**
+
+- 200 chunks.
+- 50 labeled queries.
+- Benchmark ít nhất 2 models.
+- Metrics: recall@3, recall@5, MRR.
+- Cost/storage estimate.
+- Failure analysis.
+- Recommendation model + re-embedding plan.
+
+**Success criteria:**
+
+- Quyết định dựa trên eval, không dựa vào hype.
+- Có hard negatives.
+- Có metadata/versioning plan.
+- Có hybrid search recommendation nếu dense fails on exact IDs.
+
+## Điểm cần nhớ
+
+- Embeddings biến text thành vector space cho retrieval.
+- Embedding model là architecture decision cần eval.
+- Dense retrieval mạnh semantic nhưng yếu exact identifiers/numbers/code.
+- Metric, normalization và vector DB config phải khớp.
+- Không trộn embedding spaces khác nhau.
+- Retrieval eval với relevance labels là bắt buộc.
+
+## Next chapter bridge
+
+Embedding tốt vẫn fail nếu document được cắt sai. Chương tiếp theo: **Chunking Strategies** — cách chọn evidence units, chunk size, overlap, structure-aware splitting và metadata để retrieval hoạt động.

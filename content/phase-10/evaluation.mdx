@@ -1,0 +1,278 @@
+Đánh giá chất lượng (Evaluation) sau khi fine-tune là bước quan trọng nhất để chứng minh mô hình mới thực sự mang lại giá trị thực tiễn. Một mô hình có training loss giảm rất đẹp vẫn có thể bị sụp đổ khả năng suy luận, bị over-fitting, hoặc hành xử kém hơn mô hình nền ban đầu khi đưa ra thực tế. Ở cấp độ giáo sư AI engineering, đánh giá sau fine-tuning yêu cầu một **hệ thống kiểm thử đa tầng (multi-tier evaluation harness)** kết hợp giữa chỉ số học thuật (benchmarks), kiểm thử hồi quy (regression testing), giám sát bằng mô hình mạnh (LLM-as-judge) và đánh giá của con người (human evaluation).
+
+## Why this matters
+
+Trong thực tế vận hành mô hình sau fine-tuning, bạn sẽ gặp các rủi ro:
+
+- Mô hình đạt 99% accuracy trên tập train nhưng bị quá khớp (overfit) và trả lời sai lệch hoàn toàn khi gặp prompt của người dùng thực tế.
+- Chất lượng của tác vụ chuyên biệt tăng lên nhưng năng lực lập luận logic tổng quát hoặc khả năng ngôn ngữ tự nhiên bị suy giảm nghiêm trọng mà không được phát hiện sớm.
+- Sử dụng sai metrics để đánh giá (ví dụ: dùng BLEU/ROUGE để đo chất lượng viết code hoặc lý luận toán học phức tạp).
+- Đánh giá mô hình dựa trên cảm tính ("nhìn thử 5-10 câu thấy ổn") thay vì chạy kiểm thử tự động trên một tập holdout set đủ lớn.
+
+<Callout type="danger" title="Catastrophic Forgetting là có thật">
+Luôn luôn chạy kiểm thử hồi quy (regression testing) trên các tác vụ tổng quát (như MMLU hoặc một tập dữ liệu benchmark nội bộ) song song với việc đo lường tác vụ chuyên biệt. Nếu năng lực tổng quát của mô hình bị sụt giảm quá 5-10%, bạn cần phải giảm Learning Rate hoặc tăng tỷ lệ dữ liệu tổng quát (general dataset mixing) trong quá trình train.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Thiết lập quy trình đánh giá mô hình sau khi fine-tune theo chuẩn công nghiệp.
+2. Lựa chọn và áp dụng các chỉ số đánh giá phù hợp cho từng tác vụ: BLEU, ROUGE, F1, Accuracy, Pass@k.
+3. Giải thích toán học và cách đo chỉ số $Pass@k$ trong các tác vụ sinh mã nguồn.
+4. Sử dụng các bộ khung benchmark học thuật chuẩn: MMLU, HumanEval, MT-Bench.
+5. Thiết kế hệ thống đánh giá tự động sử dụng mô hình mạnh làm giám khảo (LLM-as-judge) có hiệu chỉnh (calibration).
+6. Thiết lập quy trình kiểm thử hồi quy (regression testing) phòng ngừa catastrophic forgetting.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- NLP Metrics (Phase 5): BLEU, ROUGE, F1, Accuracy, Exact Match.
+- Cấu trúc và hyperparameters của quá trình Fine-Tuning (Full FT, PEFT).
+- Cách sử dụng API của các mô hình thương mại lớn (như GPT-4o) làm judge.
+
+---
+
+## Academic Benchmarks vs Production Evals
+
+Chúng ta cần phân biệt rõ hai nhóm đánh giá:
+
+### 1. Academic Benchmarks (Đánh giá học thuật)
+Dùng để đo năng lực tổng quát của mô hình so với các mô hình khác trên thị trường:
+- **MMLU (Massive Multitask Language Understanding):** Đánh giá kiến thức đa ngành (nhân văn, khoa học xã hội, toán học, y học) qua câu hỏi trắc nghiệm.
+- **HumanEval:** Đánh giá khả năng viết code Python thông qua các bài toán lập trình tự động chạy unit tests để tính điểm $Pass@k$.
+- **GSM8K:** Đánh giá khả năng giải toán cấp tiểu học yêu cầu lý luận nhiều bước (multi-step reasoning).
+- **MT-Bench:** Đánh giá năng lực hội thoại nhiều lượt (multi-turn conversation) trên 8 lĩnh vực khác nhau.
+
+### 2. Production Evals (Đánh giá thực tế)
+Dùng để đo mức độ đáp ứng yêu cầu nghiệp vụ cụ thể của doanh nghiệp:
+- **Schema Adherence Rate:** Tỉ lệ mô hình trả về đúng định dạng JSON/XML yêu cầu.
+- **Groundedness / Faithfulness:** Tỉ lệ câu trả lời hoàn toàn dựa trên ngữ cảnh được cung cấp (không bịa đặt thông tin trong RAG).
+- **Domain Accuracy:** Độ chính xác trên tập dữ liệu holdout nội bộ.
+- **Safety / Toxicity Rate:** Tỉ lệ mô hình từ chối các câu hỏi độc hại hoặc rò rỉ thông tin nhạy cảm.
+
+---
+
+## Toán học của chỉ số $Pass@k$ trong sinh mã nguồn
+
+Khi đánh giá khả năng sinh mã nguồn (ví dụ trên benchmark HumanEval), việc chỉ lấy mẫu một câu duy nhất ($Pass@1$) sẽ không phản ánh đúng năng lực thực tế của mô hình do tính ngẫu nhiên của decoding (sampling). 
+
+Ta sinh ra $n$ mẫu ($n \ge k$) cho mỗi bài toán lập trình, chạy các unit tests trên cả $n$ mẫu này. Giả sử có $c$ mẫu vượt qua tất cả các unit tests. Chỉ số $Pass@k$ được định nghĩa là xác suất để **ít nhất một mẫu trong số $k$ mẫu được chọn ngẫu nhiên vượt qua kiểm thử**.
+
+Công thức toán học tính Pass@k là:
+
+Pass@k = 1 - \frac{\binom{n-c}{k}}{\binom{n}{k}} = 1 - \prod_{i=0}^{k-1} \frac{n - c - i}{n - i}
+
+Trong đó:
+- n: Tổng số mẫu sinh ra cho mỗi bài toán (thường đặt n=200).
+- c: Số lượng mẫu vượt qua unit tests (c \le n).
+- k: Số lượng mẫu được rút ra để đánh giá (ví dụ k=1, 5, 10).
+
+Nếu $n - c < k$, tức là số mẫu lỗi quá nhiều khiến số mẫu đúng còn lại ít hơn $k$, thì tỷ lệ $Pass@k$ được quy ước bằng $1.0$.
+
+---
+
+## LLM-as-a-Judge: Design and Calibration
+
+Với các tác vụ sinh văn bản tự do (open-ended generation), các chỉ số dựa trên so khớp từ như BLEU/ROUGE hoạt động rất kém do không bắt được ngữ nghĩa. Ta sử dụng một mô hình mạnh (như GPT-4o) đóng vai trò làm giám khảo chấm điểm dựa trên một thang đo (rubric) rõ ràng.
+
+### Quy trình thiết kế LLM-as-judge chuẩn:
+
+1. **Định nghĩa Rubric rõ ràng:** Tránh yêu cầu chung chung "Hãy chấm điểm từ 1 đến 10". Hãy chia nhỏ tiêu chí (ví dụ: Tính chính xác, Độ mạch lạc, Trích dẫn đúng nguồn) và định nghĩa rõ thế nào là 1 điểm, 3 điểm, 5 điểm.
+2. **Pairwise Comparison (Đánh giá cặp):** Đưa cho Judge câu trả lời của Model A và Model B (ẩn danh tính) và yêu cầu chọn câu tốt hơn. Điều này giúp loại bỏ bias thích câu dài hoặc phong cách viết của một mô hình cụ thể.
+3. **Position Bias Calibration (Hiệu chuẩn thiên kiến vị trí):** LLM thường có xu hướng ưu tiên chọn câu trả lời xuất hiện đầu tiên (vị trí A). Bạn phải chạy đánh giá 2 lần với vị trí của Model A và B được đảo ngược, chỉ ghi nhận kết quả nếu cả hai lượt đánh giá nhất quán.
+
+Ví dụ một prompt chuẩn cho LLM-as-judge:
+
+```text
+[System]
+You are an expert quality auditor. Evaluate the assistant's response based on the provided context and rubric.
+
+[Rubric]
+5 - Excellent: The response is fully accurate, directly answers the query, and uses only the provided context.
+3 - Moderate: The response is mostly correct but misses minor details or contains slight extrapolation.
+1 - Poor: The response contains factual errors, hallucinates information not in the context, or fails to answer the query.
+
+[Context]
+{context}
+
+[Query]
+{query}
+
+[Response]
+{response}
+
+[Output Format]
+Return ONLY a JSON object:
+{"score": 1|3|5, "rationale": "one sentence explanation"}
+```
+
+---
+
+## Regression Testing Pipeline
+
+Để đảm bảo quá trình fine-tune không phá hủy các năng lực sẵn có của mô hình nền, chúng ta cần chạy một pipeline kiểm thử hồi quy trước khi deploy.
+
+```text
+Fine-Tuned Checkpoint 
+   │
+   ├─── Chạy trên Tập Test Chuyên Biệt (SQL/Medical) ────> Target Metric >= 90%?
+   │
+   └─── Chạy trên Tập Test Tổng Quát (General QA) ───────> General Metric Decay <= 5%?
+   │
+   ▼
+Tập Holdout Test Set đạt → Thông qua để Release
+```
+
+---
+
+## Implementation lab: Automated Evaluation Harness
+
+**Nhiệm vụ:** Viết một script Python tự động hóa việc chạy đánh giá mô hình fine-tuned trên tập dữ liệu holdout, sử dụng GPT-4o-mini làm judge để tính điểm trung bình và tỉ lệ đạt yêu cầu.
+
+```python
+import json
+import os
+from openai import OpenAI
+
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# Tập dữ liệu kiểm thử holdout (không xuất hiện trong quá trình train)
+eval_dataset = [
+    {
+        "query": "Làm thế nào để yêu cầu hoàn tiền cho đơn hàng bị lỗi?",
+        "context": "Chính sách hoàn tiền: Khách hàng được hoàn tiền 100% nếu sản phẩm bị lỗi do nhà sản xuất và yêu cầu được gửi trong vòng 7 ngày kể từ khi nhận hàng.",
+        "model_output": "Bạn có thể yêu cầu hoàn tiền 100% nếu sản phẩm bị lỗi từ nhà sản xuất. Hãy gửi yêu cầu trong vòng 7 ngày kể từ lúc nhận được hàng."
+    },
+    {
+        "query": "Tôi có được hoàn tiền nếu đổi ý không muốn mua nữa không?",
+        "context": "Chính sách hoàn tiền: Không áp dụng hoàn tiền cho trường hợp khách hàng đổi ý hoặc không thích sản phẩm sau khi đã khui seal.",
+        "model_output": "Có, bạn vẫn được hoàn tiền bình thường nếu đổi ý, chỉ cần sản phẩm chưa dùng." # Lỗi: Sai lệch thông tin (Hallucination)
+    }
+]
+
+def evaluate_output(query, context, response):
+    prompt = f"""
+Evaluate the response based on the context.
+Context: {context}
+Query: {query}
+Response: {response}
+
+Return JSON: {{"score": 1|3|5, "reason": "why"}}
+"""
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.0
+        )
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e:
+        return {"score": 1, "reason": f"Judge failed: {str(e)}"}
+
+# Chạy đánh giá toàn bộ tập test
+scores = []
+for idx, case in enumerate(eval_dataset):
+    result = evaluate_output(case["query"], case["context"], case["model_output"])
+    scores.append(result["score"])
+    print(f"Case {idx+1} | Score: {result['score']} | Reason: {result['reason']}")
+
+mean_score = sum(scores) / len(scores)
+print(f"\nEvaluation Completed. Mean Quality Score: {mean_score:.2f} / 5.0")
+```
+
+---
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: Đánh giá mô hình bằng dữ liệu đã thấy (Data Leakage)">
+Nếu bạn chạy eval trên chính tập dữ liệu đã dùng để train, chỉ số độ chính xác sẽ cực kỳ cao nhưng hoàn toàn vô nghĩa khi deploy thực tế. Hãy luôn giữ riêng một tập **Holdout Test Set** (tối thiểu 10-20% dữ liệu sạch) không bao giờ cho mô hình tiếp cận trong lúc train.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: Đánh giá bằng cảm tính (Vibe Check)">
+Nhiều kỹ sư chỉ chat thử vài câu thấy mô hình trả lời hay và quyết định deploy. Mô hình ngôn ngữ có tính xác suất; một câu trả lời hay không đại diện cho toàn bộ phân phối đầu ra. Hãy luôn có tập test tự động hóa tối thiểu 100-200 cases.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: Judge model yếu hơn Candidate model">
+Nếu bạn dùng một mô hình nhỏ (ví dụ 7B) để làm judge đánh giá chất lượng đầu ra của một mô hình lớn hơn hoặc tương đương, kết quả chấm điểm sẽ không chính xác và bị nhiễu do năng lực suy luận của judge kém hơn. Luôn dùng các mô hình đỉnh cao (như GPT-4o, Claude 3.5 Sonnet) làm judge.
+</Callout>
+
+### Checklist đánh giá chất lượng:
+
+- [ ] Đã tách biệt hoàn toàn tập Holdout Test Set chưa?
+- [ ] Có chạy kiểm thử hồi quy để đo mức độ suy giảm năng lực tổng quát (catastrophic forgetting) chưa?
+- [ ] Judge model có sử dụng prompt với rubric rõ ràng và định dạng đầu ra JSON không?
+- [ ] Đã xử lý lỗi Position Bias trong trường hợp chạy Pairwise Comparison chưa?
+- [ ] Các metrics được chọn (BLEU, ROUGE, F1, Pass@k) có phù hợp với đặc thù tác vụ không?
+- [ ] Có thực hiện đánh giá thủ công (human-in-the-loop) ngẫu nhiên để calibrate lại judge model không?
+
+---
+
+## Practice exercises
+
+1. **Đánh giá mô hình của bạn:** Tạo một tập dữ liệu gồm 30 câu hỏi/đáp chuyên ngành của bạn, thiết lập rubric chấm điểm 3 tiêu chí, và chạy đánh giá so sánh giữa mô hình gốc (base) và mô hình sau khi fine-tune.
+2. **Tính toán Pass@k:** Viết một script Python tính toán chỉ số $Pass@k$ dựa trên kết quả chạy unit tests thực tế từ một tập hợp $n=100$ đoạn code sinh ra cho 5 bài toán lập trình.
+3. **Thiết lập hệ thống phát hiện Position Bias:** Viết code chạy pairwise evaluation đảo ngược vị trí A-B của câu trả lời và đo lường tỷ lệ không nhất quán của judge model trên 50 ví dụ.
+
+---
+
+## Knowledge check
+
+1. Tại sao chỉ số training loss thấp không đồng nghĩa với việc mô hình hoạt động tốt ngoài thực tế?
+2. Sự khác biệt giữa chỉ số BLEU và ROUGE trong đánh giá văn bản là gì?
+3. $Pass@k$ hoạt động như thế nào trong các tác vụ sinh mã nguồn (code generation)?
+4. Làm thế nào để loại bỏ hiện tượng thiên kiến vị trí (position bias) của LLM-as-judge?
+5. Tại sao ta cần chạy kiểm thử hồi quy (regression testing) sau khi fine-tune?
+
+---
+
+## Answer key
+
+1. Vì mô hình có thể đã bị quá khớp (overfitting) vào các cụm từ cụ thể của tập train, hoặc bị suy sụp năng lực suy luận tổng quát mà loss không thể hiển thị.
+2. BLEU tập trung đo độ chính xác (precision) của n-grams (phù hợp cho dịch thuật); ROUGE tập trung đo độ phủ (recall) của n-grams (phù hợp cho tóm tắt văn bản).
+3. Nó sinh ra $n$ mẫu cho mỗi bài toán, chạy unit tests cho từng đoạn; chỉ cần có ít nhất 1 đoạn vượt qua toàn bộ unit tests trong số $k$ mẫu rút ra ngẫu nhiên thì được tính là pass.
+4. Đảo ngược vị trí hiển thị của các câu trả lời (A/B thành B/A) khi đưa vào prompt của judge và chỉ chấp nhận kết quả nếu cả hai lượt chấm đều chọn cùng một mô hình thắng cuộc.
+5. Để phát hiện và ngăn chặn hiện tượng catastrophic forgetting, đảm bảo mô hình không bị mất đi các năng lực cơ bản sẵn có sau khi học tác vụ mới.
+
+---
+
+## Mini-project: Automated LLM Evaluation Platform
+
+### Nhiệm vụ:
+Xây dựng một công cụ CLI bằng Python để tự động đánh giá và so sánh hai checkpoints mô hình sau khi huấn luyện.
+
+### Yêu cầu đầu ra:
+- Nhận đầu vào là file JSON chứa danh sách các câu test (query, context, expected_answer).
+- Gọi suy luận từ hai mô hình khác nhau để lấy câu trả lời.
+- Sử dụng GPT-4o-mini làm judge để chấm điểm độc lập từng câu trả lời theo rubric 3 tiêu chí: Accuracy, Groundedness, Clarity.
+- Tính toán và xuất ra bảng báo cáo chi tiết: điểm trung bình từng tiêu chí, tỉ lệ win/loss của mô hình A vs B, và danh sách các câu bị điểm kém (score = 1) để kỹ sư phân tích lỗi.
+
+---
+
+## Điểm cần nhớ
+
+- Đánh giá chất lượng sau fine-tuning là bắt buộc để kiểm soát overfitting và catastrophic forgetting.
+- BLEU/ROUGE phù hợp cho so khớp từ; LLM-as-a-judge phù hợp cho đánh giá ngữ nghĩa tự do.
+- Luôn calibrate judge model bằng rubric chi tiết và xử lý position bias.
+- Thiết lập hệ thống kiểm thử hồi quy để giữ vững năng lực nền của mô hình.
+
+---
+
+## Phase 10 wrap-up
+
+Bạn đã hoàn thành toàn bộ chuyên đề **Fine-Tuning & Model Customization**:
+
+1. **When to Fine-Tune:** Hiểu rõ ranh giới kỹ thuật và tradeoffs giữa Prompt, RAG và Fine-Tuning.
+2. **Full Fine-Tuning:** Làm chủ pipeline huấn luyện toàn bộ tham số, Chat Templates và cách tối ưu hóa VRAM.
+3. **Parameter-Efficient Fine-Tuning (PEFT):** Nắm vững cơ chế toán học của LoRA/QLoRA để train mô hình lớn trên phần cứng giới hạn.
+4. **Fine-Tuning Tools:** Làm chủ hệ sinh thái Unsloth, Axolotl, LLaMA-Factory và Weights & Biases.
+5. **Dataset Preparation:** Xây dựng quy trình làm sạch, lọc trùng lặp bằng MinHash LSH và Dataset Mixing.
+6. **Evaluation After Fine-Tuning:** Thiết lập hệ thống đánh giá tự động bằng LLM-as-judge và kiểm thử hồi quy bảo vệ mô hình.
+
+---
+
+## Next phase bridge
+
+Sau khi đã làm chủ các kỹ năng xử lý văn bản, tối ưu hóa prompt, RAG, agents và fine-tuning mô hình ngôn ngữ lớn, chúng ta sẽ mở rộng ranh giới của Generative AI ra các định dạng truyền thông khác. Chương tiếp theo: **Generative AI (Beyond Text)** — khám phá thế giới của mô hình khuếch tán (Diffusion Models), VAEs, GANs, xử lý hình ảnh (Vision-Language Models), âm thanh (STT/TTS) và video AI thế hệ mới.

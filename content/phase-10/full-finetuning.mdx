@@ -1,0 +1,372 @@
+Full Fine-Tuning (huấn luyện toàn bộ tham số) là phương pháp cập nhật lại toàn bộ các trọng số của mạng neural trong quá trình thích ứng mô hình. Khác với các phương pháp hiệu quả tham số (PEFT) chỉ cập nhật một phần cực nhỏ, Full Fine-Tuning thay đổi sâu sắc toàn bộ không gian biểu diễn (representation space) của mô hình nền (base model). Điều này giúp mô hình đạt được hiệu năng tối đa trên các tác vụ cực khó, nhưng đòi hỏi tài nguyên tính toán (VRAM, compute) khổng lồ và quy trình quản lý gradient nghiêm ngặt để tránh sụp đổ mô hình.
+
+## Why this matters
+
+Trong kỹ nghệ AI ở quy mô sản xuất (production), hiểu và làm chủ Full Fine-Tuning giúp bạn:
+
+- Tối ưu hóa triệt để mô hình cho một ngôn ngữ hoặc domain cực khó mà các phương pháp PEFT (như LoRA) chưa đạt chất lượng mong muốn do giới hạn dung lượng biểu diễn (representation capacity).
+- Tận dụng tối đa các dịch vụ API Fine-Tuning đám mây (như OpenAI, Anyscale) khi không muốn tự quản lý hạ tầng GPU phức tạp.
+- Tránh các lỗi sập nguồn bộ nhớ (Out-Of-Memory - OOM) bằng cách tính toán chính xác nhu cầu VRAM cho Optimizer (ví dụ: AdamW cần gấp 4 lần bộ nhớ so với việc chỉ chứa model weights).
+- Thiết lập đúng các siêu tham số (hyperparameters) như Learning Rate và Batch Size để tránh làm sụp đổ mô hình nền (model collapse).
+
+<Callout type="danger" title="AdamW Optimizer là kẻ ngốn VRAM thực sự">
+Khi chạy Full Fine-Tuning với thuật toán AdamW, mỗi tham số cần lưu trữ: Trọng số (2 bytes ở FP16), Gradient (2 bytes), và 2 trạng thái của optimizer (8 bytes cho momentum và variance dưới dạng FP32). Tổng cộng bạn cần ít nhất 12-16 bytes VRAM cho mỗi tham số. Một mô hình 7B cần tối thiểu 84GB - 112GB VRAM chỉ để chứa mô hình và optimizer, chưa tính kích thước batch và activations.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích cơ chế toán học và phân bổ bộ nhớ chi tiết của Full Fine-Tuning.
+2. Định dạng dữ liệu chuẩn cho Supervised Fine-Tuning (SFT) dưới dạng Chat Templates.
+3. Sử dụng OpenAI Fine-Tuning API để huấn luyện các mô hình thương mại.
+4. Sử dụng HuggingFace `Trainer` API để tự chạy pipeline huấn luyện cục bộ hoặc trên cloud.
+5. Cấu hình các siêu tham số quan trọng: Learning Rate, Warmup Steps, Weight Decay, Gradient Accumulation.
+6. Áp dụng kỹ thuật Gradient Checkpointing và Mixed Precision (FP16/BF16) để tiết kiệm VRAM.
+7. Hiểu cơ chế phân tán mô hình của DeepSpeed (ZeRO-1, ZeRO-2, ZeRO-3) và FSDP.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Nền tảng mạng neural và lan truyền ngược (Backpropagation) ở Phase 3.
+- Khái niệm Cross-Entropy Loss và Tokenization ở Phase 5.
+- Cách sử dụng HuggingFace `transformers` và `datasets` cơ bản.
+
+---
+
+## Toán học của Supervised Fine-Tuning (SFT)
+
+Trong quá trình huấn luyện SFT, mô hình được tối ưu hóa bằng phương pháp học có giám sát trên các cặp dữ liệu {(x, y)} trong đó x là prompt (user) và y là target response (assistant).
+
+Mục tiêu là cực tiểu hóa hàm mất mát Cross-Entropy Loss trên chuỗi tokens đầu ra của Assistant. Với chuỗi input X = {x_1, x_2, ..., x_N} và chuỗi target Y = {y_1, y_2, ..., y_M}, hàm loss được tính như sau:
+
+L(theta) = -\sum_{t=1}^{M} \log P_theta(y_t \mid x_1, ..., x_N, y_1, ..., y_{t-1})
+
+Trong đó P_theta là xác suất phân phối được dự đoán bởi mô hình có tham số theta thông qua hàm Softmax trên lớp logits đầu ra:
+
+P_theta(y_t \mid \text{context}) = \frac{e^{z_{y_t}}}{\sum_{j=1}^{V} e^{z_j}}
+
+Với $V$ là kích thước từ vựng (vocabulary size) và $z$ là logits đầu ra của mô hình trước khi đi qua lớp Softmax.
+
+### Cơ chế Loss Masking (Mặt nạ Loss) trong PyTorch
+Khi huấn luyện SFT cho causal language models, toàn bộ chuỗi (cả prompt và response) được đưa vào mô hình dưới dạng một sequence duy nhất để tận dụng cơ chế song song hóa của Transformer. Tuy nhiên, ta chỉ muốn mô hình học cách sinh ra câu trả lời của Assistant ($Y$), không phải học cách sinh lại câu hỏi của User ($X$).
+
+Để làm điều này, ta sử dụng cơ chế **Loss Masking**. Trong PyTorch, nhãn của tất cả các token thuộc về $X$ (prompt) được đặt thành một giá trị đặc biệt là `-100`. 
+
+Hàm `torch.nn.Cross-EntropyLoss(ignore_index=-100)` sẽ tự động bỏ qua bất kỳ token nào có nhãn là `-100` trong quá trình tính toán loss và gradient:
+
+```text
+Tokens:       [User]  How   are   you   ?  [Assistant]  I     am    fine  .
+Labels:        -100  -100  -100  -100  -100   -100      I     am    fine  .
+Loss Calc:      Bỏ    Bỏ    Bỏ    Bỏ    Bỏ     Bỏ      Tính  Tính  Tính  Tính
+```
+
+Điều này đảm bảo gradient chỉ chảy qua các trọng số chịu trách nhiệm sinh ra câu trả lời của Assistant.
+
+---
+
+## Phân bổ bộ nhớ VRAM chi tiết (Memory Allocation Math)
+
+Khi lập kế hoạch huấn luyện, bạn phải tính toán chính xác lượng VRAM cần thiết để tránh lỗi Out-Of-Memory (OOM). Bộ nhớ VRAM của GPU được chia thành 4 phần chính:
+
+### 1. Model Weights (Trọng số mô hình)
+Lưu trữ các tham số $\theta$ của mô hình.
+- Ở chế độ FP32 (float32): 4 bytes/parameter.
+- Ở chế độ FP16/BF16: 2 bytes/parameter.
+- Ở chế độ quantized 8-bit / 4-bit: 1 byte / 0.5 byte tương ứng.
+
+### 2. Gradients (Độ dốc)
+Lưu trữ các giá trị đạo hàm riêng $\nabla \mathcal{L}$ tính toán trong quá trình backward pass.
+- Thường được lưu trữ cùng kiểu dữ liệu với weights (FP16/BF16): 2 bytes/parameter.
+
+### 3. Optimizer States (Trạng thái bộ tối ưu hóa)
+Nếu dùng **AdamW** (bộ tối ưu hóa phổ biến nhất), hệ thống cần lưu trữ hai trạng thái động cho mỗi tham số:
+- $m_t$ (first moment vector - momentum): 4 bytes (FP32).
+- $v_t$ (second moment vector - uncentered variance): 4 bytes (FP32).
+- Trọng số master weights (ở FP32 để cập nhật chính xác): 4 bytes.
+- **Tổng cộng:** 12 bytes/parameter cho AdamW. (Nếu dùng SGD, chỉ cần 4-8 bytes).
+
+### 4. Activation Memory (Bộ nhớ kích hoạt)
+Lưu trữ các giá trị đầu ra của mỗi layer trong quá trình forward pass để phục vụ việc tính đạo hàm ở backward pass. Kích thước này phụ thuộc tuyến tính vào:
+- Kích thước batch ($B$),
+- Độ dài chuỗi ($L$),
+- Số lượng layers ($n_{layers}$),
+- Số lượng attention heads ($n_{heads}$).
+
+$$\text{Activation Memory} \propto B \times L \times d_{model} \times n_{layers}$$
+
+```text
++-----------------------------------------------------------------------------+
+|                            VRAM ALLOCATION (AdamW)                          |
++-----------------------------------------------------------------------------+
+|                                                                             |
+|  [Model Weights] (2 bytes)   [Gradients] (2 bytes)  [Optimizer] (12 bytes)   |
+|  =========================   =====================  ======================  |
+|  - Trọng số mô hình tĩnh     - Đạo hàm backward     - Master weights        |
+|                              - Cập nhật mỗi step    - Momentum & Variance   |
+|                                                                             |
+|  [Activation Memory] (Biến thiên theo Batch Size x Sequence Length)         |
+|  ==================================================================         |
+|  - Lưu trữ outputs của các layer trong forward pass để dùng cho backward    |
+|                                                                             |
++-----------------------------------------------------------------------------+
+```
+
+---
+
+## Kỹ thuật tối ưu hóa bộ nhớ phần cứng
+
+Để chạy được Full Fine-Tuning trên phần cứng giới hạn, chúng ta bắt buộc phải sử dụng các kỹ thuật tối ưu hóa sau:
+
+### 1. Mixed Precision Training (FP16 vs BF16)
+Thay vì sử dụng FP32 cho toàn bộ quá trình, ta sử dụng kiểu dữ liệu 16-bit để tính toán.
+- **FP16:** Có 5 bits cho exponent và 10 bits cho mantissa. Do dải biểu diễn hẹp, FP16 rất dễ bị lỗi tràn số dưới (underflow). Ta bắt buộc phải dùng **Loss Scaling** (nhân loss với một hệ số lớn trước khi tính gradient, sau đó chia lại trước khi cập nhật) để tránh gradient biến thành 0.
+- **BF16 (Bfloat16):** Có 8 bits cho exponent và 7 bits cho mantissa (dải biểu diễn giống hệt FP32). BF16 không cần loss scaling và cực kỳ ổn định trong quá trình huấn luyện, là lựa chọn mặc định trên các dòng GPU hiện đại (Ampere như A100, H100, RTX 3090/4090).
+
+### 2. Gradient Checkpointing (Recomputation)
+Trong một mạng neural sâu, Activation Memory chiếm phần lớn VRAM. Thay vì lưu trữ activations của tất cả các layer trong quá trình forward pass, **Gradient Checkpointing** chỉ lưu trữ activations ở biên của một vài block (checkpoints). 
+
+Khi chạy backward pass, các activations bị thiếu sẽ được tính toán lại (recomputed) từ checkpoint gần nhất.
+- **Trade-off:** Tiết kiệm tới 60-70% Activation Memory, cho phép tăng batch size, đổi lại mô hình phải tốn thêm ~20-25% thời gian tính toán do phải chạy lại một phần forward pass.
+
+### 3. Gradient Accumulation
+Khi VRAM của bạn chỉ đủ chứa batch size = 1 (do chuỗi quá dài), nhưng mô hình cần batch size = 16 để hội tụ ổn định. 
+- **Giải pháp:** Ta chạy 16 bước forward/backward liên tiếp với batch size = 1, cộng dồn (accumulate) gradient lại mà không cập nhật trọng số. Đến bước thứ 16, ta mới gọi `optimizer.step()` để cập nhật trọng số một lần duy nhất. Điều này giúp giả lập batch size lớn một cách hoàn hảo mà không tốn thêm VRAM.
+
+---
+
+## Hạ tầng huấn luyện phân tán (Distributed Training)
+
+Khi một mô hình vượt quá dung lượng VRAM của một GPU duy nhất, ta cần phân tán mô hình trên nhiều GPU. Hai công cụ mạnh mẽ nhất hiện nay là **DeepSpeed** và **FSDP (Fully Sharded Data Parallel)**.
+
+### DeepSpeed ZeRO (Zero Redundancy Optimizer)
+DeepSpeed loại bỏ sự trùng lặp bộ nhớ trên các GPU bằng cách phân tách (sharding) các thành phần huấn luyện:
+
+- **ZeRO-Stage 1:** Phân tách các trạng thái của Optimizer (AdamW states) trên các GPU. Mỗi GPU chỉ cập nhật 1 phần của optimizer. (Tiết kiệm ~4x VRAM).
+- **ZeRO-Stage 2:** Phân tách cả Optimizer States và Gradients. (Tiết kiệm ~8x VRAM).
+- **ZeRO-Stage 3:** Phân tách toàn bộ Optimizer States, Gradients và cả Trọng số mô hình (Model Weights). Khi chạy forward/backward, các GPU sẽ truyền thông tin cho nhau thông qua all-gather communication để lấy phần trọng số cần thiết tại thời điểm đó, sau đó giải phóng ngay lập tức.
+- **ZeRO-Offload:** Cho phép chuyển bớt trạng thái của optimizer và weights sang RAM của CPU hoặc SSD khi VRAM của GPU bị quá tải.
+
+```text
+                  DEEPSPEED ZeRO SHARDING
+                 /           |            \
+       [ZeRO-1]               [ZeRO-2]               [ZeRO-3]
+   Shard Optimizer        Shard Optimizer        Shard Optimizer
+        States             + Gradients            + Gradients
+                                                  + Model Weights
+```
+
+---
+
+## HuggingFace Trainer API Implementation
+
+Dưới đây là một script hoàn chỉnh thiết lập Full Fine-Tuning mô hình Qwen-1.8B sử dụng HuggingFace `Trainer` kết hợp với cấu hình tối ưu hóa bộ nhớ sâu.
+
+```python
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from datasets import load_dataset
+from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+
+model_id = "Qwen/Qwen2.5-1.5B-Instruct"
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+tokenizer.pad_token = tokenizer.eos_token
+
+# 1. Load Model ở chế độ BF16 (Yêu cầu GPU Ampere trở lên)
+model = AutoModelForCausalLM.from_pretrained(
+    model_id,
+    torch_dtype=torch.bfloat16,
+    device_map="auto"
+)
+
+# Kích hoạt Gradient Checkpointing để tiết kiệm VRAM
+model.gradient_checkpointing_enable()
+
+# 2. Chuẩn bị dataset dạng ShareGPT
+dataset = load_dataset("json", data_files={"train": "train_data.json"})
+
+# 3. Cấu hình Data Collator để chỉ tính Loss trên câu trả lời của Assistant
+# Tokenizer của Qwen2.5 dùng "<|im_start|>assistant\n" làm mốc bắt đầu câu trả lời
+response_template = "<|im_start|>assistant\n"
+collator = DataCollatorForCompletionOnlyLM(
+    response_template=response_template,
+    tokenizer=tokenizer
+)
+
+# 4. Thiết lập siêu tham số huấn luyện (Hyperparameters)
+training_args = TrainingArguments(
+    output_dir="./qwen-full-sft",
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=8, # Effective Batch Size = 16
+    learning_rate=2e-5,            # Learning Rate rất nhỏ cho Full FT
+    lr_scheduler_type="cosine",    # Giảm dần LR theo đường cong cosine
+    warmup_ratio=0.03,             # 3% số bước đầu tiên để tăng dần LR
+    weight_decay=0.01,             # Phạt L2 để tránh overfit
+    num_train_epochs=3,
+    bf16=True,                     # Dùng BF16
+    logging_steps=1,
+    save_strategy="epoch",
+    evaluation_strategy="no",
+    optim="adamw_torch",           # Bộ tối ưu hóa AdamW tiêu chuẩn
+    gradient_checkpointing=True    # Bật checkpointing tại Trainer
+)
+
+# 5. Khởi tạo SFTTrainer
+trainer = SFTTrainer(
+    model=model,
+    train_dataset=dataset["train"],
+    data_collator=collator,
+    max_seq_length=1024,
+    tokenizer=tokenizer,
+    args=training_args
+)
+
+# 6. Bắt đầu huấn luyện
+trainer.train()
+```
+
+---
+
+## Implementation lab: Memory & Batch Size Calculator
+
+**Nhiệm vụ:** Viết một script Python phân tích hệ thống để tính toán chính xác lượng VRAM cần thiết cho quá trình huấn luyện và đề xuất mức Batch Size tối ưu cùng cấu hình DeepSpeed phù hợp.
+
+```python
+def estimate_training_memory(model_size_billions, seq_len, batch_size, optimizer="adamw", zero_stage=0, use_checkpointing=True):
+    # Trọng số mô hình ở FP16 (2 bytes/param)
+    model_bytes = model_size_billions * 1e9 * 2
+    
+    # Gradients ở FP16 (2 bytes/param)
+    grad_bytes = model_size_billions * 1e9 * 2
+    
+    # Optimizer States (AdamW = 8 bytes cho states + 4 bytes cho master weights ở FP32 = 12 bytes)
+    opt_bytes = model_size_billions * 1e9 * 12
+
+    # Áp dụng cơ chế sharding của DeepSpeed ZeRO
+    if zero_stage == 1:
+        opt_bytes = opt_bytes / 2 # Giả định phân tán trên 2 GPUs
+    elif zero_stage == 2:
+        opt_bytes = opt_bytes / 2
+        grad_bytes = grad_bytes / 2
+    elif zero_stage == 3:
+        opt_bytes = opt_bytes / 2
+        grad_bytes = grad_bytes / 2
+        model_bytes = model_bytes / 2
+
+    # Ước tính Activation Memory (dựa trên thực nghiệm cấu hình transformer tiêu chuẩn)
+    # Nếu dùng checkpointing, ta chỉ lưu activations của 1 layer thay vì toàn bộ layers
+    layers = 32
+    hidden_dim = 4096
+    if use_checkpointing:
+        activation_bytes = batch_size * seq_len * hidden_dim * 2 # Chỉ lưu trữ biên
+    else:
+        activation_bytes = batch_size * seq_len * hidden_dim * layers * 4
+
+    total_bytes = model_bytes + grad_bytes + opt_bytes + activation_bytes
+    # Cộng thêm 15% overhead cho CUDA context và lưu trữ tạm thời
+    total_gb = (total_bytes / (1024 ** 3)) * 1.15
+
+    return {
+        "Model Weights (GB)": round(model_bytes / (1024 ** 3), 2),
+        "Gradients (GB)": round(grad_bytes / (1024 ** 3), 2),
+        "Optimizer States (GB)": round(opt_bytes / (1024 ** 3), 2),
+        "Activation Memory (GB)": round(activation_bytes / (1024 ** 3), 2),
+        "Total Estimated VRAM (GB)": round(total_gb, 2)
+    }
+
+# Chạy thử nghiệm ước tính cho mô hình 7B
+report = estimate_training_memory(
+    model_size_billions=7.0,
+    seq_len=2048,
+    batch_size=2,
+    zero_stage=2,
+    use_checkpointing=True
+)
+for k, v in report.items():
+    print(f"{k}: {v}")
+```
+
+---
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: Quên cấu hình Pad Token cho Tokenizer">
+Hầu hết các mô hình decoder-only (như LLaMA, Qwen) không có pad token mặc định vì chúng được train ở chế độ tự hồi quy liên tục. Nếu bạn không thiết lập `tokenizer.pad_token = tokenizer.eos_token`, quá trình collation dữ liệu thành batch sẽ báo lỗi hoặc sinh ra padding vô tận làm tràn bộ nhớ.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: Sử dụng FP16 trên GPU Ampere nhưng bị lỗi NaNs loss">
+Trên các dòng GPU kiến trúc Ampere trở lên (A100, H100, RTX 3090/4090), việc dùng FP16 rất dễ gây ra lỗi tràn số (overflow) làm loss biến thành `NaN`. Hãy luôn ưu tiên sử dụng `bf16=True` vì BF16 có dải số tương đương FP32.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: Tính toán loss trên cả phần prompt của User">
+Nếu bạn không sử dụng `DataCollatorForCompletionOnlyLM` hoặc không mask phần prompt bằng nhãn `-100`, mô hình sẽ học cả cách viết câu hỏi của User. Kết quả là mô hình sau khi train sẽ bị lặp lại câu hỏi của bạn thay vì trả lời.
+</Callout>
+
+### Checklist gỡ lỗi Full Fine-Tuning:
+
+- [ ] Tokenizer đã được cấu hình `pad_token` trùng với `eos_token` chưa?
+- [ ] Đã cấu hình `gradient_checkpointing=True` để giải phóng Activation Memory chưa?
+- [ ] Đã sử dụng đúng kiểu dữ liệu `bf16=True` trên GPU hỗ trợ chưa?
+- [ ] Giá trị loss có bị nhảy lên `NaN` ở các step đầu tiên không? (Nếu có -> Giảm Learning Rate xuống $1e-5$ hoặc chuyển sang BF16).
+- [ ] Đã cấu hình đúng `response_template` trong Data Collator để mask phần prompt của User chưa?
+- [ ] Nếu chạy multi-GPU, đã cấu hình tập lệnh chạy bằng `accelerate launch` hoặc thiết lập file config cho DeepSpeed chưa?
+
+---
+
+## Practice exercises
+
+1. **Viết Custom Dataset Masking:** Viết một lớp PyTorch `Dataset` tùy chỉnh nhận vào danh sách các hội thoại dạng ChatML và tự động gán nhãn `-100` cho tất cả các token nằm trước thẻ `<|im_start|>assistant`.
+2. **Cấu hình DeepSpeed:** Viết một file cấu hình JSON cho DeepSpeed ZeRO-Stage 3 bao gồm các thông số cấu hình offload optimizer states sang CPU RAM để chạy huấn luyện mô hình 13B trên 2 GPU 24GB VRAM.
+3. **Thử nghiệm tỉ lệ hội tụ:** Thực hiện quá trình huấn luyện mô hình nhỏ (dưới 1B tham số) với hai mức Learning Rate khác nhau: $1e-4$ và $2e-5$. Vẽ biểu đồ loss của hai quá trình huấn luyện để quan sát hiện tượng bùng nổ gradient (gradient explosion).
+
+---
+
+## Knowledge check
+
+1. Tại sao AdamW optimizer lại cần tới 12 bytes VRAM cho mỗi tham số trong quá trình huấn luyện?
+2. Kỹ thuật Gradient Checkpointing giúp tiết kiệm bộ nhớ như thế nào và cái giá phải đánh đổi là gì?
+3. Tại sao kiểu dữ liệu BF16 lại ưu việt hơn FP16 trong quá trình huấn luyện các mô hình ngôn ngữ lớn?
+4. Ý nghĩa của giá trị `-100` trong hàm tính loss `CrossEntropyLoss` của PyTorch là gì?
+5. Sự khác biệt cốt lõi giữa DeepSpeed ZeRO-Stage 2 và ZeRO-Stage 3 là gì?
+6. Khi nào ta cần sử dụng Gradient Accumulation?
+
+---
+
+## Answer key
+
+1. Vì AdamW cần lưu trữ: 4 bytes cho trọng số master (FP32), 4 bytes cho momentum (trạng thái động thứ nhất), và 4 bytes cho variance (trạng thái động thứ hai) để đảm bảo cập nhật số thực chính xác.
+2. Nó giải phóng bộ nhớ kích hoạt (activations) của forward pass và chỉ tính toán lại chúng khi cần thiết ở backward pass. Đánh đổi lại là tăng ~20-25% thời gian huấn luyện.
+3. BF16 có số lượng bit dành cho phần mũ (exponent) giống hệt FP32, giúp dải biểu diễn số cực rộng, loại bỏ hoàn toàn lỗi tràn số (underflow/overflow) mà không cần cơ chế scale loss phức tạp của FP16.
+4. Nó là giá trị mặc định của `ignore_index` trong PyTorch, chỉ thị cho hàm loss bỏ qua token đó, không tính vào giá trị loss trung bình và không lan truyền ngược gradient.
+5. ZeRO-Stage 2 chỉ phân tách (shard) Optimizer States và Gradients trên các GPU. ZeRO-Stage 3 phân tách cả ba thành phần: Optimizer States, Gradients, và Model Weights.
+6. Khi VRAM của GPU quá nhỏ không thể chứa nổi một batch size lớn đủ để mô hình hội tụ ổn định. Ta chia nhỏ batch và cộng dồn gradient qua nhiều bước trước khi cập nhật.
+
+---
+
+## Mini-project: Full SFT Pipeline with HuggingFace
+
+### Nhiệm vụ:
+Hãy viết một file Python hoàn chỉnh (`run_sft.py`) để chạy Full Fine-Tuning mô hình `Qwen/Qwen2.5-1.5B-Instruct` trên một tập dữ liệu hội thoại khách hàng dạng JSON.
+
+### Yêu cầu kỹ thuật:
+- Tải dữ liệu từ file JSON cục bộ, tự động format sang ChatML template.
+- Sử dụng `DataCollatorForCompletionOnlyLM` để mask phần prompt của User.
+- Bật cấu hình `bf16=True`, `gradient_checkpointing=True`, và sử dụng `Gradient Accumulation` với hiệu số batch size tương đương 16.
+- Kết nối pipeline với Weights & Biases để log loss theo thời gian thực.
+- Lưu mô hình sau khi kết thúc quá trình huấn luyện và viết code test suy luận (inference) thử nghiệm trên mô hình mới.
+
+---
+
+## Điểm cần nhớ
+
+- Full Fine-Tuning cập nhật toàn bộ trọng số mô hình, đòi hỏi tài nguyên tính toán cực kỳ lớn.
+- Sử dụng Loss Masking với nhãn `-100` để mô hình chỉ tập trung học cách sinh ra câu trả lời của Assistant.
+- Áp dụng BF16, Gradient Checkpointing và Gradient Accumulation để tối ưu hóa tối đa dung lượng VRAM.
+- Sử dụng các công cụ phân tán như DeepSpeed ZeRO khi kích thước mô hình vượt quá dung lượng 1 GPU.
+
+---
+
+## Next chapter bridge
+
+Full Fine-Tuning mang lại độ chính xác cao nhất nhưng rào cản về tài nguyên tính toán (VRAM) là cực kỳ lớn đối với các nhà phát triển độc lập hoặc doanh nghiệp nhỏ. Chương tiếp theo: **Parameter-Efficient Fine-Tuning (PEFT)** — tìm hiểu cách thích ứng các mô hình lớn (như LLaMA 70B) trên phần cứng tối giản bằng cách chỉ huấn luyện dưới 1% tham số thông qua các phương pháp đột phá như LoRA và QLoRA.

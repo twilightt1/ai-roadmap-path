@@ -1,0 +1,428 @@
+Chunking là information architecture của RAG. Bạn không retrieve “document”; bạn retrieve **đơn vị bằng chứng**. Chunk quá nhỏ mất ngữ cảnh, chunk quá lớn làm retrieval nhiễu và đốt context budget. Một RAG system tốt bắt đầu bằng câu hỏi: **đơn vị kiến thức nào nên được retrieve để trả lời câu hỏi?**
+
+## Why this matters
+
+Bad chunking làm embedding model tốt cũng trông như kém:
+
+- Relevant fact bị cắt khỏi điều kiện quan trọng.
+- Heading/section bị mất nên chunk mơ hồ.
+- Table bị tách sai làm số liệu vô nghĩa.
+- Chunk quá dài retrieve vì một từ liên quan nhưng chứa nhiều noise.
+- Overlap quá lớn làm top-k toàn chunks trùng nhau.
+- Citation trỏ đến chunk không đủ thông tin.
+
+<Callout type="warning" title="Chunking quyết định evidence unit">
+Nếu evidence unit sai, retrieval sai ngay từ data design. Đừng xem chunking là preprocessing phụ; nó là kiến trúc thông tin của RAG.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích mục tiêu của chunking trong RAG.
+2. So sánh fixed-size, sentence, recursive, structure-aware, semantic và parent-child chunking.
+3. Chọn chunk size/overlap theo document type.
+4. Thiết kế metadata cho citations, filtering và versioning.
+5. Xử lý tables, code, PDFs, FAQs và legal docs.
+6. Đánh giá chunking bằng retrieval recall và answer quality.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Tokenization và token budget.
+- Embeddings và retrieval metrics.
+- Document parsing cơ bản.
+- RAG loop từ chương trước.
+
+## Core intuition: retrieve the smallest sufficient evidence unit
+
+```text
+good chunk = self-contained enough + specific enough + citeable enough
+```
+
+Chunk tốt phải đủ thông tin để LLM trả lời, nhưng không quá dài để chứa nhiều noise.
+
+```text
+Too small → missing context
+Too large → low precision + high token cost
+```
+
+## Chunking objectives
+
+| Objective | Vì sao quan trọng |
+|---|---|
+| Self-contained meaning | LLM hiểu chunk không cần quá nhiều context ngoài |
+| Retrieval specificity | embedding match chính xác hơn |
+| Local context | giữ điều kiện, heading, definitions |
+| Stable citations | cite đúng source/page/section |
+| Token efficiency | pack được nhiều evidence trong context window |
+| ACL/version support | production security và freshness |
+
+## Fixed-size chunking
+
+Cắt theo số tokens/chars cố định.
+
+Ưu điểm:
+
+- đơn giản,
+- dễ implement,
+- baseline tốt.
+
+Nhược điểm:
+
+- có thể cắt giữa câu/bảng/code,
+- mất heading,
+- không tôn trọng document structure.
+
+```python
+def fixed_chunks(text: str, size: int = 1000, overlap: int = 100):
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + size
+        chunks.append(text[start:end])
+        start = end - overlap
+    return chunks
+```
+
+## Sentence and paragraph chunking
+
+Cắt theo ranh giới tự nhiên hơn:
+
+```text
+paragraphs → group until token budget
+```
+
+Tốt cho docs prose, policy, articles.
+
+Hạn chế:
+
+- paragraph đơn lẻ có thể thiếu heading,
+- section dài vẫn cần split,
+- sentence segmentation có thể sai với abbreviations/OCR.
+
+## Recursive character splitting
+
+Recursive splitter thử separators theo thứ tự:
+
+```text
+heading → paragraph → sentence → whitespace → character
+```
+
+Ý tưởng: giữ boundary tự nhiên nhất có thể, chỉ fallback xuống boundary nhỏ hơn khi cần.
+
+Pseudo:
+
+```python
+SEPARATORS = ["\n## ", "\n\n", ". ", " ", ""]
+```
+
+Đây là default phổ biến trong LangChain-style workflows.
+
+## Structure-aware chunking
+
+Document có structure. Hãy dùng nó.
+
+Examples:
+
+| Document | Structure signal |
+|---|---|
+| Markdown | headings, code blocks, tables |
+| HTML | h1/h2/h3, article tags, DOM sections |
+| PDF | pages, layout, headers/footers |
+| DOCX | heading styles, tables |
+| Legal docs | clauses, sections, definitions |
+| API docs | endpoints, parameters, examples |
+
+Structure-aware chunk giữ heading path:
+
+```text
+Refund Policy > Enterprise Plan > Exceptions
+```
+
+vào metadata hoặc chunk text.
+
+## Semantic chunking
+
+Semantic chunking tách theo topic shifts. Một cách làm:
+
+1. Split document thành paragraphs.
+2. Embed từng paragraph.
+3. Tính similarity paragraph i và i+1.
+4. Split khi similarity giảm mạnh.
+
+Ưu điểm:
+
+- topic-coherent,
+- tránh split giữa ý.
+
+Nhược điểm:
+
+- tốn embeddings,
+- ít deterministic,
+- khó debug,
+- cần threshold tuning.
+
+## Parent-child chunking
+
+Ý tưởng:
+
+```text
+small child chunks for retrieval
+larger parent chunks for context
+```
+
+Flow:
+
+```text
+Retrieve child chunk → return parent section to LLM
+```
+
+Tốt khi small chunks match query tốt nhưng answer cần section lớn hơn.
+
+## Chunk size vs overlap
+
+| Chunk size | Best for | Risk |
+|---:|---|---|
+| 100–250 tokens | FAQs, short facts | thiếu context |
+| 300–600 tokens | support docs, policy snippets | cần overlap vừa đủ |
+| 800–1200 tokens | technical docs, sections | có thể nhiễu |
+| 1500–2500 tokens | legal/long-form sections | tốn context, lower precision |
+
+Overlap:
+
+- giúp giữ context ở boundary,
+- tăng số chunks/cost,
+- có thể tạo duplicate top-k.
+
+<Callout type="tip" title="Chunk size là hyperparameter cần eval">
+Không có chunk size tốt nhất. Hãy benchmark recall@k và answer faithfulness theo corpus/task của bạn.
+</Callout>
+
+## Metadata design
+
+Metadata không phải optional. Nó phục vụ citations, filters, versioning, ACL.
+
+```json
+{
+  "doc_id": "policy_123",
+  "chunk_id": "policy_123#c007",
+  "source_uri": "s3://kb/policy_123.pdf",
+  "title": "Refund Policy",
+  "section": "Enterprise > Exceptions",
+  "page": 12,
+  "start_char": 1024,
+  "end_char": 1840,
+  "document_version": "v3",
+  "chunking_strategy": "heading-v2",
+  "tenant_id": "tenant_a",
+  "acl_groups": ["support", "managers"]
+}
+```
+
+## Special case: tables
+
+Tables bị flatten sai rất dễ mất meaning.
+
+Bad:
+
+```text
+Plan Price Refund Free 0 No Pro 20 Yes
+```
+
+Better:
+
+```text
+Table: Refund eligibility by plan
+Columns: Plan | Price | Refund allowed
+Row: Free | $0 | No
+Row: Pro | $20 | Yes
+```
+
+## Special case: code
+
+Code chunking nên giữ:
+
+- function/class boundary,
+- file path,
+- imports/context,
+- docstring,
+- language,
+- line numbers.
+
+Metadata:
+
+```json
+{
+  "file_path": "src/auth/session.ts",
+  "symbol": "createSession",
+  "start_line": 42,
+  "end_line": 88,
+  "language": "typescript"
+}
+```
+
+## Special case: scanned PDFs/OCR
+
+OCR có lỗi:
+
+- ký tự sai,
+- thứ tự cột sai,
+- header/footer lặp,
+- page number noise,
+- hyphenation.
+
+Chunking nên chạy sau cleaning/layout parsing, không chỉ raw OCR text.
+
+## Chunking evaluation
+
+Evaluate chunking bằng retrieval, không bằng cảm giác.
+
+Metrics:
+
+- recall@k theo query set,
+- citation usefulness,
+- duplicate rate trong top-k,
+- average context tokens,
+- answer faithfulness,
+- human review of top failures.
+
+Compare strategies:
+
+```text
+fixed-500-overlap50
+recursive-800-overlap100
+heading-aware-v2
+semantic-threshold-0.72
+```
+
+## Implementation lab: chunking bakeoff
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass
+class Chunk:
+    chunk_id: str
+    doc_id: str
+    text: str
+    metadata: dict
+
+
+def paragraph_chunks(doc_id: str, text: str, max_chars=1200):
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    chunks = []
+    current = []
+    current_len = 0
+
+    for p in paragraphs:
+        if current and current_len + len(p) > max_chars:
+            idx = len(chunks)
+            chunks.append(Chunk(f"{doc_id}#c{idx}", doc_id, "\n\n".join(current), {}))
+            current = []
+            current_len = 0
+        current.append(p)
+        current_len += len(p)
+
+    if current:
+        idx = len(chunks)
+        chunks.append(Chunk(f"{doc_id}#c{idx}", doc_id, "\n\n".join(current), {}))
+    return chunks
+```
+
+Lab steps:
+
+1. Implement fixed, paragraph, heading-aware chunking.
+2. Use same embedding model.
+3. Run same 30-query eval set.
+4. Compare recall@5, duplicate rate, average chunk tokens.
+5. Inspect 10 failures manually.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: chunking theo chars mà không biết token budget">
+LLM context tính bằng tokens, không phải characters. Char-based splitter cần token-aware guard.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: mất metadata source/page/section">
+Không có metadata, citation yếu và debugging retrieval gần như không thể.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: chunking bỏ qua ACL/version">
+Production RAG cần biết chunk thuộc tenant/doc version/permission nào. Nếu không, bạn có thể retrieve dữ liệu cấm hoặc stale.
+</Callout>
+
+Checklist:
+
+1. Chunk có self-contained không?
+2. Có giữ heading/section context không?
+3. Có metadata đầy đủ không?
+4. Có token-aware size không?
+5. Overlap có tạo duplicate top-k không?
+6. Tables/code có xử lý riêng không?
+7. Có eval chunking strategies không?
+8. Có document_version và ACL không?
+
+## Practice exercises
+
+1. Chunk một markdown doc theo headings.
+2. So sánh fixed 500 vs 1000 tokens trên 20 queries.
+3. Thiết kế metadata schema cho PDF chunks.
+4. Chuyển một table thành text representation tốt cho embedding.
+5. Thiết kế chunking strategy cho API docs.
+6. Đo duplicate rate trong top-k retrieval.
+
+## Knowledge check
+
+1. Chunk tốt cần cân bằng gì?
+2. Vì sao chunk quá nhỏ có hại?
+3. Vì sao chunk quá lớn có hại?
+4. Recursive splitting hoạt động thế nào?
+5. Semantic chunking có tradeoff gì?
+6. Parent-child retriever giải quyết vấn đề gì?
+7. Metadata chunk cần gì cho production?
+
+## Answer key
+
+1. Đủ context nhưng đủ specific, citeable và token-efficient.
+2. Mất điều kiện/heading/context cần để answer đúng.
+3. Nhiễu retrieval, tốn context, giảm precision.
+4. Thử boundary lớn/tự nhiên trước, fallback dần xuống boundary nhỏ hơn.
+5. Topic-coherent nhưng tốn compute, khó debug/tune.
+6. Retrieve small chunk chính xác nhưng cung cấp parent context rộng hơn cho LLM.
+7. doc_id, chunk_id, source, page/section, offsets, version, strategy, tenant/ACL.
+
+## Mini-project: Chunking strategy benchmark
+
+**Task:** Benchmark 3 chunking strategies trên cùng corpus.
+
+**Deliverables:**
+
+- Corpus 20 docs.
+- 3 chunking variants.
+- Metadata schema.
+- 50 labeled queries.
+- Metrics: recall@5, duplicate rate, average chunk tokens, citation usefulness.
+- Failure analysis.
+
+**Success criteria:**
+
+- Chọn strategy dựa trên eval.
+- Có handling cho tables/code nếu corpus có.
+- Có versioned metadata.
+- Có recommendation chunk size/overlap rõ ràng.
+
+## Điểm cần nhớ
+
+- Chunking là information architecture của RAG.
+- Mục tiêu là retrieve smallest sufficient evidence unit.
+- Fixed-size đơn giản nhưng dễ phá structure.
+- Structure-aware chunking thường tốt cho docs thật.
+- Metadata là bắt buộc cho citations, ACL, versioning và debugging.
+- Chunk size/overlap phải được eval trên query set thật.
+
+## Next chapter bridge
+
+Sau khi có chunks và embeddings, bạn cần hạ tầng để lưu, index, filter và search vectors ở scale. Chương tiếp theo: **Vector Databases** — FAISS, Chroma, Qdrant, Pinecone, pgvector, HNSW, filtering và hybrid search.

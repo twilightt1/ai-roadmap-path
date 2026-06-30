@@ -98,7 +98,8 @@ Thông thường check quota trước provider call. Nhưng có thể cache look
 Failed calls vẫn cần trace để debug provider reliability và cost.
 
 <Callout type="warning" title="Không có ordering đúng, middleware sẽ tự mâu thuẫn">
-Ví dụ deduct quota trước cache lookup có thể làm user mất quota dù trả cached answer. Ngược lại cache lookup trước auth có thể leak tenant data nếu cache key không isolate.\n</Callout>
+Ví dụ deduct quota trước cache lookup có thể làm user mất quota dù trả cached answer. Ngược lại cache lookup trước auth có thể leak tenant data nếu cache key không isolate.
+</Callout>
 
 ## Token budget management
 
@@ -397,7 +398,7 @@ HTTP request
 |---|---|
 | Syntax | valid JSON |
 | Schema | required fields/types/enums |
-| Business | amount <= allowed refund |
+| Business | `amount <= allowed refund` |
 | Groundedness | answer supported by retrieved context |
 | Citation | cited doc IDs exist and support claim |
 | Safety | no secrets/toxicity/policy violation |

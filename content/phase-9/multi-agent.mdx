@@ -1,0 +1,536 @@
+Multi-Agent Systems không tự động thông minh hơn vì có nhiều agent. Đây là **coordination architecture**: đổi single-agent simplicity lấy specialization, parallelism, critique, và governance complexity. Một hệ thống nhiều agent có thể tốt hơn, nhưng cũng có thể tốn hơn, chậm hơn và mâu thuẫn hơn nếu thiết kế sai.
+
+## Why this matters
+
+Multi-agent có ích khi:
+
+- work tự phân rã được,
+- specialists có tools/knowledge khác,
+- parallel research có giá trị,
+- critique/review cải thiện quality,
+- human checkpoints cần handoff rõ,
+- risk levels khác nhau cần policies khác.
+
+Multi-agent fail khi:
+
+- agents duplicate work,
+- agents reinforce hallucination của nhau,
+- communication nhiễu,
+- cost multiply,
+- không ai own final quality,
+- deadlock/loop,
+- supervisor route sai.
+
+<Callout type="info" title="More agents does not mean more intelligence">
+Multi-agent thêm specialization và parallelism, nhưng cũng thêm coordination overhead, duplicated work, contradiction, latency và cost.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Giải thích khi nào multi-agent có ích.
+2. So sánh supervisor-worker, pipeline, peer-to-peer, debate và blackboard patterns.
+3. Thiết kế agent roles và communication contracts.
+4. Mô hình hóa multi-agent workflows bằng state graphs.
+5. Dùng LangGraph-style stateful graphs ở mức conceptual.
+6. Thêm human-in-the-loop checkpoints.
+7. Đánh giá multi-agent systems.
+8. Phòng coordination failures.
+9. Thiết kế cost controls cho multi-agent.
+10. Build code review multi-agent workflow.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Agent components và function calling.
+- State machines và graph workflows.
+- Tool authorization và safety.
+- Observability basics.
+
+## Core intuition: multi-agent is coordination design
+
+```text
+Goal
+  ↓
+Coordinator / graph
+  ↓
+Specialist agents (roles, tools, budgets)
+  ↓
+Artifacts / shared state
+  ↓
+Synthesizer / verifier
+  ↓
+Final output
+```
+
+Câu hỏi thiết kế:
+
+1. Cần mấy agents?
+2. Role nào có tools/permissions gì?
+3. Agents giao tiếp theo contract nào?
+4. Ai tổng hợp/chốt final output?
+5. Khi nào cần human?
+6. Budget/cost chia thế nào?
+
+## Pattern taxonomy
+
+### Supervisor → worker
+
+```text
+Supervisor
+ ├── Researcher
+ ├── Analyst
+ ├── Writer
+ └── Verifier
+```
+
+Pros:
+
+- central control,
+- dễ audit,
+- clear final decision.
+
+Cons:
+
+- supervisor bottleneck,
+- bad routing hại toàn bộ work.
+
+### Pipeline
+
+```text
+Planner → Researcher → Writer → Reviewer → Finalizer
+```
+
+Pros:
+
+- predictable,
+- dễ eval stage-by-stage.
+
+Cons:
+
+- error propagation,
+- ít adaptive.
+
+### Peer-to-peer
+
+```text
+Agent A ↔ Agent B ↔ Agent C
+```
+
+Pros:
+
+- linh hoạt.
+
+Cons:
+
+- khó kiểm soát,
+- communication overhead,
+- loop risk.
+
+### Debate / adversarial
+
+```text
+Proposer → Critic → Judge
+```
+
+Pros:
+
+- tốt cho review,
+- surfacing weaknesses.
+
+Cons:
+
+- có thể optimize rhetoric thay vì truth,
+- judge model có thể bias.
+
+### Blackboard / shared workspace
+
+Agents đọc/ghi shared state.
+
+Pros:
+
+- tốt cho research/code,
+- persistent artifact.
+
+Cons:
+
+- state conflicts,
+- cần ownership rules.
+
+## Role design
+
+Mỗi agent cần:
+
+```json
+{
+  "agent": "Reviewer",
+  "objective": "Find correctness, security, and maintainability issues in code changes.",
+  "tools": ["read_file", "run_tests"],
+  "cannot": ["modify_code", "merge_pr"],
+  "input_schema": {"diff": "string"},
+  "output_schema": {
+    "issues": "array",
+    "risk_level": "low|medium|high",
+    "requires_human": "boolean"
+  },
+  "budget_usd": 1.0,
+  "escalation_rules": ["security_issue", "low_confidence"]
+}
+```
+
+Thiết kế role tốt nghĩa là agent biết:
+
+- việc gì làm,
+- việc gì không được làm,
+- output contract gì,
+- khi nào escalate.
+
+## Communication contracts
+
+Tránh free-form chatter. Dùng structured messages:
+
+```json
+{
+  "from": "Researcher",
+  "to": "Writer",
+  "artifact_type": "research_notes",
+  "claims": [
+    {
+      "claim": "Hybrid search improves recall in mixed corpora.",
+      "source": "doc_12",
+      "confidence": 0.82
+    }
+  ],
+  "open_questions": []
+}
+```
+
+Structured contracts giúp:
+
+- validate handoff,
+- trace artifacts,
+- avoid ambiguity,
+- test role compliance.
+
+## LangGraph-style stateful graphs
+
+Concepts:
+
+- nodes = agents/tools/functions,
+- edges = transitions,
+- conditional edges = routing logic,
+- parallel branches,
+- checkpoints = persist state,
+- shared state object,
+- human approval nodes,
+- retry/error edges.
+
+Example graph:
+
+```text
+START
+  ↓
+Planner
+  ↓
+Researcher A ─┐
+Researcher B ─┼→ Synthesizer → Critic → Human approval? → Final
+Researcher C ─┘
+```
+
+Shared state:
+
+```json
+{
+  "task": "Write market research report",
+  "plan": [],
+  "research_notes": [],
+  "draft": null,
+  "critic_findings": [],
+  "approval_status": "pending"
+}
+```
+
+<Callout type="tip" title="State graph tốt hơn free-form multi-agent">
+Workflow có branches, validation gates và human checkpoints rõ thường dễ test/debug hơn multi-agent tự do chat với nhau.
+</Callout>
+
+## Human-in-the-loop checkpoints
+
+Yêu cầu human khi:
+
+- external side effects,
+- financial actions,
+- legal/medical claims,
+- low confidence,
+- conflicting evidence,
+- high cost continuation,
+- policy violation,
+- customer-facing communication,
+- security-sensitive changes.
+
+Checkpoint schema:
+
+```json
+{
+  "checkpoint_id": "cp_123",
+  "reason": "High-impact email send",
+  "proposed_action": {},
+  "agent_rationale": "...",
+  "evidence": [],
+  "options": ["approve", "reject", "edit", "escalate"]
+}
+```
+
+## Use case: Code Review Agent
+
+Agents:
+
+1. Reviewer — tìm issues.
+2. Security critic — tìm vulnerabilities.
+3. Improver — đề xuất patch.
+4. Tester — chạy tests trong sandbox.
+5. Judge — tổng hợp, cite evidence.
+
+Workflow:
+
+```text
+Input PR/diff
+  ↓
+Reviewer finds issues
+  ↓
+Security critic finds vulnerabilities
+  ↓
+Improver proposes patch
+  ↓
+Tester runs tests in sandbox
+  ↓
+Judge summarizes with evidence
+  ↓
+Human approves
+```
+
+Important:
+
+- Improver không merge trực tiếp.
+- Tester chạy trong sandbox.
+- Security critic dùng explicit checklist.
+- Judge cite test output và diffs.
+
+## Use case: Research Agent
+
+Agents:
+
+- Planner,
+- Searcher,
+- Paper reader,
+- Evidence extractor,
+- Synthesizer,
+- Skeptic/verifier,
+- Citation checker.
+
+Failure risks:
+
+- citation laundering,
+- source duplication,
+- low-quality sources,
+- unsupported synthesis,
+- conflicting evidence bị ignore.
+
+## Multi-agent metrics
+
+| Metric | Meaning |
+|---|---|
+| End task success | final result quality |
+| Role compliance | agents stayed in role |
+| Handoff validity | outputs match next input contract |
+| Duplicate work rate | wasted parallel effort |
+| Contradiction rate | inconsistent agent outputs |
+| Unsupported claim rate | bad synthesis |
+| Human override rate | trust signal |
+| Cost per successful task | economics |
+| Latency per workflow | UX |
+| Loop/deadlock rate | orchestration quality |
+
+## Production concerns
+
+- shared state locking,
+- parallel branch timeouts,
+- cost multiplication,
+- trace visualization,
+- deterministic graph versioning,
+- agent role versioning,
+- tool permission per role,
+- human approval SLA,
+- checkpoint persistence,
+- rollback for side effects,
+- secure sandbox cho code agents,
+- confidentiality giữa agents nếu cần.
+
+<Callout type="warning" title="Multi-agent cost multiply nhanh">
+3 agents × 10 steps × tool calls có thể tốn nhiều hơn single-agent 5x. Cần budget per role và per workflow.
+</Callout>
+
+## Implementation lab: code review multi-agent graph
+
+Build graph:
+
+```text
+Reviewer → Improver → Tester → Judge
+```
+
+Minimum features:
+
+- input: Python hoặc JavaScript code,
+- reviewer outputs issues,
+- improver proposes patch,
+- tester chạy tests trong Docker/mock sandbox,
+- judge produces final report,
+- human approval simulated.
+
+```python
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ReviewState:
+    code: str
+    issues: list[dict] = field(default_factory=list)
+    patch: str | None = None
+    test_results: dict | None = None
+    final_report: str | None = None
+    requires_human: bool = False
+
+
+def reviewer_node(state: ReviewState) -> ReviewState:
+    state.issues = find_issues(state.code)
+    return state
+
+
+def improver_node(state: ReviewState) -> ReviewState:
+    state.patch = propose_patch(state.code, state.issues)
+    return state
+
+
+def tester_node(state: ReviewState) -> ReviewState:
+    state.test_results = run_tests_in_sandbox(state.patch)
+    return state
+
+
+def judge_node(state: ReviewState) -> ReviewState:
+    state.final_report = summarize(state.issues, state.patch, state.test_results)
+    state.requires_human = any(i["severity"] == "high" for i in state.issues)
+    return state
+```
+
+Deliverables:
+
+- graph diagram,
+- role prompts,
+- state schema,
+- test suite với seeded bugs,
+- trace of 5 code review tasks,
+- failure analysis.
+
+Evaluation:
+
+- reviewer có tìm seeded bugs không?
+- improver có tránh unrelated changes không?
+- tests có chạy thật không?
+- judge cite evidence không?
+- unsafe operations có bị block không?
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: over-agentify simple workflow">
+Nếu deterministic 3 bước giải quyết được, đừng tạo 5 agents. Multi-agent không tự động tốt hơn.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: không có communication contract">
+Free-form chat giữa agents gây ambiguity, khó trace và khó test role compliance.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: không budget per role">
+Multi-agent có thể tiêu tiền nhanh hơn nhiều single-agent. Cần budget per role và per workflow.
+</Callout>
+
+Checklist:
+
+1. Mỗi role có objective/tools/output contract không?
+2. Communication có structured contract không?
+3. Có shared state schema không?
+4. Có conditional routing rõ không?
+5. Human checkpoints ở đúng chỗ không?
+6. Có budget per role/workflow không?
+7. Có trace artifact per agent không?
+8. Có eval role compliance không?
+9. Có deadlock/loop detection không?
+10. Tool permissions per role không?
+
+## Practice exercises
+
+1. Thiết kế supervisor-worker cho research agent.
+2. Viết role schema cho 5 agents trong code review.
+3. Thiết kế communication contract giữa researcher và writer.
+4. Vẽ LangGraph-style state graph cho research workflow.
+5. So sánh pipeline vs debate cho code review.
+6. Thiết kế human checkpoints cho email-sending agent.
+7. Viết metrics dashboard cho multi-agent system.
+
+## Knowledge check
+
+1. Multi-agent có ích khi nào?
+2. Supervisor-worker có weakness gì?
+3. Vì sao cần communication contracts?
+4. LangGraph state graph gồm những thành phần nào?
+5. Human-in-the-loop checkpoint cần khi nào?
+6. Multi-agent metrics khác single-agent thế nào?
+7. Vì sao multi-agent cost multiply nhanh?
+
+## Answer key
+
+1. Khi work phân rã được, cần specialists, parallel research, critique hoặc human checkpoints rõ.
+2. Supervisor bottleneck và bad routing hại toàn bộ work.
+3. Để validate handoff, trace artifacts, tránh ambiguity và test role compliance.
+4. Nodes, edges, conditional edges, parallel branches, checkpoints, shared state, human approval nodes.
+5. Side effects, financial actions, low confidence, conflicting evidence, customer-facing outputs, security changes.
+6. Thêm role compliance, handoff validity, duplicate work rate, contradiction rate.
+7. Nhiều agents × steps × tool calls, không có budget per role sẽ失控.
+
+## Mini-project: Code Review Multi-Agent System
+
+**Task:** Build multi-agent code review graph.
+
+**Deliverables:**
+
+- Graph diagram.
+- Role schemas cho reviewer/improver/tester/judge.
+- State schema.
+- Sandbox/mock test runner.
+- 10 code samples với seeded bugs.
+- Trace per review.
+- Metrics: bug detection rate, false positive rate, cost per review.
+- Human approval simulation.
+
+**Success criteria:**
+
+- Reviewer phát hiện được seeded bugs.
+- Improver không tạo unrelated changes.
+- Tests chạy trong sandbox.
+- Judge cite evidence.
+- Unsafe operations blocked.
+- Cost per review measured.
+
+## Điểm cần nhớ
+
+- Multi-agent là coordination architecture, không phải magic intelligence.
+- Role design cần objective, tools, output contract, budget và escalation.
+- Communication nên structured, không free-form.
+- State graphs giúp control flow rõ và test được.
+- Human checkpoints cho high-risk actions.
+- Multi-agent cần budget per role và metrics coordination-specific.
+
+## Next chapter bridge
+
+Bạn đã biết agents, components, tool use và multi-agent. Chương cuối Phase 9: **Agentic AI Production** — bounded autonomy, task decomposition, error recovery, audit trails, safety controls, evaluation và production readiness.

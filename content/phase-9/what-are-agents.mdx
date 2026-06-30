@@ -1,0 +1,453 @@
+AI Agent không đơn giản là “LLM + tools”. Một agent production là **stateful control loop**: nó nhận goal, quan sát state, chọn action, gọi tools, nhận observation, cập nhật state/memory, rồi quyết định tiếp tục, trả lời, hỏi user, hoặc escalate. Điểm nguy hiểm của agent không phải vì nó “suy nghĩ”; nguy hiểm là nó có thể **hành động lặp lại** dưới uncertainty.
+
+## Why this matters
+
+Agents hấp dẫn vì chúng có thể:
+
+- tự chia task nhiều bước,
+- dùng tools ngoài LLM,
+- recover từ lỗi nhỏ,
+- search web/KB/database,
+- viết code, chạy test, sửa lỗi,
+- phối hợp nhiều bước mà user không cần chỉ từng bước.
+
+Nhưng agents nguy hiểm vì:
+
+- tool calls tốn tiền,
+- loop vô hạn,
+- hallucinated plan,
+- gọi sai tool,
+- argument sai gây side effects,
+- prompt injection qua tool result,
+- memory pollution,
+- khó reproduce behavior.
+
+<Callout type="danger" title="Autonomy without budgets is an outage waiting to happen">
+Agent loop phải có giới hạn step, time, token, tool và cost. Nếu stop condition duy nhất là “model tự quyết nó đã xong”, hệ thống chưa production-safe.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Định nghĩa agent nghiêm túc hơn “LLM + tools”.
+2. Giải thích observe → decide → act → observe loop.
+3. Phân biệt prompt, chain, workflow, tool-using chatbot và agent.
+4. Mô hình hóa agent bằng state/action/policy/observation.
+5. So sánh ReAct, Plan-and-Execute, MRKL, reflection và multi-agent.
+6. Thiết kế autonomy levels và termination conditions.
+7. Nhận diện agent failure taxonomy.
+8. Viết minimal framework-free agent loop.
+9. Instrument agent trace để debug.
+10. Quyết định khi nào **không** nên dùng agent.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Phase 6: prompt engineering, tool APIs, structured output.
+- Phase 7: routing, fallback, MCP, orchestration frameworks.
+- Phase 8: RAG, retrieval, grounding, citations.
+- Backend basics: retries, rate limits, logging.
+- Security basics: least privilege, auth, secrets.
+
+## Core intuition: agent as a control loop
+
+```text
+Goal / User Task
+   ↓
+State
+   ↓
+LLM/controller decides next action
+   ↓
+Validate + authorize action
+   ↓
+Tool call / response / ask user / final answer
+   ↓
+Observation
+   ↓
+Update state + memory
+   ↓
+Continue or terminate
+```
+
+LLM không phải toàn bộ agent. Runtime quyết định:
+
+- tools nào available,
+- state nào visible,
+- action nào được phép,
+- max steps/cost/time,
+- khi nào cần human approval,
+- log những gì,
+- điều kiện success là gì.
+
+## Formal model: state, action, policy, observation
+
+Một cách nhìn có tính hệ thống:
+
+```text
+s_t = current state at step t
+a_t = action chosen at step t
+o_t = observation after action
+π(a_t | s_t) = policy choosing action given state
+```
+
+Trong agent LLM:
+
+- `π` thường là LLM + prompt + tool schema + runtime policy.
+- `a_t` có thể là `call_tool`, `ask_user`, `write_memory`, `final_answer`, `escalate`.
+- `o_t` là tool result, user response, error, observation.
+- `s_t` gồm goal, plan, history, memory, budget, errors.
+
+Professor-level point:
+
+```text
+Agent failure = bad state, bad action space, bad policy, bad observation, or bad termination.
+```
+
+## Agent vs prompt vs chain vs workflow
+
+| System | Control flow | Decision maker | Best for | Risk |
+|---|---|---|---|---|
+| Prompt | single call | developer | simple generation | no multi-step control |
+| Chain | fixed sequence | developer | predictable tasks | brittle to ambiguity |
+| Workflow | conditional deterministic | code/rules | business automation | rule complexity |
+| Tool-using chatbot | model calls tools in one turn | model within narrow scope | assisted tasks | tool misuse |
+| Agent | dynamic multi-step loop | model + runtime policy | uncertain multi-step tasks | cost/safety/loop risk |
+
+Key idea:
+
+```text
+Chains encode the plan in code.
+Agents infer part of the plan at runtime.
+```
+
+## Least autonomy principle
+
+Dùng hệ thống ít autonomous nhất mà giải quyết được bài toán.
+
+```text
+prompt < chain < workflow < agent < multi-agent autonomous system
+```
+
+Nếu task có steps cố định, dùng workflow. Nếu task mơ hồ, cần tool selection động, có partial failures và cần planning, agent mới đáng cân nhắc.
+
+<Callout type="warning" title="Đừng dùng agent khi workflow đủ">
+Nếu bạn biết chính xác 5 bước cần chạy, viết workflow deterministic sẽ dễ test, rẻ, nhanh và an toàn hơn agent tự quyết.
+</Callout>
+
+## Types of agents
+
+### ReAct agent
+
+ReAct dùng vòng lặp:
+
+```text
+Reason → Act → Observe → Reason → Act → Observe → Final
+```
+
+Strength:
+
+- đơn giản,
+- dynamic tool use,
+- dễ học.
+
+Weakness:
+
+- myopic,
+- dễ loop,
+- planning dài hạn kém,
+- phụ thuộc tool descriptions.
+
+### Plan-and-Execute
+
+Planner tạo plan trước, executor chạy từng bước.
+
+```text
+Planner → steps → Executor → observations → maybe Replanner
+```
+
+Tốt cho task dài nhưng plan có thể stale khi observations thay đổi.
+
+### MRKL / modular routing agent
+
+Agent route subproblems tới modules chuyên biệt:
+
+- calculator,
+- search,
+- database,
+- code interpreter,
+- retriever.
+
+Tốt vì tools deterministic hơn model cho nhiều subtask.
+
+### Reflection / critique agent
+
+Agent tự kiểm tra output hoặc dùng critic model.
+
+Tốt cho drafts/code/reports, nhưng self-critique có thể chỉ là “performative reasoning” nếu không có external evidence/tests.
+
+### Multi-agent systems
+
+Nhiều agents có roles khác nhau. Có thể hữu ích nhưng tăng coordination cost. Chương 9.4 sẽ đi sâu.
+
+## Levels of autonomy
+
+| Level | Description | Example | Required control |
+|---|---|---|---|
+| L0 | No tool use | chat answer | prompt validation |
+| L1 | Suggested actions only | draft email | user approval |
+| L2 | Read-only tools | search docs/web | access control |
+| L3 | Low-risk write tools | create ticket | audit log |
+| L4 | High-impact actions with approval | refund/email customer | human checkpoint |
+| L5 | Autonomous high-impact actions | trading/security changes | usually unacceptable |
+
+Production design nên assign autonomy per action, không per agent.
+
+## Agent failure taxonomy
+
+| Failure | Cause | Symptom | Mitigation |
+|---|---|---|---|
+| Goal ambiguity | vague user task | wrong objective | clarify before acting |
+| Bad decomposition | poor plan | irrelevant steps | planner eval |
+| Tool hallucination | model invents tool | invalid action | schema-constrained tools |
+| Argument hallucination | wrong args | failed/unsafe call | validation |
+| Observation misread | model ignores result | repeats errors | structured observations |
+| Looping | no termination | cost spike | max steps + loop detector |
+| Over-planning | too many steps | latency/cost explosion | budget-aware planner |
+| Memory pollution | stores wrong facts | persistent future errors | memory validation |
+| Tool side effect | bad external action | data changed incorrectly | approval/sandbox |
+| Prompt injection | untrusted content controls agent | unsafe action | instruction isolation |
+| Premature termination | stops too early | incomplete output | verifier/done criteria |
+
+## Minimal framework-free agent loop
+
+```python
+from dataclasses import dataclass, field
+
+
+@dataclass
+class AgentState:
+    goal: str
+    observations: list[dict] = field(default_factory=list)
+    steps: list[dict] = field(default_factory=list)
+    max_steps: int = 8
+    cost_usd: float = 0.0
+
+
+def run_agent(goal, policy, tools, guard, terminator):
+    state = AgentState(goal=goal)
+
+    for step in range(state.max_steps):
+        action = policy.decide(state=state, tools=tools)
+        state.steps.append({"step": step, "action": action})
+
+        if action["type"] == "final":
+            return {"status": "done", "answer": action["answer"], "trace": state.steps}
+
+        if not guard.allowed(action, state):
+            return {"status": "blocked", "reason": "action_not_allowed", "trace": state.steps}
+
+        tool = tools[action["tool_name"]]
+        observation = tool.execute(action["arguments"])
+        state.observations.append(observation)
+
+        if terminator.should_stop(state):
+            return {"status": "stopped", "reason": "terminator", "trace": state.steps}
+
+    return {"status": "escalate", "reason": "max_steps_exceeded", "trace": state.steps}
+```
+
+Điểm quan trọng:
+
+- model chỉ đề xuất action,
+- guard kiểm soát action,
+- tool execute có contract,
+- state lưu trace,
+- terminator có quyền dừng.
+
+## Agent trace
+
+Agent trace tối thiểu:
+
+```json
+{
+  "run_id": "run_123",
+  "goal": "Find current refund policy",
+  "steps": [
+    {
+      "step": 1,
+      "action": "search_docs",
+      "arguments": {"query": "refund policy current"},
+      "observation_summary": "Found policy v7",
+      "latency_ms": 420,
+      "cost_usd": 0.001
+    }
+  ],
+  "status": "completed",
+  "final_answer": "..."
+}
+```
+
+Without trace, agent debugging is storytelling.
+
+## When not to use an agent
+
+Không dùng agent nếu:
+
+- task deterministic,
+- steps cố định,
+- side effects high-risk,
+- latency/cost rất tight,
+- eval không rõ,
+- tool permissions chưa có,
+- bạn không thể log/audit trajectory,
+- failure không chấp nhận được.
+
+## Implementation lab: tiny ReAct-style agent loop
+
+**Goal:** build minimal agent with three tools.
+
+Tools:
+
+1. `calculator(expression)`.
+2. `current_date()`.
+3. `search_web_mock(query)`.
+
+Required features:
+
+- tool registry,
+- JSON action format,
+- argument validation,
+- max steps,
+- trace log,
+- final answer,
+- failure path when invalid tool called.
+
+Eval tasks:
+
+| Task | Expected tools |
+|---|---|
+| What is 12 * 19? | calculator |
+| What date is today? | current_date |
+| Find latest pricing info | search |
+| Explain transformers | no tool |
+
+Metrics:
+
+| Metric | Target |
+|---|---|
+| Task success | >= 80% simple tasks |
+| Invalid tool calls | 0 after validation |
+| Infinite loops | 0 due to max step guard |
+| Average tool calls | measured |
+| Cost per task | measured |
+
+## Trace reading exercise
+
+Given trace:
+
+```json
+{
+  "steps": [
+    {"tool": "search", "query": "refund policy", "result": "same as before"},
+    {"tool": "search", "query": "refund policy", "result": "same as before"},
+    {"tool": "search", "query": "refund policy", "result": "same as before"}
+  ],
+  "status": "max_steps_exceeded"
+}
+```
+
+Diagnosis:
+
+- loop/repeated action,
+- no progress detector missing,
+- should summarize current evidence or ask clarification.
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: định nghĩa agent quá rộng">
+Không phải mọi LLM app có tool là agent. Agent cần dynamic multi-step control flow, state, action selection và termination.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: không có termination conditions">
+Agent không có max steps/time/cost rất dễ loop hoặc tiêu tiền không kiểm soát.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: để model tự quyết side effects">
+Model đề xuất action không đồng nghĩa được phép execute. Runtime phải validate, authorize và audit.
+</Callout>
+
+Checklist:
+
+1. Agent có state schema không?
+2. Có max steps/time/cost không?
+3. Actions có allowed set không?
+4. Tools có validation không?
+5. Có trace từng step không?
+6. Có human escalation không?
+7. Có success/done criteria không?
+8. Có eval tasks không?
+9. Có prompt injection tests không?
+
+## Practice exercises
+
+1. Classify 10 systems as prompt, chain, workflow, chatbot, or agent.
+2. Design autonomy levels for an email assistant.
+3. Write termination rules for a travel booking agent.
+4. Identify three risks in an agent with shell access.
+5. Create failure taxonomy for a research agent.
+6. Write trace schema for a ReAct run.
+
+## Knowledge check
+
+1. Vì sao “LLM + tools” chưa đủ để định nghĩa agent?
+2. Chain khác agent thế nào?
+3. Agent formal model gồm những gì?
+4. Vì sao termination conditions bắt buộc?
+5. Autonomy nên assign theo agent hay action?
+6. Một weakness của ReAct là gì?
+7. Agent trace cần log gì?
+
+## Answer key
+
+1. Vì agent cần state, goal, action loop, termination, guardrails và runtime policy.
+2. Chain có plan cố định trong code; agent chọn một phần plan/action tại runtime.
+3. State, action, policy, observation, termination.
+4. Để ngăn loop, cost explosion và unfinished runs.
+5. Theo action; mỗi action có risk/permission khác nhau.
+6. Myopic, dễ loop, planning dài hạn yếu.
+7. Goal, steps, actions, args, observations, errors, cost, latency, final status.
+
+## Mini-project: Tiny ReAct Agent with Trace Viewer
+
+**Task:** Build a small ReAct-style agent with calculator/date/search tools.
+
+**Deliverables:**
+
+- Tool registry.
+- Agent state schema.
+- Max step/cost guard.
+- Trace JSON for every run.
+- 20 evaluation tasks.
+- Failure analysis for at least 5 tasks.
+
+**Success criteria:**
+
+- Every tool argument validated.
+- No infinite loops.
+- Every run has trace.
+- Agent refuses/escalates when tool unavailable.
+- Metrics reported: success rate, avg steps, invalid calls, cost per task.
+
+## Điểm cần nhớ
+
+- Agent là stateful control loop, không chỉ LLM + tools.
+- LLM proposes actions; runtime controls execution.
+- Least autonomy principle: dùng hệ thống ít autonomous nhất đủ giải quyết task.
+- Agents cần budgets, termination, validation, authorization và trace.
+- Debugging agent phải dựa trên trajectory, không chỉ final answer.
+
+## Next chapter bridge
+
+Bạn đã hiểu agent là control loop. Chương tiếp theo: **Agent Components** — tool registry, state, memory, planning, executor, verifier và guardrails tạo nên một agent runtime production.

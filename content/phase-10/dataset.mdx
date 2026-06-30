@@ -1,0 +1,306 @@
+Dữ liệu là yếu tố quyết định 90% chất lượng của một mô hình fine-tuned. Trong kỷ nguyên của các mô hình nền tảng mạnh mẽ, câu châm ngôn kinh điển của ngành khoa học dữ liệu đã dịch chuyển từ "Garbage in, Garbage out" sang **"Quality over Quantity"**. Một tập dữ liệu gồm 1,000 ví dụ được làm sạch thủ công, lọc trùng lặp bằng thuật toán, và căn chỉnh định dạng chính xác sẽ mang lại hiệu quả vượt trội so với 100,000 ví dụ thu thập tự động từ Internet bị dính nhiều nhiễu.
+
+## Why this matters
+
+Trong thực tế xây dựng dữ liệu huấn luyện, AI Engineer thường gặp các vấn đề nghiêm trọng:
+
+- Mô hình bị lặp lại các câu trả lời sáo rỗng hoặc từ chối trả lời do dữ liệu huấn luyện chứa nhiều câu mẫu bị trùng lặp (data duplication).
+- Định dạng dữ liệu không khớp với Chat Template của mô hình nền khiến mô hình bị mất khả năng nhận diện điểm dừng (stop tokens), dẫn đến hiện tượng sinh ra văn bản vô tận (infinite generation).
+- Định dạng dữ liệu Preference (Chosen vs Rejected) cho DPO bị gán nhãn sai khiến mô hình học trực tiếp các hành vi độc hại hoặc sai lệch thông tin.
+- Dữ liệu bị mất cân bằng (class imbalance) khiến mô hình chỉ tập trung vào một số task dễ và bỏ qua các task khó.
+
+<Callout type="danger" title="Hãy chú ý tới phân phối độ dài (Sequence Length Distribution)">
+Nếu dataset của bạn chứa một vài ví dụ có độ dài cực đoan (ví dụ: 8,000 tokens) trong khi 99% còn lại chỉ dưới 500 tokens, quá trình huấn luyện sẽ bị chậm đi đáng kể hoặc gây sập nguồn bộ nhớ (OOM) nếu bạn cấu hình `max_seq_length` quá lớn để bao phủ các ngoại lệ đó.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Phân biệt các định dạng dữ liệu huấn luyện phổ biến: Alpaca, ShareGPT, DPO.
+2. Xây dựng pipeline làm sạch, loại bỏ trùng lặp (deduplication) và lọc chất lượng dữ liệu.
+3. Giải thích toán học và implement thuật toán MinHash LSH để lọc trùng lặp văn bản.
+4. Thiết kế chiến lược trộn dữ liệu (dataset mixing) để giữ vững năng lực tổng quát của mô hình.
+5. Sử dụng kỹ thuật Self-Instruct để tự động tăng cường (augment) dữ liệu bằng LLM.
+6. Kiểm soát phân phối độ dài (length distribution) của dataset trước khi train.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Khái niệm Tokenization và Special Tokens ở Phase 5.
+- Cấu trúc Chat Templates (ChatML, LLaMA) ở các chương trước.
+- Cách sử dụng thư viện `pandas` và `datasets` cơ bản.
+
+---
+
+## Common Dataset Formats
+
+Khi chuẩn bị dữ liệu cho Supervised Fine-Tuning (SFT) hoặc Preference Optimization (DPO), bạn cần đưa dữ liệu về một trong các cấu trúc chuẩn sau:
+
+### 1. Alpaca Format (Instruction-based)
+Định dạng này phù hợp cho các tác vụ đơn lập (single-turn), cấu trúc gồm 3 trường chính:
+- `instruction`: Nhiệm vụ yêu cầu mô hình thực hiện.
+- `input` (tùy chọn): Ngữ cảnh hoặc dữ liệu bổ sung.
+- `output`: Câu trả lời mong muốn.
+
+```json
+{
+  "instruction": "Trích xuất tên công ty từ đoạn văn sau.",
+  "input": "Hôm nay, tập đoàn VinGroup công bố báo cáo tài chính quý 2.",
+  "output": "VinGroup"
+}
+```
+
+### 2. ShareGPT Format (Multi-turn Chat)
+Định dạng này phù hợp cho các cuộc hội thoại nhiều lượt (multi-turn), mô phỏng trực tiếp tương tác giữa User và Assistant.
+
+```json
+{
+  "conversations": [
+    {"from": "human", "value": "Xin chào, bạn là ai?"},
+    {"from": "gpt", "value": "Tôi là trợ lý AI được huấn luyện bởi công ty của bạn."},
+    {"from": "human", "value": "Giúp tôi tóm tắt tài liệu này."}
+  ]
+}
+```
+
+### 3. DPO Format (Preference-based)
+Dùng cho thuật toán Direct Preference Optimization (DPO), cấu trúc gồm prompt kèm hai lựa chọn: câu trả lời tốt hơn (`chosen`) và câu trả lời kém hơn (`rejected`).
+
+```json
+{
+  "prompt": "Giải thích thuyết tương đối rộng của Einstein bằng 1 câu.",
+  "chosen": "Thuyết tương đối rộng mô tả trọng lực không phải là một lực mà là sự uốn cong của không-thời gian do khối lượng và năng lượng gây ra.",
+  "rejected": "Thuyết tương đối rộng nói rằng mọi vật đều chuyển động tương đối so với nhau trong vũ trụ."
+}
+```
+
+---
+
+## Data Cleaning & Deduplication Pipeline
+
+Dữ liệu thô từ database hoặc scraping cần đi qua các bước tiền xử lý nghiêm ngặt:
+
+```text
+Raw Data → Lọc ký tự lạ/HTML → Lọc trùng lặp (Exact & Near-dup) → Lọc theo độ dài (Tokens) → Quality Filtering (LLM-as-judge) → Final Dataset
+```
+
+### Toán học của MinHash LSH (Locality-Sensitive Hashing)
+Để lọc trùng lặp ở quy mô lớn, việc so khớp chuỗi chính xác (exact match) sẽ bỏ sót các văn bản gần giống nhau (near-duplicates - ví dụ chỉ khác nhau dấu câu hoặc một vài từ nối). Phép so sánh cặp đôi toàn bộ (all-pairs comparison) có độ phức tạp $O(N^2)$ là bất khả thi khi dữ liệu lớn. Ta sử dụng **MinHash LSH** để đưa độ phức tạp về mức tuyến tính $O(N)$.
+
+#### 1. Jaccard Similarity (Độ tương đồng Jaccard)
+Độ tương đồng giữa hai văn bản được biểu diễn dưới dạng hai tập hợp từ (hoặc n-grams) A và B:
+
+J(A, B) = \frac{|A \cap B|}{|A \cup B|}
+
+#### 2. MinHashing
+Ta băm (hash) các phần tử của tập hợp bằng k hàm băm ngẫu nhiên khác nhau. Ký hiệu h_{\min}(A) là giá trị băm nhỏ nhất của tập hợp A dưới hàm băm h. Một tính chất toán học quan trọng là: **Xác suất để hai tập hợp có cùng giá trị MinHash bằng chính độ tương đồng Jaccard của chúng**:
+
+P(h_{\min}(A) = h_{\min}(B)) = J(A, B)
+
+Bằng cách chọn k hàm băm (ví dụ k=128), ta có thể biểu diễn mỗi văn bản dưới dạng một vector chữ ký (signature vector) gồm k số nguyên. Độ tương đồng giữa hai văn bản được ước lượng bằng tỷ lệ các phần tử trùng nhau giữa hai signature vectors.
+
+#### 3. Locality-Sensitive Hashing (LSH)
+Để tìm các cặp trùng lặp mà không cần so sánh chéo, ta chia signature vector của mỗi văn bản thành b dải (bands), mỗi dải chứa r dòng (k = b \times r). 
+
+Ta băm mỗi dải vào một hash table. Các văn bản có cùng giá trị băm trong **ít nhất một dải** sẽ được coi là ứng viên trùng lặp (candidate pairs) và chỉ cần so sánh chi tiết các ứng viên này.
+
+Xác suất để hai văn bản có độ tương đồng Jaccard s trở thành ứng viên trùng lặp là:
+
+P(\text{candidate}) = 1 - (1 - s^r)^b
+
+Đồ thị của hàm số này có dạng hình chữ S (S-curve), giúp lọc cực kỳ sắc nét các văn bản có độ tương đồng vượt ngưỡng s^* \approx (1/b)^{1/r}.
+
+```python
+from datasketch import MinHash, MinHashLSH
+
+# Thiết lập LSH với ngưỡng tương đồng Jaccard > 0.8
+lsh = MinHashLSH(threshold=0.8, num_perm=128)
+
+def get_minhash(text):
+    m = MinHash(num_perm=128)
+    # Tokenize câu bằng cách tách từ (shingling)
+    for word in text.lower().split():
+        m.update(word.encode('utf-8'))
+    return m
+
+sentences = [
+    "Hôm nay trời nắng đẹp quá, tôi muốn đi chơi.",
+    "Hôm nay thời tiết nắng đẹp quá, tôi muốn đi chơi.", # Near-duplicate (>80% Jaccard)
+    "Làm thế nào để reset mật khẩu tài khoản?"
+]
+
+clean_sentences = []
+for idx, text in enumerate(sentences):
+    m = get_minhash(text)
+    # Truy vấn các ứng viên trùng lặp trong index LSH
+    result = lsh.query(m)
+    if not result:
+        lsh.insert(f"id_{idx}", m)
+        clean_sentences.append(text)
+
+print("Cleaned dataset:", clean_sentences)
+# Output: Chỉ giữ lại câu 1 và câu 3. Câu 2 bị loại bỏ do trùng lặp gần với câu 1.
+```
+
+---
+
+## Dataset Mixing & General Capabilities Preservation
+
+Khi fine-tune mô hình trên một tác vụ chuyên biệt (domain-specific), mô hình rất dễ bị **Catastrophic Forgetting** (sụp đổ năng lực tổng quát). Để khắc phục, ta bắt buộc phải áp dụng chiến lược trộn dữ liệu (**Dataset Mixing**).
+
+Công thức thiết lập tỷ lệ trộn tối ưu trong công nghiệp:
+
+D_{\text{train}} = \lambda D_{\text{specialized}} + (1 - \lambda) D_{\text{general}}
+
+Trong đó:
+- D_{\text{specialized}}: Dữ liệu tác vụ mục tiêu (ví dụ: SQL, Y tế).
+- D_{\text{general}}: Dữ liệu chat/lập luận tổng quát chất lượng cao (ví dụ: ShareGPT, SlimOrca, Alpaca-GPT4).
+- \lambda (Tỷ lệ pha trộn): Thường dao động từ 0.7 đến 0.9. Nếu \lambda quá lớn, mô hình sẽ bị forgetting. Nếu \lambda quá nhỏ, mô hình không học đủ sâu tác vụ chuyên biệt.
+
+---
+
+## Data Augmentation: Self-Instruct
+
+Khi số lượng dữ liệu gán nhãn thực tế quá ít (dưới 100 mẫu), ta có thể sử dụng kỹ thuật **Self-Instruct** (Wang et al., 2022) để dùng các LLM mạnh hơn sinh thêm dữ liệu huấn luyện một cách tự động.
+
+### Quy trình Self-Instruct nâng cao:
+1. **Seed Tasks:** Chuẩn bị 100 ví dụ chất lượng cao do con người viết.
+2. **Task Generation:** Prompt LLM mạnh (như GPT-4o) sinh ra 10-20 nhiệm vụ mới tương tự nhưng không trùng lặp với các ví dụ mẫu.
+3. **Classification & Input Generation:** Xác định xem tác vụ đó cần input hay không, và tự động sinh ra input phù hợp.
+4. **Output Generation:** Dùng LLM sinh ra output chuẩn xác cho các nhiệm vụ mới.
+5. **Quality Filtering (LLM-as-judge):** Dùng một prompt độc lập để yêu cầu LLM lọc bỏ các câu trả lời bị trùng lặp, thiếu thông tin hoặc sai logic.
+
+<Callout type="warning" title="Cảnh giác với chất lượng dữ liệu tổng hợp (Synthetic Data)">
+Dữ liệu sinh ra bởi LLM có thể chứa các lỗi logic lặp đi lặp lại hoặc thiên kiến (bias) của mô hình sinh. Hãy luôn có bước lọc thủ công hoặc dùng các bộ lọc cấu trúc (JSON schema validators) để đảm bảo chất lượng.
+</Callout>
+
+---
+
+## Implementation lab: Dataset Analyzer and Tokenizer Guard
+
+**Nhiệm vụ:** Viết một script phân tích tệp dữ liệu huấn luyện, vẽ phân phối độ dài (sequence length) của các câu sau khi token hóa, và tự động loại bỏ các câu quá dài hoặc quá ngắn để bảo vệ VRAM khi train.
+
+```python
+import numpy as np
+from transformers import AutoTokenizer
+from datasets import load_dataset
+
+model_id = "Qwen/Qwen2.5-1.5B-Instruct"
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+# Load dataset mẫu từ HuggingFace
+dataset = load_dataset("tatsu-lab/alpaca", split="train")
+
+def analyze_and_filter_dataset(dataset, tokenizer, max_tokens=1024, min_tokens=10):
+    lengths = []
+    clean_indices = []
+
+    print("Analyzing dataset token lengths...")
+    for idx, example in enumerate(dataset):
+        # Ghép các trường lại thành một chuỗi duy nhất để giả lập đầu vào của mô hình
+        full_text = f"{example['instruction']} {example['input']} {example['output']}"
+        tokens = tokenizer.encode(full_text, add_special_tokens=True)
+        length = len(tokens)
+        lengths.append(length)
+
+        if min_tokens <= length <= max_tokens:
+            clean_indices.append(idx)
+
+    lengths = np.array(lengths)
+    print(f"Original dataset size: {len(dataset)}")
+    print(f"Average length: {np.mean(lengths):.2f} tokens")
+    print(f"95th percentile length: {np.percentile(lengths, 95):.2f} tokens")
+    print(f"Max length found: {np.max(lengths)} tokens")
+
+    # Lọc dataset
+    filtered_dataset = dataset.select(clean_indices)
+    print(f"Filtered dataset size: {len(filtered_dataset)} (Removed {len(dataset) - len(filtered_dataset)} examples)")
+
+    return filtered_dataset
+
+filtered_data = analyze_and_filter_dataset(dataset, tokenizer, max_tokens=512)
+```
+
+---
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: Không strip khoảng trắng và ký tự thừa ở đầu/cuối">
+Dữ liệu thu thập từ web hoặc database thường chứa các ký tự xuống dòng `\n` hoặc khoảng trắng thừa ở đầu/cuối. Điều này khiến tokenizer sinh ra các tokens không cần thiết và làm nhiễu quá học tập của mô hình.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: Trộn dữ liệu mất cân bằng nghiêm trọng">
+Nếu bạn trộn 10,000 câu hỗ trợ khách hàng với 500 câu viết code, mô hình sẽ bị thiên lệch hoàn toàn về hướng hỗ trợ khách hàng và gần như không học được kỹ năng viết code. Hãy cân bằng tỷ lệ trộn (downsampling hoặc upsampling).
+</Callout>
+
+<Callout type="danger" title="Mistake 3: Rò rỉ dữ liệu (Data Leakage) từ tập Train sang tập Test">
+Nếu bạn không lọc trùng lặp kỹ càng, các ví dụ trong tập test có thể đã xuất hiện trong tập train. Điều này làm cho chỉ số đánh giá (evaluation metrics) cực kỳ đẹp nhưng mô hình thực tế sẽ fail khi gặp dữ liệu thực của người dùng.
+</Callout>
+
+### Checklist chuẩn bị dữ liệu:
+
+- [ ] Đã chạy lọc trùng lặp (exact & near-dedup) trên toàn bộ dataset bằng MinHash LSH chưa?
+- [ ] Định dạng dữ liệu đã khớp hoàn toàn với Chat Template của mô hình đích chưa?
+- [ ] Đã loại bỏ các ví dụ có độ dài vượt quá giới hạn VRAM (`max_seq_length`) cấu hình chưa?
+- [ ] Đã thêm tỷ lệ dữ liệu tổng quát (general dataset) để chống catastrophic forgetting chưa?
+- [ ] Các nhãn của User prompt đã được cấu hình ẩn (`-100`) trong quá trình tính loss chưa?
+- [ ] Đã kiểm tra tính cân bằng của các class/intent trong dataset chưa?
+
+---
+
+## Practice exercises
+
+1. **Thiết kế Pipeline:** Thiết kế một hệ thống pipeline Python tự động tải dữ liệu từ 3 nguồn khác nhau (JSON, CSV, Parquet), chuẩn hóa chúng về định dạng ShareGPT, và lưu thành một file `.jsonl` duy nhất.
+2. **Loại bỏ trùng lặp gần:** Sử dụng thư viện `datasketch` để viết một script loại bỏ các câu trùng lặp trong một tập dữ liệu 5,000 dòng và đo lường tỷ lệ dữ liệu bị giảm đi.
+3. **Prompt Self-Instruct nâng cao:** Viết prompt Self-Instruct nâng cao để sinh ra 200 cặp dữ liệu huấn luyện cho bài toán trích xuất thông tin thực thể (Named Entity Recognition - NER) từ các văn bản tài chính tiếng Việt.
+
+---
+
+## Knowledge check
+
+1. Tại sao chất lượng dữ liệu (data quality) lại quan trọng hơn số lượng dữ liệu (data quantity) trong fine-tuning?
+2. Sự khác biệt giữa định dạng dữ liệu Alpaca và ShareGPT là gì?
+3. Jaccard similarity là gì và nó được dùng như thế nào trong lọc trùng lặp dữ liệu?
+4. Tại sao ta phải thực hiện Dataset Mixing khi fine-tune mô hình cho một task chuyên biệt?
+5. Rủi ro lớn nhất khi sử dụng hoàn toàn dữ liệu tổng hợp (Synthetic Data) để huấn luyện mô hình là gì?
+
+---
+
+## Answer key
+
+1. Vì mô hình nền đã có sẵn năng lực ngôn ngữ mạnh mẽ; fine-tuning chỉ cần một lượng nhỏ dữ liệu cực sạch để căn chỉnh hành vi (alignment). Dữ liệu rác sẽ làm mô hình bị loạn biểu diễn và hallucinate.
+2. Alpaca thiết kế cho single-turn tasks (Instruction -> Input -> Output); ShareGPT thiết kế cho multi-turn chat (danh sách các lượt hội thoại của human và gpt).
+3. Jaccard similarity đo tỉ lệ giữa phần giao và phần hợp của hai tập hợp từ. Nó dùng để phát hiện các câu gần giống nhau (near-duplicates) để loại bỏ.
+4. Để giữ vững năng lực suy luận tổng quát và khả năng ngôn ngữ tự nhiên của mô hình nền, ngăn ngừa hiện tượng catastrophic forgetting.
+5. Mô hình có thể kế thừa và phóng đại các lỗi logic, thiên kiến (bias) hoặc phong cách viết sáo rỗng của mô hình sinh ra dữ liệu đó.
+
+---
+
+## Mini-project: Data Ingestion and Cleaning Pipeline
+
+### Nhiệm vụ:
+Xây dựng một pipeline hoàn chỉnh bằng Python để xử lý tệp dữ liệu hội thoại thô của khách hàng.
+
+### Yêu cầu đầu ra:
+- Đọc dữ liệu từ file JSON thô.
+- Loại bỏ các ký tự HTML, khoảng trắng thừa, và các câu chào hỏi vô nghĩa bằng regex.
+- Sử dụng MinHash LSH để loại bỏ các câu trùng lặp hoặc gần trùng lặp.
+- Lọc bỏ các cuộc hội thoại quá ngắn (<2 lượt nói) hoặc quá dài (>1024 tokens).
+- Xuất ra file dữ liệu định dạng ShareGPT chuẩn sẵn sàng để đưa vào `SFTTrainer`.
+
+---
+
+## Điểm cần nhớ
+
+- Chất lượng dữ liệu quyết định thành bại của dự án Fine-Tuning.
+- Lựa chọn định dạng dữ liệu phù hợp: Alpaca cho single-turn, ShareGPT cho multi-turn, DPO cho preference alignment.
+- Luôn thực hiện lọc trùng lặp bằng MinHash LSH để làm sạch dữ liệu.
+- Sử dụng chiến lược Dataset Mixing để bảo vệ năng lực tổng quát của mô hình.
+
+---
+
+## Next chapter bridge
+
+Sau khi đã chuẩn bị một tập dữ liệu huấn luyện cực kỳ sạch và chạy các công cụ tối ưu để train mô hình, câu hỏi quan trọng cuối cùng là: Làm thế nào để chứng minh mô hình sau khi fine-tune tốt hơn mô hình ban đầu? Chương tiếp theo: **Evaluation After Fine-Tuning** — tìm hiểu sâu về các hệ thống benchmark MMLU, HumanEval, MT-Bench, cách thiết lập LLM-as-judge và quy trình chạy regression testing trong production.

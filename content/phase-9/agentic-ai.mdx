@@ -1,0 +1,622 @@
+Agentic AI Production không phải tối đa hóa autonomy. Nó là **bounded autonomy**: cho AI đủ khả năng tiến triển task, nhưng giới hạn actions, cost, permissions, time, data access và failure modes. Đây là chương capstone của Phase 9 — nơi tất cả agent concepts gặp production constraints.
+
+## Why this matters
+
+Agent production fail hard hơn chatbot vì chúng:
+
+- thực hiện hành động lặp lại,
+- dùng tools có side effects,
+- persist state,
+- truy cập sensitive data,
+- chạy lâu,
+- phối hợp nhiều agents,
+- tích lũy cost,
+- trông competent ngay cả khi off-track.
+
+<Callout type="danger" title="Production question không phải 'agent có làm được không?'">
+Câu hỏi đúng là: 'Agent có làm task an toàn, observable, lặp lại được, trong budget, và recover khi sai không?'
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Định nghĩa bounded autonomy.
+2. Thiết kế production agent architecture.
+3. Implement task decomposition và progress tracking.
+4. Định nghĩa recovery policies.
+5. Thêm human escalation.
+6. Thiết kế audit trails.
+7. Implement cost và step controls.
+8. Đánh giá agent reliability.
+9. Monitor agent behavior trong production.
+10. Tạo production readiness checklist.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Agent control loop và components.
+- Function calling/tool use safety.
+- Multi-agent coordination.
+- Observability và security basics.
+
+## Core intuition: bounded autonomy
+
+```text
+Give agent enough ability to make progress.
+Constrain actions, cost, permissions, time, data, and failure modes.
+```
+
+Production agent là hệ thống có guardrails, không phải hệ thống tự do.
+
+## Bounded autonomy dimensions
+
+| Dimension | Control |
+|---|---|
+| Time | max runtime |
+| Steps | max actions |
+| Cost | token/tool budget |
+| Tools | allowlist |
+| Data | ACL filters |
+| Side effects | approval gates |
+| Scope | task boundaries |
+| Confidence | escalation threshold |
+| Memory | write policy |
+| Output | validation |
+
+## Production agent architecture
+
+```text
+Client / User
+  ↓
+Agent API
+  ├── Auth / tenant policy
+  ├── Task classifier
+  ├── Risk classifier
+  ├── Agent runtime
+  │    ├── Planner
+  │    ├── Executor
+  │    ├── Tool registry
+  │    ├── Memory/state store
+  │    ├── Verifier
+  │    └── Terminator
+  ├── Human approval service
+  ├── Audit log
+  ├── Cost/rate limiter
+  └── Observability
+      ↓
+Tools / APIs / RAG / Code sandbox / External systems
+```
+
+## Task decomposition
+
+Production agent chuyển goal thành subtasks có structure:
+
+```json
+{
+  "goal": "Prepare a competitor research brief",
+  "subtasks": [
+    {
+      "id": "s1",
+      "title": "Identify competitors",
+      "status": "pending",
+      "acceptance_criteria": "At least 5 relevant competitors with sources",
+      "depends_on": []
+    },
+    {
+      "id": "s2",
+      "title": "Collect pricing information",
+      "status": "pending",
+      "depends_on": ["s1"]
+    }
+  ],
+  "done_condition": "Report includes citations, confidence scores, and limitations"
+}
+```
+
+Bad:
+
+```text
+Keep working until done.
+```
+
+Good:
+
+```text
+Stop after producing a report with exactly 5 cited sources, confidence scores, and known limitations.
+```
+
+## Progress tracking
+
+Track mỗi step:
+
+```json
+{
+  "run_id": "agent_run_123",
+  "step": 7,
+  "subtask": "collect pricing information",
+  "action": "web_search",
+  "observation_summary": "Found pricing page for Vendor A",
+  "confidence": 0.78,
+  "budget_remaining_usd": 1.42,
+  "next_action": "extract pricing table"
+}
+```
+
+Progress trace cho bạn biết:
+
+- agent đang ở đâu,
+- còn budget bao nhiêu,
+- có stuck không,
+- khi nào nên escalate.
+
+## Error recovery policies
+
+| Error | Recovery |
+|---|---|
+| Tool timeout | retry with backoff if idempotent |
+| Invalid tool args | ask model repair once |
+| Unauthorized action | block and escalate |
+| Low confidence | gather more evidence |
+| Conflicting sources | report conflict or escalate |
+| Budget near limit | summarize partial result |
+| Repeated failure | stop and ask human |
+| Sandbox failure | return diagnostic |
+| Prompt injection detected | ignore untrusted instruction |
+| Missing data | ask user or abstain |
+
+<Callout type="warning" title="Recovery phải là policy">
+Đừng để model tự invent unlimited recovery behavior. Mỗi recovery path nên được code явно với budget riêng.
+</Callout>
+
+## Human escalation
+
+Escalate khi:
+
+- high-risk action,
+- unclear user intent,
+- policy conflict,
+- low confidence,
+- conflicting evidence,
+- repeated tool failure,
+- budget exceeded,
+- legal/medical/financial risk,
+- sensitive data involved,
+- user explicitly requests approval.
+
+Escalation payload:
+
+```json
+{
+  "reason": "Low confidence and conflicting sources",
+  "summary": "The agent found two contradictory policy documents.",
+  "evidence": ["doc_a#v3", "doc_b#v1"],
+  "recommended_action": "Ask policy owner to confirm current version",
+  "options": ["continue", "stop", "ask_user", "escalate_to_owner"]
+}
+```
+
+## Audit trails
+
+Agent audit logs phải gồm:
+
+- user/tenant,
+- agent version,
+- prompt version,
+- model/provider,
+- tool calls,
+- tool args (redacted khi cần),
+- tool results summary,
+- approvals,
+- denials,
+- errors,
+- cost,
+- latency,
+- final output,
+- evidence/citations,
+- memory writes,
+- policy decisions.
+
+```json
+{
+  "run_id": "run_123",
+  "tenant_id": "tenant_a",
+  "agent_version": "research_agent_v4",
+  "model": "claude-sonnet",
+  "prompt_version": "planner_v2",
+  "steps": [],
+  "approvals": [],
+  "cost_usd": 2.31,
+  "status": "completed",
+  "final_confidence": 0.84
+}
+```
+
+## Safety controls
+
+### Action confirmation
+
+Require approval cho:
+
+- sending email,
+- posting messages,
+- deleting files,
+- updating records,
+- making purchases,
+- issuing refunds,
+- running code with network,
+- changing permissions,
+- deploying software.
+
+### Scope limitation
+
+```text
+Allowed: summarize invoices for tenant A.
+Not allowed: access invoices for tenant B.
+
+Allowed: draft refund email.
+Not allowed: issue refund without approval.
+
+Allowed: run tests in sandbox.
+Not allowed: access host filesystem.
+```
+
+### Cost controls
+
+- max tokens per run,
+- max model calls,
+- max tool calls,
+- max wall-clock time,
+- max parallel branches,
+- per-tenant budgets,
+- per-agent budgets,
+- alert on abnormal spend,
+- kill switch.
+
+<Callout type="danger" title="Kill switch là feature production">
+Agent cần có kill switch dừng ngay ongoing run khi phát hiện anomaly, cost spike hoặc security concern.
+</Callout>
+
+## Agent observability
+
+Metrics:
+
+| Metric | Meaning |
+|---|---|
+| Task success rate | user/business success |
+| Completion rate | finishes without human |
+| Escalation rate | autonomy boundary hit |
+| Tool error rate | integration health |
+| Invalid action rate | model/tool mismatch |
+| Unauthorized action attempts | safety pressure |
+| Average steps per task | efficiency |
+| Loop termination rate | guard usefulness |
+| Cost per task | unit economics |
+| p95 latency | UX |
+| Human override rate | trust calibration |
+| Memory correction rate | memory quality |
+| Incident rate | production safety |
+
+Dashboards:
+
+- run volume by agent,
+- cost by tenant/agent/model,
+- tool failure heatmap,
+- escalation reasons,
+- top failed tasks,
+- long-running runs,
+- repeated recovery loops,
+- evaluation regression.
+
+## Evaluation framework
+
+### Unit tests
+
+- tool schema validation,
+- permission checks,
+- state transitions,
+- termination conditions.
+
+### Scenario tests
+
+- end-to-end tasks,
+- ambiguous goals,
+- tool failures,
+- conflicting sources,
+- prompt injection,
+- unauthorized actions,
+- budget exceeded.
+
+### Regression tests
+
+- same task set across agent versions,
+- prompt version comparison,
+- model comparison,
+- tool update comparison.
+
+### Human evaluation
+
+- task usefulness,
+- evidence quality,
+- action appropriateness,
+- clarity of escalation,
+- trustworthiness.
+
+### Red-team evaluation
+
+- prompt injection,
+- data exfiltration,
+- tool abuse,
+- memory poisoning,
+- cost-exhaustion attacks,
+- cross-tenant access attempts.
+
+## Production readiness checklist
+
+### Runtime
+
+- max steps,
+- max tokens,
+- max cost,
+- timeout,
+- retry budget,
+- kill switch.
+
+### Tools
+
+- schemas,
+- validation,
+- auth,
+- side-effect classification,
+- idempotency,
+- timeout,
+- error contract.
+
+### State/memory
+
+- state schema,
+- memory write policy,
+- retention,
+- deletion,
+- privacy,
+- correction path.
+
+### Safety
+
+- approval gates,
+- scope boundaries,
+- prompt injection handling,
+- sandbox,
+- least privilege,
+- tenant isolation.
+
+### Observability
+
+- traces,
+- metrics,
+- logs,
+- redaction,
+- audit trails,
+- dashboards,
+- alerts.
+
+### Evaluation
+
+- golden tasks,
+- regression suite,
+- red-team suite,
+- human review,
+- cost eval,
+- latency eval.
+
+## Implementation lab: production research agent skeleton
+
+Build agent với:
+
+- planner,
+- search tool,
+- RAG/KB tool,
+- source extractor,
+- synthesizer,
+- verifier,
+- human escalation mock,
+- budget controls,
+- audit trace.
+
+Required features:
+
+- task decomposition,
+- parallel research branches,
+- citation tracking,
+- confidence scoring,
+- no-answer behavior,
+- max cost/step controls,
+- source quality scoring,
+- final report with limitations.
+
+```python
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ResearchState:
+    question: str
+    subtasks: list[dict] = field(default_factory=list)
+    evidence: list[dict] = field(default_factory=list)
+    draft: str | None = None
+    confidence: float = 0.0
+    budget_remaining_usd: float = 2.0
+    max_steps: int = 12
+    step: int = 0
+    requires_human: bool = False
+    status: str = "running"
+
+
+def should_escalate(state: ResearchState) -> bool:
+    if state.confidence < 0.6 and state.step >= state.max_steps - 2:
+        return True
+    if state.budget_remaining_usd < 0.2:
+        return True
+    return False
+```
+
+Deliverables:
+
+- architecture diagram,
+- state schema,
+- tool schemas,
+- agent trace examples,
+- eval set với 20 research tasks,
+- red-team tests,
+- production readiness checklist.
+
+## Acceptance criteria
+
+| Area | Target |
+|---|---|
+| Citation coverage | every factual claim cited |
+| Unsupported claim rate | near zero |
+| Budget enforcement | 100% |
+| Step limit enforcement | 100% |
+| Escalation correctness | tested |
+| Prompt injection resistance | tested |
+| Trace completeness | all runs logged |
+
+## Eval dataset categories
+
+Include ít nhất:
+
+- 10 simple research tasks,
+- 10 multi-hop research tasks,
+- 5 ambiguous tasks,
+- 5 adversarial prompt-injection tasks,
+- 5 no-answer/insufficient-evidence tasks,
+- 5 source-conflict tasks,
+- 5 budget-constrained tasks.
+
+## Failure report template
+
+```text
+Top 5 failed tasks:
+- what happened
+- failure category
+- trace excerpt
+- root cause
+- mitigation
+- metric impact after fix
+```
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: không có kill switch">
+Agent chạy dài không có cách dừng ngay sẽ tạo cost spike và nguy cơ security.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: không version agent/prompt">
+Khi agent behavior regression, bạn cần biết agent version, prompt version và model nào tạo ra.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: agent trông competent khi off-track">
+Agent có thể output tự tin nhưng sai. Cần verifier独立, không chỉ tin final answer.
+</Callout>
+
+Checklist:
+
+1. Có max steps/time/cost không?
+2. Có kill switch không?
+3. Có audit trail đầy đủ không?
+4. Có human escalation policy không?
+5. Có budget per tenant/agent không?
+6. Có eval regression suite không?
+7. Có red-team tests không?
+8. Có trace đầy đủ cho mỗi run không?
+9. Agent/prompt/model có version không?
+10. Có monitor cost/escalation/failure không?
+
+## Practice exercises
+
+1. Thiết kế bounded autonomy policy cho email agent.
+2. Viết task decomposition schema cho research agent.
+3. Tạo error recovery matrix cho 10 error types.
+4. Thiết kế audit trail schema.
+5. Viết production readiness checklist cho support agent.
+6. Thiết kế eval dataset với 7 categories.
+7. Viết kill switch mechanism.
+
+## Knowledge check
+
+1. Bounded autonomy là gì?
+2. Task decomposition cần field gì?
+3. Error recovery nên là policy hay model-invented?
+4. Khi nào nên human escalation?
+5. Audit trail cần log những gì?
+6. Cost controls gồm những gì?
+7. Agent evaluation có những levels nào?
+
+## Answer key
+
+1. Cho agent đủ khả năng tiến triển task nhưng giới hạn actions/cost/permissions/time/data/failure.
+2. Subtasks, dependencies, acceptance criteria, risk, cost estimate, done condition.
+3. Policy-driven, code rõ, có budget riêng; không để model invent unlimited recovery.
+4. High-risk action, unclear intent, policy conflict, low confidence, conflicting evidence, repeated failure, budget exceeded, sensitive data.
+5. User/tenant, agent/prompt/model version, tool calls, args, results, approvals, denials, errors, cost, latency, output, evidence, memory writes.
+6. Max tokens/calls/time/parallel, per-tenant/agent budgets, alerts, kill switch.
+7. Unit, scenario, regression, human, red-team.
+
+## Mini-project: Production Research Agent
+
+**Task:** Build production-grade research agent skeleton.
+
+**Deliverables:**
+
+- Architecture diagram.
+- Bounded autonomy policy.
+- Task decomposition schema.
+- Tool schemas with auth.
+- Audit trail schema.
+- Budget/step controls.
+- Human escalation mock.
+- Eval set 20 tasks across 7 categories.
+- Red-team tests.
+- Failure report.
+- Production readiness checklist.
+
+**Success criteria:**
+
+- Every factual claim cited.
+- Unsupported claim rate near zero.
+- Budget enforcement 100%.
+- Step limit enforcement 100%.
+- Escalation correctness tested.
+- Prompt injection resistance tested.
+- Trace complete for all runs.
+- Kill switch works.
+- Eval can run with one command.
+
+## Điểm cần nhớ
+
+- Production agent = bounded autonomy, không maximum autonomy.
+- Task decomposition cần acceptance criteria và done condition.
+- Error recovery là policy, không để model tự Invent.
+- Audit trails và traces là bắt buộc cho agent production.
+- Cost/step/time controls và kill switch là feature, không optional.
+- Agent evaluation cần unit/scenario/regression/human/red-team levels.
+
+## Phase 9 wrap-up
+
+Bạn đã hoàn thành module **AI Agents & Agentic Systems**:
+
+1. **What Are AI Agents:** agent như stateful control loop, formal model, autonomy levels, failure taxonomy.
+2. **Agent Components:** tool registry, state, memory, planning, executor, verifier, guardrails.
+3. **Function Calling / Tool Use:** tool call lifecycle, schema design, validation layers, authorization, sandboxing, error contracts.
+4. **Multi-Agent Systems:** coordination patterns, role design, communication contracts, LangGraph state graphs, human-in-the-loop.
+5. **Agentic AI Production:** bounded autonomy, task decomposition, recovery policies, audit trails, safety controls, evaluation framework, production readiness.
+
+Nguyên tắc xuyên suốt Phase 9:
+
+> Agent không hoàn thành khi nó chạy đúng một lần. Agent chỉ production-ready khi bạn giới hạn được autonomy, inspect được trajectory, evaluate được success, control được tools, reproduce được failures và improve bằng evidence.
+
+## Next phase bridge
+
+Phase 10 sẽ đi sâu vào **Fine-tuning & Model Adaptation**: SFT, LoRA/QLoRA, PEFT, instruction tuning, preference optimization (DPO/RLHF), dataset design, evaluation, safety alignment và khi nào fine-tune thay vì prompt/RAG.
