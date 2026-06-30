@@ -37,17 +37,17 @@ Bạn nên biết:
 
 ## Toán học của Supervised Fine-Tuning (SFT)
 
-Trong quá trình huấn luyện SFT, mô hình được tối ưu hóa bằng phương pháp học có giám sát trên các cặp dữ liệu {(x, y)} trong đó x là prompt (user) và y là target response (assistant).
+Trong quá trình huấn luyện SFT, mô hình được tối ưu hóa bằng phương pháp học có giám sát trên các cặp dữ liệu `{(x, y)}` trong đó `x` là prompt (user) và `y` là target response (assistant).
 
-Mục tiêu là cực tiểu hóa hàm mất mát Cross-Entropy Loss trên chuỗi tokens đầu ra của Assistant. Với chuỗi input X = {x_1, x_2, ..., x_N} và chuỗi target Y = {y_1, y_2, ..., y_M}, hàm loss được tính như sau:
+Mục tiêu là cực tiểu hóa hàm mất mát Cross-Entropy Loss trên chuỗi tokens đầu ra của Assistant. Với chuỗi input `X = {x_1, x_2, ..., x_N}` và chuỗi target `Y = {y_1, y_2, ..., y_M}`, hàm loss được tính như sau:
 
-L(theta) = -\sum_{t=1}^{M} \log P_theta(y_t \mid x_1, ..., x_N, y_1, ..., y_{t-1})
+`L(theta) = -∑_{t=1}^{M} log P_theta(y_t | x_1, ..., x_N, y_1, ..., y_{t-1})`
 
-Trong đó P_theta là xác suất phân phối được dự đoán bởi mô hình có tham số theta thông qua hàm Softmax trên lớp logits đầu ra:
+Trong đó `P_theta` là xác suất phân phối được dự đoán bởi mô hình có tham số `theta` thông qua hàm Softmax trên lớp logits đầu ra:
 
-P_theta(y_t \mid \text{context}) = \frac{e^{z_{y_t}}}{\sum_{j=1}^{V} e^{z_j}}
+`P_theta(y_t | context) = e^{z_y_t} / ∑_{j=1}^{V} e^{z_j}`
 
-Với $V$ là kích thước từ vựng (vocabulary size) và $z$ là logits đầu ra của mô hình trước khi đi qua lớp Softmax.
+Với `V` là kích thước từ vựng (vocabulary size) và `z` là logits đầu ra của mô hình trước khi đi qua lớp Softmax.
 
 ### Cơ chế Loss Masking (Mặt nạ Loss) trong PyTorch
 Khi huấn luyện SFT cho causal language models, toàn bộ chuỗi (cả prompt và response) được đưa vào mô hình dưới dạng một sequence duy nhất để tận dụng cơ chế song song hóa của Transformer. Tuy nhiên, ta chỉ muốn mô hình học cách sinh ra câu trả lời của Assistant ($Y$), không phải học cách sinh lại câu hỏi của User ($X$).
@@ -94,7 +94,7 @@ Lưu trữ các giá trị đầu ra của mỗi layer trong quá trình forward
 - Số lượng layers ($n_{layers}$),
 - Số lượng attention heads ($n_{heads}$).
 
-$$\text{Activation Memory} \propto B \times L \times d_{model} \times n_{layers}$$
+`Activation Memory ∝ B * L * d_model * n_layers`
 
 ```text
 +-----------------------------------------------------------------------------+

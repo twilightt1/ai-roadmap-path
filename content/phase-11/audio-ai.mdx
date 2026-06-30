@@ -1,0 +1,234 @@
+Thế giới vật lý được định hình bởi âm thanh. AI Audio không chỉ dừng lại ở việc chuyển giọng nói thành văn bản hay văn bản thành giọng nói; nó đang tiến đến khả năng hiểu cảm xúc, ngữ điệu, âm nhạc, và khả năng tương tác đàm thoại thời gian thực (Real-time Conversational AI). Việc nắm vững Speech-to-Text (STT) và Text-to-Speech (TTS) là điều kiện kiên quyết để thiết kế những Trợ lý AI thế hệ mới (Voice Assistants).
+
+## Why this matters
+
+Trong thế giới sản xuất AI:
+
+- **Độ trễ truyền phát (Streaming Latency):** Không ai thích nói chuyện với một trợ lý mất 5 giây mới phản hồi. Xây dựng một Voice Agent yêu cầu kỹ thuật xử lý luồng dữ liệu (Stream processing) kết hợp Voice Activity Detection (VAD) để cắt ghép âm thanh thành từng đoạn nhỏ.
+- **Ngữ cảnh âm thanh:** Con người giao tiếp qua ngữ điệu. Những mô hình Audio-to-Audio Native (như GPT-4o) không cần bước trung gian chuyển thành văn bản, giữ lại được cảm xúc, tiếng thở dài, tiếng cười - một lĩnh vực hái ra tiền trong mảng tổng đài viên AI (Customer Support).
+- **Voice Cloning (Nhân bản giọng nói):** Việc tạo ra một giọng nói chỉ từ 10 giây mẫu âm (Zero-shot Voice Cloning) đang định hình lại ngành công nghiệp sách nói (Audiobooks), Lồng tiếng phim (Dubbing) và cả những rủi ro bảo mật sâu sắc về mạo danh.
+
+<Callout type="danger" title="Không bao giờ xử lý âm thanh dưới dạng File tải lên cho Đàm thoại">
+Cách người mới làm Voice AI: Ghi âm -> Lưu file MP3 -> Gửi API STT -> Xử lý LLM -> Gửi API TTS -> Tải file MP3 -> Phát ra loa.
+Hậu quả: Độ trễ lên tới 5-10 giây.
+Cách kỹ sư thực thụ làm: Truyền trực tiếp các Chunk âm thanh (bytes) qua WebSockets bằng công thức: Chunking Audio -> Streaming STT -> Streaming LLM -> Streaming TTS. Độ trễ giảm xuống dưới 1 giây.
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Trình bày kiến trúc Encoder-Decoder của mô hình Whisper (Speech-to-Text).
+2. Hiểu cơ chế hoạt động của công nghệ Text-to-Speech (TTS) và Voice Cloning.
+3. Thiết lập hệ thống Voice Activity Detection (VAD) phân chia âm thanh theo độ tĩnh lặng.
+4. Triển khai kiến trúc đàm thoại thời gian thực sử dụng Streaming và WebSockets.
+5. Hiểu về các mô hình âm nhạc (Music Generation) sử dụng phổ âm thanh (spectrogram).
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Biểu diễn sóng âm thanh cơ bản (Waveforms, Sampling Rate).
+- Kỹ thuật Streaming và WebSockets ở Backend (FastAPI).
+- Kiến trúc Transformer Encoder-Decoder (Phase 5).
+
+---
+
+## Mảng 1: Speech-to-Text (STT) và Sự thống trị của Whisper
+
+Whisper (OpenAI) là mô hình STT định hình chuẩn mực của ngành công nghiệp hiện tại. Thay vì phải tự ghép nối các mô hình âm học phức tạp như thời kỳ trước (HMM/GMM), Whisper sử dụng một cấu trúc Transformer tiêu chuẩn cực kỳ thanh lịch.
+
+### Kiến trúc hoạt động của Whisper:
+1. **Tiền xử lý (Log-Mel Spectrogram):** Đoạn âm thanh (ví dụ dài 30 giây) được chuyển từ dạng sóng (waveform) 1D sang biểu diễn hình ảnh phổ âm thanh (Spectrogram) 2D, tương tự như cách ta chuẩn bị dữ liệu hình ảnh.
+2. **Encoder:** Một Transformer Encoder "đọc" phổ âm thanh này và xuất ra các vector biểu diễn đặc trưng (Audio Features).
+3. **Decoder:** Transformer Decoder lấy các vector này kết hợp với các Token văn bản đã sinh ra trước đó để **tự hồi quy (autoregressively)** dự đoán từ tiếp theo.
+
+### Tính đa nhiệm (Multitask Learning):
+Whisper được đào tạo trên một tập dữ liệu khổng lồ (680.000 giờ âm thanh). Bằng cách chèn các Token điều khiển (Control Tokens) vào đầu câu, Whisper có thể thực hiện nhiều nhiệm vụ:
+- Nhận diện ngôn ngữ (`<|vi|>`).
+- Quyết định phiên âm (`<|transcribe|>`) hoặc dịch thuật thẳng sang tiếng Anh (`<|translate|>`).
+- Đánh dấu mốc thời gian (Timestamps) cực kỳ chính xác phục vụ làm phụ đề video.
+
+---
+
+## Mảng 2: Text-to-Speech (TTS) và Voice Cloning
+
+Text-to-Speech truyền thống nghe rất giống robot (như chị Google) vì chúng sử dụng kỹ thuật ghép nối các âm vị thu âm sẵn (Concatenative TTS). Các mô hình sinh giọng nói hiện đại (như ElevenLabs, VALL-E, Coqui) sử dụng kiến trúc AI sinh thành.
+
+### Cơ chế sinh giọng nói (Generative TTS):
+Thay vì sinh ra ảnh, mô hình có thể sinh ra tín hiệu âm thanh (Audio waveform) hoặc phổ âm thanh (Spectrogram).
+- **Acoustic Model:** Chuyển văn bản thành phổ âm thanh (thường dùng Transformer hoặc VAE).
+- **Vocoder (Bộ tạo âm):** Chuyển phổ âm thanh (ảnh 2D) ngược trở lại thành dải sóng âm thanh 1D có thể phát ra loa (ví dụ: mô hình HiFi-GAN).
+
+### Zero-Shot Voice Cloning
+Kỹ thuật này cho phép sao chép giọng nói của một người chưa từng xuất hiện trong tập dữ liệu huấn luyện, chỉ thông qua một đoạn mẫu (prompt audio) dài từ 3 đến 10 giây.
+- Mô hình nhúng đoạn mẫu giọng nói này thành một **Speaker Embedding Vector** (Đại diện cho phong cách, cao độ, ngữ điệu của người đó).
+- Khi sinh giọng nói cho câu văn mới, mô hình lấy Speaker Embedding này làm biến điều kiện (Condition) hướng dẫn quá trình sinh âm thanh.
+
+---
+
+## Mảng 3: Âm nhạc nhân tạo (Music Generation)
+
+Các nền tảng như Suno hoặc Udio đã chứng minh AI có thể sáng tác cả một bài hát (nhạc cụ + giọng hát) từ một đoạn Text Prompt. 
+
+Về bản chất, âm thanh được nén dưới dạng mã hóa lượng hóa (Audio Encodec) thành các "Token âm thanh". Mô hình (thường là Transformer hoặc Diffusion Models) sẽ sinh ra một chuỗi "Token âm nhạc", sau đó được giải nén để thành một bài hát chất lượng cao. Khó khăn lớn nhất của Music AI là làm sao duy trì nhịp độ (Tempo) và cấu trúc bài hát (Structure: Verse - Chorus - Bridge) xuyên suốt một đoạn âm thanh dài 3 phút.
+
+---
+
+## System Architecture: Đàm thoại thời gian thực (Real-time Voice Agent)
+
+Để xây dựng một trợ lý AI như phim viễn tưởng (ví dụ: tính năng Live Voice của ChatGPT), bạn không thể xử lý theo lô (batch processing). Bạn phải dùng kỹ thuật **Pipelined Streaming**.
+
+### The Latency Bottleneck:
+Nếu bạn làm theo cách cổ điển:
+`User nói xong (đợi 5s) -> Whisper xử lý (2s) -> LLM sinh câu trả lời (3s) -> TTS đọc thành file (3s) -> Phát ra loa.`
+=> Độ trễ = 13 giây. Trải nghiệm người dùng sụp đổ.
+
+### The Streaming Solution:
+Sử dụng 4 thành phần liên kết với nhau qua các hàng đợi (Queues) và chạy đồng thời (Concurrency):
+
+1. **VAD (Voice Activity Detection):** Lắng nghe luồng Microphone. Ngay khi người dùng dừng nói khoảng 0.5 giây (Silence Threshold), cắt đoạn âm thanh đó gửi đi ngay lập tức.
+2. **Streaming STT:** Mô hình STT liên tục trả về văn bản dạng luồng (từng từ xuất hiện).
+3. **Streaming LLM:** Nhận văn bản, bắt đầu suy luận ngay. Khi LLM nhả ra dấu câu kết thúc đầu tiên (ví dụ dấu phẩy hoặc chấm: "Vâng,"), đoạn đó được gửi ngay lập tức sang TTS.
+4. **Streaming TTS:** TTS nhận câu ngắn "Vâng,", sinh âm thanh trong 0.1 giây và phát ra loa cho người dùng nghe. Cùng lúc đó, LLM vẫn đang suy nghĩ và nhả tiếp đoạn văn thứ 2, thứ 3 ở chế độ ngầm.
+
+=> Độ trễ giảm xuống chỉ còn 0.5 - 1 giây.
+
+---
+
+## Implementation lab: VAD và Gọi API Whisper
+
+**Nhiệm vụ:** Viết mã Python để chia nhỏ một tệp âm thanh hoặc luồng mic sử dụng WebRTC VAD (Voice Activity Detection) nhằm chỉ gọi API STT cho các đoạn có tiếng người.
+
+```python
+import webrtcvad
+import collections
+
+# Lớp giả lập quản lý Frame âm thanh
+class AudioFrame:
+    def __init__(self, bytes, timestamp, duration):
+        self.bytes = bytes
+        self.timestamp = timestamp
+        self.duration = duration
+
+def vad_collector(sample_rate, frame_duration_ms, padding_duration_ms, vad, frames):
+    """
+    Thu thập các frames âm thanh chứa giọng nói.
+    """
+    num_padding_frames = int(padding_duration_ms / frame_duration_ms)
+    # Hàng đợi ring buffer lưu trữ các frames trước/sau đoạn hội thoại
+    ring_buffer = collections.deque(maxlen=num_padding_frames)
+    
+    triggered = False
+    voiced_frames = []
+
+    for frame in frames:
+        # VAD trả về True nếu phát hiện giọng nói
+        is_speech = vad.is_speech(frame.bytes, sample_rate)
+
+        if not triggered:
+            ring_buffer.append((frame, is_speech))
+            # Nếu số lượng frame có giọng nói vượt ngưỡng 90% trong buffer
+            num_voiced = len([f for f, speech in ring_buffer if speech])
+            if num_voiced > 0.9 * ring_buffer.maxlen:
+                triggered = True
+                for f, s in ring_buffer:
+                    voiced_frames.append(f)
+                ring_buffer.clear()
+        else:
+            voiced_frames.append(frame)
+            ring_buffer.append((frame, is_speech))
+            # Nếu phát hiện đoạn im lặng kéo dài (90% buffer không có giọng nói) -> Dừng cắt
+            num_unvoiced = len([f for f, speech in ring_buffer if not speech])
+            if num_unvoiced > 0.9 * ring_buffer.maxlen:
+                triggered = False
+                yield b''.join([f.bytes for f in voiced_frames])
+                ring_buffer.clear()
+                voiced_frames = []
+
+# Khởi tạo VAD với độ nhạy mức 3 (Bắt giọng nói cực khắt khe)
+vad = webrtcvad.Vad(3)
+sample_rate = 16000 # 16kHz chuẩn cho STT
+frame_duration_ms = 30 # 30ms mỗi frame
+padding_duration_ms = 300 # 300ms im lặng thì ngắt câu
+
+# Giả lập: frames = read_audio_source()
+# for segment_bytes in vad_collector(sample_rate, frame_duration_ms, padding_duration_ms, vad, frames):
+#     # Gọi API Whisper cho đoạn segment_bytes này ngay lập tức!
+#     transcript = call_whisper_api(segment_bytes)
+#     print("User:", transcript)
+```
+
+---
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: Quên thiết lập Silence Threshold phù hợp">
+Nếu bạn đặt thời gian ngắt im lặng (Silence Threshold) quá thấp (0.1 giây), khi người dùng đang ngập ngừng suy nghĩ "À... ừm...", hệ thống sẽ ngắt lời họ và bắt đầu trả lời. Hãy đặt ngưỡng từ 0.5 - 1.0 giây tùy thuộc vào nhịp độ đàm thoại.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: Gửi File lớn hơn 25MB cho API Whisper">
+Các nhà cung cấp (như OpenAI) giới hạn dung lượng tệp tin (thường là 25MB). Nếu bạn có một tệp ghi âm Podcast dài 2 tiếng, bạn không thể gọi API trực tiếp. Hãy sử dụng thư viện `pydub` hoặc `ffmpeg` để cắt tệp thành các đoạn nhỏ 10 phút trước khi gửi đi và nối kết quả văn bản lại.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: Không xử lý âm thanh định dạng Raw PCM">
+Khi ghi âm từ trình duyệt web (Microphone) gửi qua WebSocket, âm thanh thường ở dạng thô (Raw PCM, Float32, 44.1kHz). Các mô hình AI đa số chỉ nhận `16kHz, Mono channel, Int16`. Quên chuyển đổi (Resampling & Downmixing) tại server sẽ khiến mô hình STT trả về một chuỗi ảo giác vô nghĩa.
+</Callout>
+
+### Checklist hệ thống Voice:
+- [ ] Tín hiệu âm thanh đầu vào đã được chuyển về chuẩn `16kHz, Mono` chưa?
+- [ ] VAD có được cấu hình để loại bỏ tiếng ồn nền (Background noise) thay vì nhận diện nhầm là giọng nói không?
+- [ ] Luồng Streaming LLM có được cấu hình sử dụng `yield` hoặc Server-Sent Events (SSE) để kết nối đồng bộ với khâu sinh âm thanh TTS chưa?
+
+---
+
+## Practice exercises
+
+1. **Phân tích Kiến trúc Whisper:** Giải thích tại sao Whisper lại cần một cơ chế Tokenizer riêng biệt thay vì dùng Tokenizer chung của mô hình GPT.
+2. **Kỹ thuật Streaming:** Viết một lược đồ trình tự (Sequence Diagram) mô tả luồng giao tiếp WebSocket giữa Frontend (React/JS), Backend (FastAPI) và 2 dịch vụ AI (Whisper STT, ElevenLabs TTS) cho bài toán Voice Chat.
+3. **Bài toán Tối ưu hóa:** Mô hình Whisper thường gặp hiện tượng "ảo giác im lặng" (Hallucinating on silence) — tự động sinh ra những câu phụ đề không có thật khi âm thanh đầu vào hoàn toàn im lặng. Hãy đề xuất một giải pháp ngăn chặn lỗi này dựa trên kiến thức về VAD.
+
+---
+
+## Knowledge check
+
+1. Vai trò của Spectrogram trong mô hình Whisper là gì?
+2. Kỹ thuật Voice Cloning (nhân bản giọng nói) hoạt động dựa trên vector nào?
+3. Kiến trúc nào giúp các nền tảng đàm thoại giọng nói đạt được độ trễ dưới 1 giây?
+4. Vocoder trong quy trình Text-to-Speech (TTS) làm nhiệm vụ gì?
+5. Nếu một hệ thống Voice AI liên tục ngắt lời người dùng khi họ đang suy nghĩ, bạn cần tinh chỉnh thông số kỹ thuật nào?
+
+---
+
+## Answer key
+
+1. Nó là hình thức chuyển đổi dữ liệu dạng sóng âm (1D waveform) thành dạng hình ảnh hai chiều (2D image), cho phép mô hình Transformer Encoder xử lý âm thanh giống như cách nó phân tích bức ảnh.
+2. Dựa trên Speaker Embedding Vector (Vector đặc trưng người nói), nó nén các thông tin về âm sắc, ngữ điệu và phong cách của giọng mẫu để làm điều kiện hướng dẫn mô hình sinh ra các từ mới theo cùng chất giọng.
+3. Kỹ thuật Pipelined Streaming kết hợp với WebSockets. Dữ liệu được băm nhỏ thành các chunk và các hệ thống STT -> LLM -> TTS chạy gối đầu lên nhau thay vì chờ từng tiến trình kết thúc hoàn toàn.
+4. Vocoder dịch ngược phổ âm thanh (Mel-Spectrogram - dạng ảnh 2D) được tạo ra bởi Acoustic Model thành các dải tín hiệu sóng âm (1D waveform) mà loa máy tính có thể đọc và phát ra thành tiếng người.
+5. Cần tinh chỉnh bộ dò hoạt động giọng nói (Voice Activity Detection - VAD), cụ thể là tăng thời gian Silence Threshold (ví dụ từ 0.3 giây lên 1.0 giây) để hệ thống chờ đợi lâu hơn trước khi cắt câu.
+
+---
+
+## Mini-project: Voice Activity Router
+
+**Nhiệm vụ:** Thiết lập một tập lệnh Python để xử lý một file âm thanh hội thoại dài 5 phút chứa nhiều đoạn im lặng.
+
+**Yêu cầu đầu ra:**
+- Dùng thư viện `webrtcvad` để cắt file âm thanh thành các đoạn nhỏ chỉ chứa giọng nói người (bỏ qua đoạn im lặng).
+- Tự động gọi API OpenAI Whisper để phiên âm (transcribe) từng đoạn một.
+- Xuất ra một file `transcript.txt` chứa nội dung phiên âm hoàn chỉnh với cấu trúc thời gian mô phỏng.
+
+---
+
+## Điểm cần nhớ
+
+- Xử lý âm thanh trong AI thường bắt đầu bằng bước chuyển đổi phổ (Spectrogram) để đưa về bài toán thị giác máy tính hoặc chuỗi Sequence.
+- Đàm thoại AI thời gian thực là nghệ thuật của Pipeline Streaming. Càng chia nhỏ tác vụ và chạy đồng thời, độ trễ trải nghiệm càng tiệm cận con người.
+- Voice Cloning mang lại quyền năng lớn cho truyền thông đa phương tiện nhưng mở ra những thách thức khổng lồ về xác thực danh tính và Deepfake Audio.
+
+---
+
+## Next chapter bridge
+
+Cả âm thanh và hình ảnh tĩnh đều đã bị chinh phục. Cột mốc cuối cùng và cũng là thử thách tính toán tốn kém nhất của Generative AI chính là sự chuyển động: sự thay đổi hình ảnh liên tục theo trục thời gian. Chương tiếp theo và cũng là bài kết thúc Phase 11: **Video AI** — đi sâu vào các cỗ máy ma thuật như Sora, Runway Gen-3, và cuộc cách mạng của Diffusion Transformers (DiT).

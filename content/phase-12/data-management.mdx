@@ -1,0 +1,171 @@
+Trong kỷ nguyên của AI, code không còn là tài sản duy nhất cần được quản lý phiên bản. Sự thay đổi của mô hình AI bị chi phối mạnh mẽ bởi dữ liệu. Nếu bạn không thể tái tạo lại (reproduce) tập dữ liệu chính xác đã dùng để huấn luyện mô hình tuần trước, hệ thống của bạn không phải là một hệ thống phần mềm kỹ thuật (engineering software), mà chỉ là một dự án nghiên cứu nghiệp dư. Chương này chuyển dịch tư duy của bạn từ "lưu file CSV trên máy cá nhân" sang kiến trúc **Quản lý và Phiên bản hóa Dữ liệu (Data Management & Versioning)** cấp độ doanh nghiệp (Enterprise-grade MLOps).
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Cơn ác mộng 'Works on my machine'">
+**Bối cảnh:** Nhóm Data Science (DS) vừa fine-tune thành công một mô hình LLaMA-3 cực kỳ xuất sắc cho tác vụ trích xuất hợp đồng pháp lý. Họ chuyển giao model weights cho nhóm Engineering để deploy lên Production.
+
+**Sự cố:** Sau khi deploy, model bắt đầu hallucinate (bịa đặt) các điều khoản hợp đồng. Nhóm DS cố gắng train lại model nhưng không thể đạt được độ chính xác như cũ. Khi kiểm tra lại, họ phát hiện ra tệp `train_data_final_v3_REAL.json` nằm trên laptop của một kỹ sư DS đã bị ghi đè nhầm bởi một đoạn script dọn dẹp dữ liệu (cleaning script) vào sáng hôm sau. Không có cách nào khôi phục lại tập dữ liệu hoàn hảo ban đầu.
+
+**Hậu quả:** Toàn bộ công sức tinh chỉnh trong 2 tuần bị xóa sổ. Dự án bị chậm tiến độ 1 tháng. Công ty lãng phí $5,000 tiền thuê GPU.
+</Callout>
+
+Bài học rút ra: Dữ liệu cũng là Code. Nó cần được Commit, Branching, và Rollback.
+
+---
+
+## 2. Architecture Blueprint (Kiến trúc giải pháp)
+
+Để giải quyết bài toán trên, kiến trúc MLOps hiện đại chia tách rõ ràng việc lưu trữ Code (Git) và Data/Models (Object Storage), nhưng liên kết chúng bằng một cấu trúc băm (Hashing) chặt chẽ.
+
+```text
+[ Git Repository ] <----------------------------+
+  │                                             │
+  ├── train.py (Mã nguồn)                       │ Link bằng mã Hash (ví dụ: a1b2c3d)
+  ├── model_config.yml                          │
+  └── data.dvc (Chứa Hash trỏ tới dữ liệu) -----+
+                                                │
+[ Cloud Object Storage (S3 / GCS / Azure) ] <---+
+  │
+  ├── a1b2c3d... (File dữ liệu thật: train_data_v1.json)
+  └── f9e8d7c... (Model weights: model-v1.safetensors)
+```
+
+### Tại sao không dùng thẳng Git cho Dữ liệu?
+Git được thiết kế để theo dõi các file văn bản nhỏ (source code). Nếu bạn `git commit` một file dataset nặng 10GB hoặc một file model weights 15GB, kho lưu trữ Git của bạn sẽ bị sập, thời gian `git clone` sẽ kéo dài vô tận và bạn sẽ vượt quá giới hạn của GitHub/GitLab.
+
+Giải pháp là **DVC (Data Version Control)**. DVC thay thế các file dữ liệu lớn bằng một file text nhỏ xíu (file `.dvc`) chứa mã băm (MD5/SHA256) của dữ liệu. Git sẽ theo dõi file `.dvc` này, còn dữ liệu thật được DVC đẩy lên Cloud Storage (Amazon S3, Google Cloud Storage).
+
+---
+
+## 3. Tooling Landscape (Ma trận công cụ)
+
+Việc quản lý dữ liệu trong MLOps không chỉ dừng lại ở lưu trữ, mà còn bao gồm chất lượng dữ liệu và kỹ nghệ đặc trưng (Feature Engineering).
+
+| Lĩnh vực | Công cụ phổ biến | Chức năng cốt lõi (SRE Use-case) |
+|---|---|---|
+| **Data Versioning** | DVC, Git LFS, Pachyderm | Quản lý phiên bản cho file dữ liệu lớn và trọng số mô hình. Liên kết chặt chẽ với Git commit. |
+| **Data Validation** | Great Expectations, Pandera | Viết unit tests cho Data. (Ví dụ: "Cột tuổi không được âm", "Cột email không được null"). |
+| **Data Pipelines** | Airflow, Prefect, Dagster | Quản lý luồng xử lý dữ liệu DAG (Directed Acyclic Graph) tự động, lên lịch và retry khi có lỗi. |
+| **Feature Stores** | Feast, Tecton, Hopsworks | Lưu trữ và chia sẻ các đặc trưng (features) đã được xử lý để dùng chung giữa Training và Inference, đảm bảo không có độ trễ (latency). |
+
+---
+
+## 4. Implementation Playbook (Thực thi)
+
+Hãy cùng thiết lập một luồng làm việc DVC chuẩn chỉ cho dự án Fine-Tuning LLM của bạn.
+
+### Bước 1: Khởi tạo DVC và kết nối Cloud Storage
+Yêu cầu hệ thống đã cài đặt `git` và `dvc` (`pip install dvc[s3]`).
+
+```bash
+# 1. Khởi tạo Git và DVC
+git init
+dvc init
+
+# 2. Cấu hình DVC trỏ tới một S3 bucket làm Remote Storage
+dvc remote add -d myremote s3://my-company-mlops-bucket/project-x
+dvc remote modify myremote region us-east-1
+
+# Lưu cấu hình DVC vào Git
+git add .dvc/config
+git commit -m "Configure DVC remote S3 storage"
+```
+
+### Bước 2: Theo dõi tập dữ liệu huấn luyện
+Giả sử bạn có một file `dataset/train_chatml.jsonl` nặng 5GB.
+
+```bash
+# Thêm file dữ liệu vào DVC
+dvc add dataset/train_chatml.jsonl
+
+# DVC sẽ tạo ra file `dataset/train_chatml.jsonl.dvc` và tự động thêm file gốc vào `.gitignore`
+# Ta sẽ commit file .dvc này vào Git
+git add dataset/train_chatml.jsonl.dvc dataset/.gitignore
+git commit -m "Add version 1 of training dataset"
+
+# Đẩy dữ liệu vật lý (5GB) lên S3
+dvc push
+```
+
+### Bước 3: Kiểm thử chất lượng dữ liệu (Data Validation) với Pandera
+Trước khi đưa dữ liệu vào huấn luyện, ta phải viết Unit Test cho dữ liệu (để tránh rác lọt vào model).
+
+```python
+import pandas as pd
+import pandera as pa
+from pandera.typing import Series
+
+# Định nghĩa Schema (Kỳ vọng) cho Dữ liệu
+schema = pa.DataFrameSchema({
+    "instruction": pa.Column(str, checks=pa.Check.str_length(min_value=10, max_value=1000)),
+    "input": pa.Column(str, nullable=True), # Có thể null
+    "output": pa.Column(str, checks=[
+        pa.Check.str_length(min_value=1),
+        pa.Check(lambda x: not x.str.contains("NaN").any(), error="Output chứa chuỗi NaN bị lỗi")
+    ])
+})
+
+# Đọc dữ liệu (đã được kéo về bằng dvc pull)
+df = pd.read_json("dataset/train_chatml.jsonl", lines=True)
+
+# Chạy kiểm thử (Sẽ throw Error nếu dữ liệu vi phạm schema)
+validated_df = schema.validate(df)
+print("Data validation passed! Sẵn sàng cho Training.")
+```
+
+---
+
+## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+Dù đã có DVC, hệ thống vẫn có thể hỏng hóc trong quá trình vận hành. Dưới đây là các lỗi kinh điển và cách kỹ sư MLOps xử lý:
+
+<Callout type="warning" title="Pitfall 1: Mất đồng bộ giữa Git và DVC (Dangling Data)">
+**Triệu chứng:** Chạy `git checkout v2.0` để quay về code cũ, sau đó chạy model training nhưng kết quả loss vẫn ra của bản v3.0.
+**Nguyên nhân:** Kỹ sư chỉ chuyển nhánh Git mà quên không chuyển nhánh dữ liệu vật lý của DVC.
+**Cách khắc phục (Fix):** Luôn tạo thói quen chạy một cặp lệnh đi liền nhau. Bạn có thể cấu hình Git Hooks (post-checkout) để tự động hóa việc này.
+```bash
+git checkout v2.0
+dvc pull  # Bắt buộc: Tải file dữ liệu vật lý tương ứng với file .dvc ở nhánh này
+```
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Bóp nghẹt băng thông (Bandwidth Bottleneck) khi CI/CD">
+**Triệu chứng:** Pipeline CI/CD trên GitHub Actions mất 45 phút chỉ để kéo (pull) model weights 30GB từ S3 về máy chủ build.
+**Nguyên nhân:** DVC kéo dữ liệu vật lý qua đường truyền Internet công cộng.
+**Cách khắc phục (Fix):** 
+1. Chạy Self-hosted runners (máy chủ CI/CD đặt cùng VPC mạng nội bộ với S3 bucket).
+2. Tránh `dvc pull` toàn bộ project. Hãy dùng tính năng Data Registry của DVC để chỉ pull đúng thư mục/file cần thiết (`dvc get`).
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Lộ lọt dữ liệu nhạy cảm (Data Leakage)">
+**Triệu chứng:** Dữ liệu chứa thông tin thẻ tín dụng của khách hàng vô tình bị đẩy lên DVC remote public.
+**Cách khắc phục (Fix):** Luôn tích hợp các script kiểm tra PII (Personally Identifiable Information) như Presidio vào Data Pipeline (Airflow/Prefect) **trước khi** dữ liệu được phép `dvc add`.
+</Callout>
+
+---
+
+## 6. Cost & Performance Unit Economics
+
+Hệ thống Data Management không miễn phí. Một kỹ sư MLOps phải biết tính toán chi phí (Unit Economics):
+
+| Chi phí | Phân tích SRE | Tối ưu hóa (Optimization) |
+|---|---|---|
+| **Storage Cost (S3/GCS)** | Lưu nhiều phiên bản (v1, v2, v3) của tập dữ liệu 100GB sẽ tốn $23/tháng/phiên bản. | Bật tính năng Deduplication của DVC. Cấu hình S3 Lifecycle rule đẩy các phiên bản cũ (>90 ngày) xuống kho lạnh (S3 Glacier) với giá chỉ bằng 1/10. |
+| **Egress / Transfer Cost** | Tải dữ liệu từ S3 về máy cá nhân hoặc máy chủ ngoài VPC bị tính phí truyền tải mạng (khoảng $0.09/GB). Kéo 100GB mất ~$9. | Luôn đặt máy chủ Training (EC2/SageMaker) cùng vùng (Region) với S3 Bucket. Truyền dữ liệu nội mạng (Intra-region) thường hoàn toàn miễn phí. |
+| **Pipeline Latency** | Chạy kiểm tra dữ liệu bằng Pandera trên 10 triệu dòng mất 15 phút. | Thay thế Pandas bằng Polars, PySpark hoặc chạy validation trực tiếp trên Database bằng dbt (Data Build Tool) / SQL. |
+
+---
+
+## Điểm cần nhớ
+
+- **Code + Config + Data = Model Reproducibility:** Mất một trong ba yếu tố này, bạn sẽ không bao giờ tạo lại được mô hình cũ.
+- DVC quản lý dữ liệu lớn bằng cách lưu trữ file thực tế trên Cloud (S3) và theo dõi con trỏ hash (file `.dvc`) bằng Git.
+- Data Validation (như Great Expectations/Pandera) là lớp khiên bảo vệ đầu tiên ngăn rác lọt vào 파ipeline huấn luyện.
+- Vận hành DVC trong môi trường doanh nghiệp phải đi kèm với bài toán tối ưu băng thông mạng (VPC) và chi phí lưu trữ kho lạnh (Glacier).
+
+## Next chapter bridge
+
+Sau khi bạn đã đóng gói và phiên bản hóa thành công tập dữ liệu huấn luyện an toàn trên Cloud, bước tiếp theo là khởi động các phiên huấn luyện (Training runs). Tuy nhiên, khi bạn thử nghiệm 50 cấu hình Learning Rate và Batch Size khác nhau, làm sao để nhớ được cấu hình nào sinh ra mô hình tốt nhất? Chương tiếp theo: **Experiment Tracking** — nơi chúng ta sẽ thiết lập bảng điều khiển chỉ huy (Control Center) với Weights & Biases (W&B) và MLflow để giám sát mọi tham số và số liệu (metrics) của mô hình.

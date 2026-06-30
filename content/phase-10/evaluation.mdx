@@ -54,22 +54,22 @@ Dùng để đo mức độ đáp ứng yêu cầu nghiệp vụ cụ thể củ
 
 ---
 
-## Toán học của chỉ số $Pass@k$ trong sinh mã nguồn
+## Toán học của chỉ số `Pass@k` trong sinh mã nguồn
 
-Khi đánh giá khả năng sinh mã nguồn (ví dụ trên benchmark HumanEval), việc chỉ lấy mẫu một câu duy nhất ($Pass@1$) sẽ không phản ánh đúng năng lực thực tế của mô hình do tính ngẫu nhiên của decoding (sampling). 
+Khi đánh giá khả năng sinh mã nguồn (ví dụ trên benchmark HumanEval), việc chỉ lấy mẫu một câu duy nhất (`Pass@1`) sẽ không phản ánh đúng năng lực thực tế của mô hình do tính ngẫu nhiên của decoding (sampling). 
 
-Ta sinh ra $n$ mẫu ($n \ge k$) cho mỗi bài toán lập trình, chạy các unit tests trên cả $n$ mẫu này. Giả sử có $c$ mẫu vượt qua tất cả các unit tests. Chỉ số $Pass@k$ được định nghĩa là xác suất để **ít nhất một mẫu trong số $k$ mẫu được chọn ngẫu nhiên vượt qua kiểm thử**.
+Ta sinh ra `n` mẫu (`n ≥ k`) cho mỗi bài toán lập trình, chạy các unit tests trên cả `n` mẫu này. Giả sử có `c` mẫu vượt qua tất cả các unit tests. Chỉ số `Pass@k` được định nghĩa là xác suất để **ít nhất một mẫu trong số `k` mẫu được chọn ngẫu nhiên vượt qua kiểm thử**.
 
 Công thức toán học tính Pass@k là:
 
-Pass@k = 1 - \frac{\binom{n-c}{k}}{\binom{n}{k}} = 1 - \prod_{i=0}^{k-1} \frac{n - c - i}{n - i}
+`Pass@k = 1 - [ (n - c)!(n - k)! ] / [ (n - c - k)!n! ]`
 
 Trong đó:
-- n: Tổng số mẫu sinh ra cho mỗi bài toán (thường đặt n=200).
-- c: Số lượng mẫu vượt qua unit tests (c \le n).
-- k: Số lượng mẫu được rút ra để đánh giá (ví dụ k=1, 5, 10).
+- `n`: Tổng số mẫu sinh ra cho mỗi bài toán (thường đặt `n=200`).
+- `c`: Số lượng mẫu vượt qua unit tests (`c ≤ n`).
+- `k`: Số lượng mẫu được rút ra để đánh giá (ví dụ `k=1, 5, 10`).
 
-Nếu $n - c < k$, tức là số mẫu lỗi quá nhiều khiến số mẫu đúng còn lại ít hơn $k$, thì tỷ lệ $Pass@k$ được quy ước bằng $1.0$.
+Nếu `n - c < k`, tức là số mẫu lỗi quá nhiều khiến số mẫu đúng còn lại ít hơn `k`, thì tỷ lệ `Pass@k` được quy ước bằng `1.0`.
 
 ---
 

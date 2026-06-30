@@ -1,0 +1,271 @@
+Việc hiểu rõ về Diffusion Models ở khía cạnh toán học là nền tảng vững chắc, nhưng trong thế giới sản xuất phần mềm (production), rất ít công ty tự huấn luyện một mô hình sinh ảnh từ đầu. Hầu hết các kỹ sư AI thao tác với quá trình sinh ảnh thông qua **Text-to-Image APIs** (ví dụ: DALL-E, Midjourney, Stable Diffusion). Quá trình tích hợp này không chỉ là gọi một hàm REST API đơn giản, mà là thiết kế kiến trúc hệ thống để xử lý bài toán **Bất đồng bộ (Asynchronous Execution)** do thời gian tính toán kéo dài của mạng neural.
+
+## Why this matters
+
+Trong môi trường hệ thống thực tế (production system), tích hợp API sinh ảnh chứa đầy rủi ro:
+
+- **Độ trễ khổng lồ (Latency Spike):** Một API sinh văn bản (LLM) phản hồi token đầu tiên trong 0.5s, nhưng một API sinh ảnh (như DALL-E 3) có thể mất từ 10s đến 30s. Nếu bạn để ứng dụng di động (Mobile App) mở kết nối HTTP chờ 30 giây, kết nối đó sẽ bị thiết bị cắt đứt do Time-out.
+- **Tiêu tốn tài nguyên máy chủ:** Giữ kết nối HTTP chờ (Blocking I/O) làm cạn kiệt số lượng luồng (Threads) của máy chủ Backend, dẫn đến sập toàn bộ hệ thống web khi có nhiều người dùng.
+- **Kiểm soát chi phí:** Sinh ảnh đắt hơn rất nhiều so với sinh văn bản. Bạn phải đối phó với bài toán Spam/Rate-limit.
+- **Content Moderation:** Hình ảnh sinh ra không thể dự đoán trước. Người dùng có thể truyền vào prompt độc hại để sinh ra các ảnh bạo lực hoặc không phù hợp (NSFW). Bạn sẽ vi phạm luật pháp nếu không có bộ lọc an toàn trước khi hiển thị cho người dùng cuối.
+
+<Callout type="danger" title="Không bao giờ gọi Image API đồng bộ trên luồng chính của Backend">
+Lỗi thiết kế lớn nhất của AI Engineer mới vào nghề là `response = requests.post(dalley_url)` trên luồng API trực tiếp. Hãy thiết kế hệ thống theo mô hình Bất đồng bộ (Async Message Queue + Webhooks).
+</Callout>
+
+## Learning objectives
+
+Sau chương này, bạn sẽ có thể:
+
+1. Phân biệt các hệ sinh thái mô hình sinh ảnh hiện nay (DALL-E, Stable Diffusion, Midjourney, Flux).
+2. Xây dựng kỹ năng Prompt Engineering chuyên biệt cho hình ảnh (Negative Prompts, Lighting, Composition).
+3. Thiết kế kiến trúc Backend bất đồng bộ sử dụng Task ID và Webhooks.
+4. Cấu hình Polling Pattern an toàn để giảm tải I/O cho máy chủ.
+5. Triển khai đường ống kiểm duyệt nội dung an toàn (Safety & NSFW filtering).
+6. Viết mã FastAPI để xử lý luồng Webhook sinh ảnh tự động.
+
+## Prerequisites
+
+Bạn nên biết:
+
+- Khái niệm cơ bản về HTTP Requests (POST, GET).
+- Hiểu kiến trúc RestAPI sử dụng FastAPI hoặc NodeJS.
+- Kiến thức cơ bản về mô hình Diffusion (để hiểu tại sao việc sinh ảnh lại tốn thời gian).
+
+---
+
+## Các hệ sinh thái API phổ biến
+
+Không có một API sinh ảnh nào là hoàn hảo cho mọi ứng dụng. Kỹ sư AI cần biết cách chọn công cụ theo đặc thù sản phẩm:
+
+### 1. DALL-E 3 (OpenAI API)
+- **Đặc điểm:** Tuân thủ cực tốt theo Text Prompt. Khả năng tích hợp text (chữ viết) vào trong ảnh rất tốt.
+- **Mức độ kiểm soát:** Thấp. Bạn không thể cung cấp Negative Prompts, không thể can thiệp sâu vào tỷ lệ khung hình hay hạt giống ngẫu nhiên (seed) linh hoạt.
+- **Cost:** Cao (khoảng $0.04/ảnh độ phân giải cao).
+
+### 2. Stable Diffusion / Flux (Replicate / HuggingFace)
+- **Đặc điểm:** Mã nguồn mở, cộng đồng lớn nhất, độ chân thực cực cao (Photorealism).
+- **Mức độ kiểm soát:** Cực cao. Cung cấp API cho ControlNet (sinh ảnh giữ nguyên tư thế nhân vật), Inpainting/Outpainting (thay đổi vùng nhỏ trong ảnh).
+- **Cost:** Có thể rẻ hơn hoặc tự Host (Self-hosting) trên máy chủ GPU riêng để tối ưu chi phí nếu lượng request siêu lớn.
+
+### 3. Midjourney (Qua các API không chính thức)
+- **Đặc điểm:** Phong cách nghệ thuật (artistic style) đẹp nhất thị trường.
+- **Mức độ kiểm soát:** Không cung cấp API REST chính thức (Phải chạy qua nền tảng Discord, các API trên mạng chủ yếu là hàng độ chế/unofficial).
+
+---
+
+## Prompt Engineering chuyên sâu cho Hình ảnh
+
+Khác với LLM (nói chuyện bằng logic và ngôn ngữ tự nhiên), Prompt cho các hệ thống như Stable Diffusion thường mang cấu trúc các "từ khóa" xếp chồng lên nhau (Keyword-based structure).
+
+Cấu trúc một prompt hình ảnh chuyên nghiệp gồm 5 thành phần:
+
+1. **Subject (Chủ thể):** Cái gì đang xuất hiện? (Ví dụ: `A cyberpunk cat hacker`)
+2. **Medium (Phương tiện):** Chụp ảnh thật, tranh sơn dầu, render 3D? (Ví dụ: `Shot on 35mm lens, photorealistic, Unreal Engine 5`)
+3. **Lighting (Ánh sáng):** Yếu tố quyết định 50% độ đẹp của ảnh. (Ví dụ: `Cinematic lighting, volumetric lighting, neon glow, golden hour`)
+4. **Color & Vibe (Màu sắc & Không khí):** (Ví dụ: `Vibrant colors, dark moody, pastel`)
+5. **Resolution/Quality:** (Ví dụ: `8k resolution, highly detailed, sharp focus`)
+
+### Negative Prompts
+Đây là một tham số (parameter) riêng biệt truyền vào API, dùng để báo cho mô hình Diffusion biết **"không được phép"** sinh ra cái gì.
+
+- **Ví dụ Negative Prompts:** `ugly, blurry, extra fingers, mutated hands, poorly drawn face, bad anatomy, text, watermark`
+
+---
+
+## System Architecture: Bất đồng bộ trong sinh ảnh
+
+Như đã cảnh báo ở trên, sinh ảnh tốn hàng chục giây. Việc giữ HTTP Request mở sẽ gây ra nghẽn cổ chai (Bottleneck). Ta có hai chiến lược giải quyết: **Polling** và **Webhooks**.
+
+### Kiến trúc 1: Polling (Hỏi vòng)
+
+Phù hợp cho các dự án cỡ vừa và nhỏ, dễ thiết lập.
+1. Frontend gửi yêu cầu sinh ảnh lên Backend.
+2. Backend gửi tín hiệu cho AI Provider (ví dụ: Replicate) và nhận lại một mã số công việc (`Task_ID` = 12345). Backend trả luôn mã này về cho Frontend kèm HTTP Status 202 (Accepted). Kết nối bị đóng.
+3. Cứ mỗi 3 giây, Frontend gọi API `GET /task/12345` lên Backend để hỏi "Ảnh xong chưa?".
+4. Backend kiểm tra Database hoặc gọi API Provider. Nếu chưa xong trả về `status: processing`. Nếu xong trả về đường dẫn hình ảnh (URL).
+
+### Kiến trúc 2: Webhooks (Gọi ngược)
+
+Chuẩn công nghiệp (Production-grade) cho hệ thống lớn, tiết kiệm toàn bộ tài nguyên của Backend.
+1. Frontend gửi yêu cầu sinh ảnh lên Backend.
+2. Backend đẩy job này vào một Message Queue (Redis/RabbitMQ). Backend trả HTTP 202 ngay lập tức cho Frontend.
+3. Worker của bạn lấy job từ Queue, gọi AI Provider và truyền kèm một URL gọi là `Webhook_URL` (ví dụ: `https://my-api.com/webhooks/image-done`).
+4. Ngay khi API Provider sinh ảnh xong, máy chủ của họ tự động bắn một HTTP POST request vào đường link Webhook của bạn chứa URL bức ảnh.
+5. Backend của bạn nhận Webhook, cập nhật Database và dùng Websocket/SSE báo hiệu thời gian thực thẳng xuống cho Frontend.
+
+```text
+       [ FRONTEND ]                         [ AI PROVIDER ]
+            │                                     ▲
+            │ 1. POST /generate                   │ 3. Start Generation
+            ▼                                     │
+      [ BACKEND ] ── 2. Call API + Send Webhook ──┘
+            │
+            │ <─────── 4. POST /webhooks/image-done (Sau 15 giây)
+            │
+            ▼ 5. Gửi thông báo Websocket
+       [ FRONTEND ] (Hiển thị ảnh)
+```
+
+---
+
+## Safety & Moderation Pipeline
+
+Luật pháp (như GDPR hoặc các điều khoản dịch vụ) cực kỳ nghiêm ngặt với việc sinh hình ảnh Deepfake hoặc nhạy cảm. Quá trình sinh ảnh phải đi kèm khâu kiểm duyệt trước và sau:
+
+- **Pre-generation Filter:** Cắt nghĩa prompt của người dùng, chạy qua API Moderation (ví dụ: OpenAI Moderation API) hoặc dùng danh sách từ cấm (Blocklist) để chặn ngay các từ khóa bạo lực/khiêu dâm.
+- **Post-generation Filter (NSFW Check):** Stable Diffusion thường tích hợp sẵn một mô hình phân loại ảnh (Safety Checker). Nếu ảnh sinh ra vi phạm, API sẽ trả về hình ảnh bị làm mờ (black image) hoặc cờ `nsfw_detected=True`. Bạn phải bắt cờ này để thông báo lỗi cho người dùng thay vì lưu ảnh đen vào CSDL.
+
+---
+
+## Implementation lab: Async Webhook Flow với FastAPI
+
+**Nhiệm vụ:** Viết mã Python thiết lập một Endpoint bằng FastAPI nhận Webhook trả về từ dịch vụ Replicate API.
+
+```python
+from fastapi import FastAPI, Request, HTTPException
+from pydantic import BaseModel
+import httpx # Dùng để gọi API không đồng bộ
+
+app = FastAPI()
+
+# Giả lập Database
+fake_db = {}
+
+class GenerateRequest(BaseModel):
+    prompt: str
+    user_id: str
+
+# 1. API cho Frontend gọi để bắt đầu sinh ảnh
+@app.post("/api/v1/generate")
+async def start_generation(req: GenerateRequest):
+    # Bước 1: Gọi API Replicate
+    headers = {
+        "Authorization": "Token r8_YOUR_API_KEY",
+        "Content-Type": "application/json"
+    }
+    
+    # Payload yêu cầu Replicate bắn kết quả về Webhook của ta
+    payload = {
+        "version": "stability-ai/sdxl", # Model version
+        "input": {"prompt": req.prompt},
+        # Chú ý: Webhook url phải là URL public (ví dụ dùng ngrok khi test local)
+        "webhook": "https://my-production-server.com/api/v1/webhooks/replicate",
+        "webhook_events_filter": ["completed"]
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post("https://api.replicate.com/v1/predictions", json=payload, headers=headers)
+    
+    if response.status_code != 201:
+        raise HTTPException(status_code=500, detail="Lỗi kết nối AI Provider")
+        
+    data = response.json()
+    task_id = data["id"]
+    
+    # Bước 2: Lưu task_id vào Database dưới trạng thái Processing
+    fake_db[task_id] = {"status": "processing", "user_id": req.user_id, "image_url": None}
+    
+    # Bước 3: Trả về 202 Accepted cho Frontend kèm task_id
+    return {"status": "accepted", "task_id": task_id, "message": "Quá trình sinh ảnh đang diễn ra (10-20 giây)."}
+
+# 2. API Endpoint dành riêng cho Replicate bắn kết quả về (Webhook)
+@app.post("/api/v1/webhooks/replicate")
+async def replicate_webhook(request: Request):
+    # Lấy dữ liệu payload từ Replicate
+    data = await request.json()
+    
+    task_id = data.get("id")
+    status = data.get("status") # có thể là 'succeeded', 'failed', 'canceled'
+    
+    if task_id not in fake_db:
+        return {"message": "Task không tồn tại trong hệ thống"}
+        
+    if status == "succeeded":
+        # Ảnh được sinh ra thường nằm trong mảng output
+        image_url = data.get("output")[0]
+        # Cập nhật Database
+        fake_db[task_id] = {"status": "completed", "image_url": image_url}
+        
+        # Bước tiếp theo: Gắn code gọi Websocket/Push Notification ở đây để báo cho Frontend
+        # push_notification_to_user(fake_db[task_id]["user_id"], image_url)
+        
+    elif status == "failed":
+        fake_db[task_id] = {"status": "failed", "error": data.get("error")}
+        
+    return {"message": "Webhook processed successfully"}
+```
+
+---
+
+## Common mistakes & debugging checklist
+
+<Callout type="warning" title="Mistake 1: Bị tính phí vì ảnh lỗi">
+Rất nhiều API sinh ảnh vẫn trừ tiền (credits) của bạn ngay cả khi bức ảnh bị đánh dấu là NSFW (bị làm đen toàn bộ). Đừng để người dùng liên tục bấm nút tạo ảnh bạo lực làm cạn sạch ngân sách của bạn. Hãy xây dựng bộ lọc Text Prompt nghiêm ngặt bằng RegExp hoặc LLM trước khi gọi API Sinh ảnh.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: Test Webhooks ở môi trường Localhost">
+Hệ thống Webhook yêu cầu AI Provider gửi HTTP POST về máy chủ của bạn. Nếu máy chủ của bạn chạy ở `http://localhost:8000`, API của Provider trên Internet không thể tìm thấy đường dẫn đó. Bạn bắt buộc phải dùng các công cụ như `ngrok` hoặc `localtunnel` để tạo một URL public tạm thời hướng về localhost của bạn.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: Lưu trữ URL ảnh tạm thời của Provider">
+Các URL chứa ảnh do OpenAI hay Replicate trả về thường có tính thời vụ (hết hạn sau vài giờ hoặc 1 ngày). Nếu bạn lưu trực tiếp link này vào Database, ngày hôm sau toàn bộ ảnh trên ứng dụng của bạn sẽ bị "chết link" (404 Not Found). Khi nhận được Webhook, bạn phải thiết lập một luồng Tải ảnh về (Download) và Upload ngược lên kho lưu trữ đám mây của riêng bạn (như Amazon S3 Cloudflare R2).
+</Callout>
+
+### Checklist vận hành Webhook:
+- [ ] Hàm xử lý Webhook có xử lý ngoại lệ (Try-Catch) chưa? Nếu Webhook code bị lỗi và trả về HTTP 500, Provider sẽ liên tục gửi lại (Retry) làm ngập máy chủ của bạn.
+- [ ] Bạn đã cấu hình Tải ảnh về S3 lưu trữ vĩnh viễn thay vì dùng link tạm của Provider chưa?
+- [ ] Đường dẫn Webhook của bạn có bảo mật không? Đã xác minh (verify signature) để đảm bảo request thực sự đến từ Replicate/OpenAI chứ không phải do hacker giả mạo bắn request rác vào chưa?
+
+---
+
+## Practice exercises
+
+1. **Thiết kế CSDL:** Hãy thiết kế một bảng dữ liệu (SQL Schema) để lưu trữ một Task Sinh Ảnh, bao gồm các cột như: `task_id`, `user_id`, `prompt`, `negative_prompt`, `status`, `image_url`, `cost`, và `created_at`.
+2. **Khắc phục lỗi đứt gãy:** Giả sử máy chủ của bạn bị mất điện trong đúng khoảng thời gian Provider bắn Webhook trả ảnh về (Webhook bị thất lạc). Hãy viết giả mã (pseudo-code) cho một chương trình chạy ngầm (Cronjob) để rà quét và tự động gọi API Provider kiểm tra lại trạng thái của các ảnh bị kẹt ở trạng thái "processing" quá 5 phút.
+3. **Phân tích chi phí:** Với chi phí là $0.03 cho một ảnh kích thước 1024x1024. Nếu bạn có 500 người dùng hàng ngày (DAU), mỗi người sinh trung bình 4 ảnh/ngày. Hãy tính tổng chi phí vận hành API này trong vòng 1 tháng. Bạn sẽ thiết kế mô hình thu phí người dùng như thế nào để hệ thống có lãi?
+
+---
+
+## Knowledge check
+
+1. Vì sao không nên gọi API sinh ảnh theo cơ chế đồng bộ (Blocking I/O) trên luồng (thread) chính của máy chủ Backend?
+2. Ưu điểm cốt lõi của việc sử dụng Negative Prompts khi gọi API Stable Diffusion là gì?
+3. Mô hình kiến trúc Polling (Hỏi vòng) khác biệt với Webhooks (Gọi ngược) ở điểm nào?
+4. Nếu ảnh trả về bị hệ thống Safety Checker của Provider nhận diện là nhạy cảm (NSFW), bạn cần làm gì thay vì lưu trữ bức ảnh màu đen đó vào database?
+5. Tại sao cần sử dụng công cụ như `ngrok` trong quá trình phát triển ứng dụng nhận Webhook?
+
+---
+
+## Answer key
+
+1. Quá trình sinh ảnh rất chậm (10-30s). Giữ kết nối đồng bộ sẽ làm treo số lượng lớn các luồng (threads) xử lý của máy chủ, gây lãng phí tài nguyên và có thể làm sập hệ thống (Timeout/Downtime) khi có nhiều người dùng.
+2. Nó cho phép nhà phát triển kiểm soát quá trình tạo ảnh một cách tiêu cực, loại bỏ các chi tiết không mong muốn (ví dụ: nhiễu, mờ, thừa ngón tay, watermark) mà không cần phải viết cấu trúc mô tả phòng thủ phức tạp trong Prompt chính.
+3. Polling đòi hỏi Frontend phải chủ động gửi request kiểm tra trạng thái liên tục (gây tốn băng thông và CPU máy chủ). Webhooks hoàn toàn bị động: máy chủ của bạn "ngủ" cho đến khi AI Provider chủ động đẩy kết quả về.
+4. Bắt cờ `nsfw_detected=True` từ JSON Payload của Provider, cập nhật trạng thái Task trong Database thành "Failed_Moderation", và gửi thông báo cho người dùng yêu cầu họ sửa đổi lại Prompt.
+5. Vì máy chủ phát triển (localhost) nằm trong mạng nội bộ, không có địa chỉ IP công khai. `ngrok` tạo ra một đường hầm an toàn và cung cấp một tên miền công cộng để máy chủ của AI Provider trên Internet có thể bắn kết quả về máy của bạn.
+
+---
+
+## Mini-project: The Async Image Factory
+
+**Nhiệm vụ:** Xây dựng một đường ống (pipeline) Backend bằng Python (FastAPI) để xử lý việc sinh ảnh tốc độ cao từ Text.
+
+**Yêu cầu đầu ra:**
+- Định nghĩa 2 API endpoints: một để gửi Prompt, một để nhận Webhook từ Replicate (hoặc mock AI provider).
+- Tích hợp hàm kiểm duyệt Prompt: Dùng danh sách từ cấm nội bộ để từ chối ngay lập tức các Prompt vi phạm chính sách trước khi gửi lên API.
+- Tự động lưu trữ thông tin luồng công việc (Processing -> Completed -> Downloaded S3).
+
+---
+
+## Điểm cần nhớ
+
+- Thế giới đồ họa sinh thành (Generative AI cho ảnh) chậm hơn văn bản rất nhiều, đòi hỏi các mẫu thiết kế hệ thống phần mềm bất đồng bộ (Task Queues, Polling, Webhooks).
+- Bạn không sở hữu URL ảnh được sinh ra bởi các API Provider. Chúng sẽ biến mất. Việc tải về lưu trữ độc lập là nguyên tắc sống còn.
+- Kiểm duyệt nội dung (Moderation) là bắt buộc. Hệ thống càng tự do, nguy cơ vi phạm chính sách và cạn kiệt ngân sách do người dùng lạm dụng càng cao.
+
+---
+
+## Next chapter bridge
+
+API sinh ảnh mở ra cánh cửa giao tiếp qua hình ảnh, nhưng điều gì xảy ra nếu chúng ta muốn mô hình AI **hiểu** được hình ảnh như cách con người nhìn thế giới? Chuyện gì xảy ra nếu bạn tải một bức ảnh chụp hóa đơn lên và hỏi mô hình tổng số tiền cần thanh toán? Chương tiếp theo: **Multimodal AI** — đi sâu vào các mô hình Đa phương thức (Vision-Language Models) như GPT-4o, Claude 3 Vision, và cách kiến trúc toán học kết nối thị giác máy tính với ngôn ngữ tự nhiên.

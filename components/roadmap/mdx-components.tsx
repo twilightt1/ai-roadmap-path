@@ -11,27 +11,27 @@ const calloutConfig: Record<
 > = {
   info: {
     icon: Info,
-    box: "border-sky-500/30 bg-sky-500/5",
-    iconColor: "text-sky-400",
-    title: "Lưu ý",
+    box: "border-white/5 border-l-2 border-l-cyan-500 bg-zinc-950/25",
+    iconColor: "text-cyan-400",
+    title: "INFO",
   },
   tip: {
     icon: Lightbulb,
-    box: "border-emerald-500/30 bg-emerald-500/5",
+    box: "border-white/5 border-l-2 border-l-emerald-500 bg-zinc-950/25",
     iconColor: "text-emerald-400",
-    title: "Mẹo",
+    title: "TIP",
   },
   warning: {
     icon: TriangleAlert,
-    box: "border-amber-500/30 bg-amber-500/5",
+    box: "border-white/5 border-l-2 border-l-amber-500 bg-zinc-950/25",
     iconColor: "text-amber-400",
-    title: "Cảnh báo",
+    title: "WARNING",
   },
   danger: {
     icon: Flame,
-    box: "border-rose-500/30 bg-rose-500/5",
+    box: "border-white/5 border-l-2 border-l-rose-500 bg-zinc-950/25",
     iconColor: "text-rose-400",
-    title: "Quan trọng",
+    title: "IMPORTANT",
   },
 };
 
@@ -48,12 +48,14 @@ export function Callout({
   const cfg = calloutConfig[type];
   const Icon = cfg.icon;
   return (
-    <div className={cn("my-6 rounded-xl border p-4", cfg.box)}>
+    <div className={cn("my-6 rounded-r-xl border p-4 sm:p-5", cfg.box)}>
       <div className="mb-2 flex items-center gap-2">
-        <Icon className={cn("h-4 w-4", cfg.iconColor)} />
-        <span className="text-sm font-semibold">{title ?? cfg.title}</span>
+        <Icon className={cn("h-3.5 w-3.5", cfg.iconColor)} />
+        <span className="text-[10px] font-mono font-bold tracking-wider text-zinc-300">
+          {title ? title.toUpperCase() : cfg.title}
+        </span>
       </div>
-      <div className="text-sm text-muted-foreground [&>p]:my-0">{children}</div>
+      <div className="text-xs leading-relaxed text-zinc-400 [&>p]:my-0">{children}</div>
     </div>
   );
 }

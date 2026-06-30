@@ -1,0 +1,177 @@
+Trong thiết kế hệ thống, khi một tác vụ tiêu tốn thời gian xử lý vượt quá giới hạn chịu đựng của kết nối mạng (thường > 2-3 giây), việc bắt Client chờ đợi đồng bộ (Synchronous Blocking) là một lỗi thiết kế nghiêm trọng. Với AI, đặc biệt là các tác vụ sinh ảnh, sinh video, phân tích tài liệu dài, hoặc chạy các Agent đa bước, thời gian xử lý có thể lên tới hàng chục giây hoặc vài phút. Chúng ta bắt buộc phải chuyển dịch toàn bộ luồng công việc sang kiến trúc **Bất đồng bộ (Asynchronous Architecture)**.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Sập nguồn Gateway vì Blocking Threads">
+**Bối cảnh:** Một công ty cung cấp dịch vụ AI trích xuất hợp đồng bảo hiểm. Người dùng tải file PDF lên và nhận về file JSON phân tích. Kỹ sư xây dựng API đồng bộ:
+`POST /extract -> Chờ Python PDF parser -> Chờ GPT-4o -> Trả về JSON.`
+
+**Sự cố:** 
+1. Khi có 200 đại lý bảo hiểm đồng loạt tải file lên lúc 9h sáng, mỗi request chiếm dụng 1 thread của API Gateway trong vòng 45 giây. 
+2. Chỉ trong 10 giây, máy chủ API Gateway (AWS ECS) cạn kiệt luồng trống (Thread Pool Exhaustion) và bắt đầu từ chối tất cả các kết nối mới, kể cả request truy cập trang chủ của khách hàng.
+3. Client liên tục báo lỗi `504 Gateway Timeout`. Người dùng hoang mang bấm nút gửi lại liên tục, làm lượng tải nhân lên gấp bội.
+
+**Hậu quả:** Hệ thống sập suốt 3 giờ. Công ty phải đền bù thiệt hại hợp đồng cho các đại lý vì trễ hạn xử lý hồ sơ.
+</Callout>
+
+Bài học rút ra: Tách biệt tuyệt đối luồng Nhận Request và luồng Xử lý AI. Giao tiếp đồng bộ chỉ dành cho các tác vụ siêu nhanh. Mọi thứ khác phải đưa vào Hàng đợi (Queue).
+
+---
+
+## 2. Architecture Blueprint (Kiến trúc giải pháp)
+
+Kiến trúc AI bất đồng bộ tiêu chuẩn công nghiệp sử dụng mô hình **Task ID & Webhooks/Polling**:
+
+```text
+[ CLIENT / USER ]                  [ API GATEWAY ]                [ MESSAGE QUEUE ]
+        │                                 │ (Redis / RabbitMQ)            │
+        │ 1. POST /extract (Gửi File)     │                               │
+        ├────────────────────────────────>│                               │
+        │                                 ├── 2. Đẩy Job vào Queue ──────>│
+        │ 3. HTTP 202 (Trả Task_ID: 99)   │                               │
+        |<────────────────────────────────┤                               │
+        │                                                                 │
+[ BACKGROUND WORKERS ] <───────────────── 4. Pull Job ────────────────────┘
+  (Celery/Python)
+        │
+        ├── 5. Tải file từ S3, gọi LLM, chạy Vy-tính (Mất 45 giây)
+        │
+        ▼
+[ UPDATE STATE ] ── 6. Ghi kết quả vào DB (Status: Completed)
+        │
+        ├── 7a. Webhook Pattern: POST /webhooks/done (Bắn trực tiếp về Client)
+        │
+        └── 7b. Polling Pattern: Client gọi liên tục "GET /task/99" để kiểm tra
+```
+
+---
+
+## 3. Tooling Landscape (Ma trận công cụ Bất đồng bộ)
+
+| Thành phần | Công nghệ tiêu biểu | Vai trò SRE (Use-case) | Điểm cần lưu ý |
+|---|---|---|---|
+| **Message Queue / Broker** | Redis, RabbitMQ, Apache Kafka | Lưu trữ các jobs thô tạm thời. Chịu tải hàng vạn request ghi cùng lúc để bảo vệ Backend khỏi bị sập nguồn. | Redis thích hợp cho quy mô vừa và nhỏ; Kafka thích hợp cho quy mô dữ liệu khổng lồ (Big Data streams). |
+| **Background Workers** | Celery (Python), BullMQ (NodeJS), Sidekiq | Lấy jobs từ Queue và thực thi các tính toán AI nặng nề (Inference, OCR, Embeddings) trên các luồng riêng biệt. | Phải thiết lập giới hạn thời gian chạy (Timeouts) cho mỗi worker để tránh kẹt luồng. |
+| **Notification Layer** | WebSockets, Server-Sent Events (SSE) | Đẩy kết quả tức thời từ Backend xuống trình duyệt người dùng ngay khi Worker hoàn thành tác vụ. | WebSockets hỗ trợ giao tiếp 2 chiều; SSE tiết kiệm tài nguyên mạng hơn khi chỉ cần đẩy dữ liệu 1 chiều từ server. |
+
+---
+
+## 4. Implementation Playbook (Thực thi)
+
+Dưới đây là kịch bản FastAPI + Background Tasks để triển khai mẫu thiết kế **Asynchronous Task Pattern** chuẩn SRE.
+
+```python
+import uuid
+import time
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+from pydantic import BaseModel
+
+app = FastAPI()
+
+# Giả lập Database trong RAM (Trong thực tế dùng Redis hoặc Postgres)
+task_db = {}
+
+class IngestionRequest(BaseModel):
+    document_url: str
+    user_id: str
+
+# Hàm chạy ngầm giả lập việc gọi LLM/RAG mất 30 giây
+def heavy_ai_computation_task(task_id: str, document_url: str):
+    try:
+        # Bước 1: Giả lập download & parse file
+        time.sleep(10) 
+        # Bước 2: Giả lập gọi LLM
+        time.sleep(15) 
+        
+        # Cập nhật trạng thái thành công
+        task_db[task_id] = {
+            "status": "completed",
+            "result": {"extracted_data": "Báo cáo doanh thu quý 2 đạt 50 tỷ"},
+            "error": None
+        }
+    except Exception as e:
+        task_db[task_id] = {
+            "status": "failed",
+            "result": None,
+            "error": str(e)
+        }
+
+@app.post("/api/v1/extract", status_code=202)
+async def extract_document(req: IngestionRequest, background_tasks: BackgroundTasks):
+    # 1. Tạo một mã công việc (Task ID) duy nhất
+    task_id = str(uuid.uuid4())
+    
+    # 2. Khởi tạo trạng thái trong Database
+    task_db[task_id] = {"status": "processing", "result": None, "error": None}
+    
+    # 3. Đẩy tác vụ nặng xuống Background Thread (Non-blocking)
+    background_tasks.add_task(heavy_ai_computation_task, task_id, req.document_url)
+    
+    # 4. Trả ngay HTTP 202 Accepted kèm Task ID cho Frontend
+    return {
+        "status": "accepted",
+        "task_id": task_id,
+        "check_status_url": f"/api/v1/tasks/{task_id}"
+    }
+
+@app.get("/api/v1/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    # API phục vụ Polling Pattern từ Frontend
+    if task_id not in task_db:
+        raise HTTPException(status_code=404, detail="Task không tồn tại")
+    return task_db[task_id]
+```
+
+---
+
+## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+Kiến trúc bất đồng bộ giải quyết lỗi nghẽn luồng chính, nhưng lại tạo ra các bài toán phức tạp ở khâu quản lý trạng thái.
+
+<Callout type="warning" title="Pitfall 1: Tràn ngập Worker (Queue Backlog)">
+**Triệu chứng:** Người dùng phản ánh họ gửi file từ sáng nhưng đến trưa vẫn ở trạng thái `processing`.
+**Nguyên nhân:** Lượng công việc đẩy vào Queue vượt quá khả năng xử lý của các Workers hiện tại. Một file PDF gặp lỗi làm worker bị treo vô hạn, chiếm dụng slot của các file khác.
+**Cách khắc phục (Fix):**
+1. Luôn cấu hình **Tự động Scale Worker (Autoscaling)** dựa trên độ dài của hàng đợi (Queue Length).
+2. Thiết lập giới hạn thời gian chạy cứng (`timeout = 60s`) cho mỗi task trong Worker. Nếu vượt quá, ép buộc terminate task và đánh dấu `failed` để giải phóng luồng.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Polling DDoS (Frontend tự đánh sập Backend)">
+**Triệu chứng:** CSDL PostgreSQL bị sập vì quá tải truy vấn đọc (Read queries).
+**Nguyên nhân:** Kỹ sư Frontend viết code Polling: Cứ mỗi 100ms lại gọi `GET /api/v1/tasks/123` để hỏi kết quả. 5,000 users đồng thời tạo ra 50,000 requests/giây chỉ để hỏi trạng thái.
+**Cách khắc phục (Fix):** 
+1. Áp dụng cơ chế **Exponential Backoff Polling** ở Frontend (Lần đầu hỏi sau 2s, lần sau tăng lên 4s, 8s, 16s...).
+2. Lưu trạng thái Task tạm thời trên Redis thay vì truy vấn trực tiếp Postgres.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Lỗi trùng lặp tác vụ (Duplicate Execution)">
+**Triệu chứng:** Khách hàng bị tính tiền 2 lần cho cùng một yêu cầu trích xuất dữ liệu.
+**Nguyên nhân:** Lỗi mạng làm đứt kết nối giữa Worker và Queue. Queue nghĩ rằng Worker đã chết nên đẩy lại job đó cho Worker khác chạy lại, trong khi thực tế Worker thứ nhất vẫn đang chạy ngầm và sắp hoàn thành.
+**Cách khắc phục (Fix):** Áp dụng cơ chế **Idempotency Key**. Trước khi chạy tính toán AI, Worker kiểm tra trạng thái khóa trong Redis. Nếu khóa đã được xác lập bởi một Worker khác, lập tức bỏ qua (Drop job) để tránh tính toán trùng lặp.
+</Callout>
+
+---
+
+## 6. Cost & Performance Unit Economics
+
+Bất đồng bộ giúp tối ưu hóa tài nguyên máy chủ GPU một cách triệt để:
+
+| Chỉ số / Thiết kế | Phân tích SRE (Ý nghĩa kinh tế) | Tối ưu hóa (Optimization) |
+|---|---|---|
+| **GPU Utilization (Tỉ lệ tận dụng)** | Nếu chạy đồng bộ (Sync), GPU phải chờ đợi các khối I/O mạng từ phía Client, khiến GPU nhàn rỗi (idle) nhiều. | Chạy bất đồng bộ cho phép **Batching tối đa**. Hàng đợi (Queue) sẽ gom các yêu cầu lại và đẩy vào GPU một lần dưới dạng lô (Batch), vắt kiệt công suất tính toán của card đồ họa, giảm 50% thời gian thuê máy. |
+| **Worker Cost (Chi phí chạy nền)** | Duy trì 10 Background Workers chạy 24/7 tốn rất nhiều tiền ngay cả khi ban đêm không có khách hàng. | Sử dụng **Knative** hoặc cấu hình HPA (Autoscaler) để tự động tắt bớt (Scale to Zero) các máy chủ Worker vào giờ thấp điểm khi Queue rỗng. |
+
+---
+
+## Điểm cần nhớ
+
+- Tránh xa kiến trúc đồng bộ (Sync) đối với mọi tác vụ AI có thời gian xử lý kéo dài quá 3 giây.
+- Kiến trúc bất đồng bộ (Async) sử dụng mô hình: Gửi yêu cầu -> Nhận Task ID -> Xử lý qua Queue -> Trả qua Webhook hoặc Websocket.
+- Luôn kiểm soát sự cố tràn hàng đợi (Queue Backlog) bằng cách gài `Timeout` và cơ chế Auto-scaling cho Workers.
+- Enforce tính chất Idempotent (không trùng lặp) bằng cách sử dụng các khóa giao dịch độc nhất (Idempotency Keys).
+
+## Next chapter bridge
+
+Kiến trúc bất đồng bộ đảm bảo tính ổn định và khả năng phục hồi của hệ thống mạng. Tuy nhiên, dù chạy đồng bộ hay bất đồng bộ, hóa đơn API vẫn là kẻ thù số một đối với lợi nhuận của doanh nghiệp. Làm thế nào để thiết kế một hệ thống thông minh tự biết lựa chọn mô hình đắt hay rẻ cho từng phân khúc người dùng và nén prompt tối đa? Chương tiếp theo và cũng là bài cuối cùng của Phase 13: **Cost-Aware Architecture** — Nơi các Kiến trúc sư hệ thống thể hiện kỹ năng tối ưu hóa tài chính cấp độ cao.

@@ -92,25 +92,25 @@ Raw Data → Lọc ký tự lạ/HTML → Lọc trùng lặp (Exact & Near-dup) 
 #### 1. Jaccard Similarity (Độ tương đồng Jaccard)
 Độ tương đồng giữa hai văn bản được biểu diễn dưới dạng hai tập hợp từ (hoặc n-grams) A và B:
 
-J(A, B) = \frac{|A \cap B|}{|A \cup B|}
+`J(A, B) = |A ∩ B| / |A ∪ B|`
 
 #### 2. MinHashing
-Ta băm (hash) các phần tử của tập hợp bằng k hàm băm ngẫu nhiên khác nhau. Ký hiệu h_{\min}(A) là giá trị băm nhỏ nhất của tập hợp A dưới hàm băm h. Một tính chất toán học quan trọng là: **Xác suất để hai tập hợp có cùng giá trị MinHash bằng chính độ tương đồng Jaccard của chúng**:
+Ta băm (hash) các phần tử của tập hợp bằng `k` hàm băm ngẫu nhiên khác nhau. Ký hiệu `h_min(A)` là giá trị băm nhỏ nhất của tập hợp A dưới hàm băm `h`. Một tính chất toán học quan trọng là: **Xác suất để hai tập hợp có cùng giá trị MinHash bằng chính độ tương đồng Jaccard của chúng**:
 
-P(h_{\min}(A) = h_{\min}(B)) = J(A, B)
+`P(h_min(A) = h_min(B)) = J(A, B)`
 
-Bằng cách chọn k hàm băm (ví dụ k=128), ta có thể biểu diễn mỗi văn bản dưới dạng một vector chữ ký (signature vector) gồm k số nguyên. Độ tương đồng giữa hai văn bản được ước lượng bằng tỷ lệ các phần tử trùng nhau giữa hai signature vectors.
+Bằng cách chọn `k` hàm băm (ví dụ `k=128`), ta có thể biểu diễn mỗi văn bản dưới dạng một vector chữ ký (signature vector) gồm `k` số nguyên. Độ tương đồng giữa hai văn bản được ước lượng bằng tỷ lệ các phần tử trùng nhau giữa hai signature vectors.
 
 #### 3. Locality-Sensitive Hashing (LSH)
-Để tìm các cặp trùng lặp mà không cần so sánh chéo, ta chia signature vector của mỗi văn bản thành b dải (bands), mỗi dải chứa r dòng (k = b \times r). 
+Để tìm các cặp trùng lặp mà không cần so sánh chéo, ta chia signature vector của mỗi văn bản thành `b` dải (bands), mỗi dải chứa `r` dòng (`k = b * r`). 
 
 Ta băm mỗi dải vào một hash table. Các văn bản có cùng giá trị băm trong **ít nhất một dải** sẽ được coi là ứng viên trùng lặp (candidate pairs) và chỉ cần so sánh chi tiết các ứng viên này.
 
-Xác suất để hai văn bản có độ tương đồng Jaccard s trở thành ứng viên trùng lặp là:
+Xác suất để hai văn bản có độ tương đồng Jaccard `s` trở thành ứng viên trùng lặp là:
 
-P(\text{candidate}) = 1 - (1 - s^r)^b
+`P(candidate) = 1 - (1 - s^r)^b`
 
-Đồ thị của hàm số này có dạng hình chữ S (S-curve), giúp lọc cực kỳ sắc nét các văn bản có độ tương đồng vượt ngưỡng s^* \approx (1/b)^{1/r}.
+Đồ thị của hàm số này có dạng hình chữ S (S-curve), giúp lọc cực kỳ sắc nét các văn bản có độ tương đồng vượt ngưỡng `s* ≈ (1/b)^(1/r)`.
 
 ```python
 from datasketch import MinHash, MinHashLSH
@@ -152,12 +152,12 @@ Khi fine-tune mô hình trên một tác vụ chuyên biệt (domain-specific), 
 
 Công thức thiết lập tỷ lệ trộn tối ưu trong công nghiệp:
 
-D_{\text{train}} = \lambda D_{\text{specialized}} + (1 - \lambda) D_{\text{general}}
+`D_train = λ * D_specialized + (1 - λ) * D_general`
 
 Trong đó:
-- D_{\text{specialized}}: Dữ liệu tác vụ mục tiêu (ví dụ: SQL, Y tế).
-- D_{\text{general}}: Dữ liệu chat/lập luận tổng quát chất lượng cao (ví dụ: ShareGPT, SlimOrca, Alpaca-GPT4).
-- \lambda (Tỷ lệ pha trộn): Thường dao động từ 0.7 đến 0.9. Nếu \lambda quá lớn, mô hình sẽ bị forgetting. Nếu \lambda quá nhỏ, mô hình không học đủ sâu tác vụ chuyên biệt.
+- `D_specialized`: Dữ liệu tác vụ mục tiêu (ví dụ: SQL, Y tế).
+- `D_general`: Dữ liệu chat/lập luận tổng quát chất lượng cao (ví dụ: ShareGPT, SlimOrca, Alpaca-GPT4).
+- `λ` (Tỷ lệ pha trộn): Thường dao động từ 0.7 đến 0.9. Nếu `λ` quá lớn, mô hình sẽ bị forgetting. Nếu `λ` quá nhỏ, mô hình không học đủ sâu tác vụ chuyên biệt.
 
 ---
 
@@ -287,7 +287,7 @@ Xây dựng một pipeline hoàn chỉnh bằng Python để xử lý tệp dữ
 - Đọc dữ liệu từ file JSON thô.
 - Loại bỏ các ký tự HTML, khoảng trắng thừa, và các câu chào hỏi vô nghĩa bằng regex.
 - Sử dụng MinHash LSH để loại bỏ các câu trùng lặp hoặc gần trùng lặp.
-- Lọc bỏ các cuộc hội thoại quá ngắn (<2 lượt nói) hoặc quá dài (>1024 tokens).
+- Lọc bỏ các cuộc hội thoại quá ngắn (dưới 2 lượt nói) hoặc quá dài (hơn 1024 tokens).
 - Xuất ra file dữ liệu định dạng ShareGPT chuẩn sẵn sàng để đưa vào `SFTTrainer`.
 
 ---

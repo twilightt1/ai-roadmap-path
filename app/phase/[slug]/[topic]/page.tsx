@@ -10,6 +10,7 @@ import {
 import { accentMap } from "@/lib/theme";
 import { PhaseIcon } from "@/components/shared/phase-icon";
 import { MdxContent } from "@/components/roadmap/mdx-content";
+import { TocSidebar } from "@/components/roadmap/toc-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2 } from "lucide-react";
 
@@ -55,41 +56,44 @@ export default async function TopicPage({ params }: Props) {
   return (
     <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-14">
       {/* Breadcrumb */}
-      <nav className="mb-6 flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+      <nav className="mb-6 flex flex-wrap items-center gap-1.5 text-xs font-mono text-zinc-500">
         <Link href="/roadmap" className="hover:text-foreground">
           Roadmap
         </Link>
         <span>/</span>
-        <Link href={`/phase/${phase.slug}`} className="hover:text-foreground">
+        <Link href={`/phase/${phase.slug}`} className="hover:text-zinc-300">
           {phaseLabel}
         </Link>
         <span>/</span>
-        <span className="text-foreground">{t.title}</span>
+        <span className="text-zinc-200">{t.title}</span>
       </nav>
 
       {/* Header */}
-      <header className={`mb-8 rounded-2xl border ${a.border} bg-card/50 p-6 sm:p-8`}>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+      <header className={`mb-8 rounded-2xl border ${a.border} bg-card/35 p-6 sm:p-8 relative overflow-hidden`}>
+        <div
+          className={`absolute -right-8 -top-8 h-24 w-24 rounded-full ${a.bgSoft} blur-3xl opacity-40`}
+        />
+        <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start">
           <span
-            className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br ${a.gradient} text-white shadow-lg`}
+            className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br ${a.gradient} text-white shadow`}
           >
             <PhaseIcon name={phase.icon} className="h-6 w-6" />
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge className={`${a.bg} border-0 text-white`}>{t.code}</Badge>
-              <span className="text-xs text-muted-foreground">
+              <Badge className={`${a.bg} border-0 text-primary-foreground font-mono font-bold text-[10px]`}>{t.code}</Badge>
+              <span className="text-xs text-zinc-500 font-mono">
                 {phaseLabel} · {phase.title}
               </span>
-              <span className="text-xs text-muted-foreground">
-                · Bài {index + 1}/{phase.topics.length}
+              <span className="text-xs text-zinc-500 font-mono">
+                · BÀI {index + 1}/{phase.topics.length}
               </span>
             </div>
-            <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">
+            <h1 className="mt-2 text-2xl font-extrabold tracking-tight sm:text-3xl text-zinc-100">
               {t.title}
             </h1>
             {t.description && (
-              <p className="mt-3 text-base text-muted-foreground leading-relaxed">
+              <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
                 {t.description}
               </p>
             )}
@@ -97,18 +101,18 @@ export default async function TopicPage({ params }: Props) {
         </div>
 
         {/* Learning objectives */}
-        <div className="mt-6 rounded-xl border border-border/40 bg-background/40 p-4">
-          <p className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            <CheckCircle2 className={`h-3.5 w-3.5 ${a.text}`} />
+        <div className="mt-6 relative rounded-xl border border-white/5 bg-zinc-950/20 p-4">
+          <p className="mb-3 flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-400">
+            <CheckCircle2 className={`h-3.5 w-3.5 ${a.text} opacity-80`} />
             Bạn sẽ học gì
           </p>
           <ul className="grid gap-2 sm:grid-cols-2">
             {t.items.map((item) => (
               <li
                 key={item}
-                className="flex items-start gap-2 text-sm text-muted-foreground"
+                className="flex items-start gap-2 text-xs text-muted-foreground leading-relaxed"
               >
-                <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${a.dot}`} />
+                <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${a.dot}`} />
                 {item}
               </li>
             ))}
@@ -118,58 +122,36 @@ export default async function TopicPage({ params }: Props) {
 
       {/* Body: TOC + content */}
       {hasContent ? (
-        <div className="grid gap-8 lg:grid-cols-[220px_minmax(0,1fr)]">
+        <div className="grid gap-8 lg:grid-cols-[200px_minmax(0,1fr)]">
           {/* TOC sticky */}
-          {toc.length > 0 && (
-            <aside className="hidden lg:block">
-              <div className="sticky top-24">
-                <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Mục lục
-                </p>
-                <nav className="space-y-1 border-l border-border/40">
-                  {toc.map((item) => (
-                    <a
-                      key={item.slug}
-                      href={`#${item.slug}`}
-                      className={`block border-l-2 border-transparent py-1 text-sm text-muted-foreground transition-colors hover:border-primary hover:text-foreground ${
-                        item.level === 3 ? "pl-6" : "pl-4"
-                      }`}
-                    >
-                      {item.text}
-                    </a>
-                  ))}
-                </nav>
-              </div>
-            </aside>
-          )}
+          {toc.length > 0 && <TocSidebar items={toc} />}
 
           {/* Content */}
-          <article className="min-w-0">
+          <article className="min-w-0 max-w-[65ch] leading-relaxed">
             <MdxContent source={source} />
           </article>
         </div>
       ) : (
         /* Coming soon fallback */
-        <div className="rounded-2xl border border-dashed border-border/60 bg-card/30 p-10 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-muted/40">
-            <BookOpen className="h-7 w-7 text-muted-foreground" />
+        <div className="rounded-2xl border border-dashed border-white/5 bg-zinc-950/20 p-10 text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/[0.02] border border-white/5">
+            <BookOpen className="h-6 w-6 text-zinc-500" />
           </div>
-          <h2 className="text-xl font-semibold">Nội dung đang hoàn thiện</h2>
-          <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+          <h2 className="text-lg font-bold text-zinc-200">Nội dung đang hoàn thiện</h2>
+          <p className="mx-auto mt-2 max-w-sm text-xs text-muted-foreground leading-relaxed">
             Chương này chưa có bài giảng đầy đủ. Trong lúc chờ, bạn có thể xem các mục
-            kiến thức cần học ở phần &quot;Bạn sẽ học gì&quot; phía trên, hoặc đọc tài liệu
-            tham khảo.
+            kiến thức cần học ở phần &quot;Bạn sẽ học gì&quot; phía trên, hoặc đọc tài liệu tham khảo.
           </p>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
             <Link
               href={`/resources`}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/40 px-4 py-2 text-sm font-medium hover:bg-accent"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/5 bg-white/[0.01] px-4 py-2 text-xs font-mono font-semibold text-zinc-300 hover:bg-white/[0.03]"
             >
               <BookOpen className="h-4 w-4" /> Tài liệu tham khảo
             </Link>
             <Link
               href={`/phase/${phase.slug}`}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/40 px-4 py-2 text-sm font-medium hover:bg-accent"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/5 bg-white/[0.01] px-4 py-2 text-xs font-mono font-semibold text-zinc-300 hover:bg-white/[0.03]"
             >
               <ArrowLeft className="h-4 w-4" /> Quay lại phase
             </Link>
@@ -178,39 +160,39 @@ export default async function TopicPage({ params }: Props) {
       )}
 
       {/* Footer nav: prev/next topic */}
-      <div className="mt-12 grid gap-4 border-t border-border/40 pt-8 sm:grid-cols-2">
+      <div className="mt-16 grid gap-4 border-t border-white/5 pt-8 sm:grid-cols-2">
         {prevTopic ? (
           <Link
             href={`/phase/${phase.slug}/${prevTopic.id}`}
-            className="group rounded-xl border border-border/60 bg-card/40 p-4 transition-colors hover:border-primary/40 hover:bg-card/80"
+            className="group rounded-xl border border-white/5 bg-white/[0.01] p-4 transition-all hover:border-white/10 hover:bg-white/[0.03]"
           >
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <ArrowLeft className="h-3.5 w-3.5" /> Bài trước
+            <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+              <ArrowLeft className="h-3 w-3" /> Bài trước
             </div>
-            <div className="mt-1 font-medium">
+            <div className="mt-1 text-sm font-bold text-zinc-300 group-hover:text-primary transition-colors">
               {prevTopic.code} · {prevTopic.title}
             </div>
           </Link>
         ) : (
           <Link
             href={`/phase/${phase.slug}`}
-            className="group rounded-xl border border-border/60 bg-card/40 p-4 transition-colors hover:border-primary/40 hover:bg-card/80"
+            className="group rounded-xl border border-white/5 bg-white/[0.01] p-4 transition-all hover:border-white/10 hover:bg-white/[0.03]"
           >
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <ArrowLeft className="h-3.5 w-3.5" /> Quay lại phase
+            <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+              <ArrowLeft className="h-3 w-3" /> Quay lại phase
             </div>
-            <div className="mt-1 font-medium">{phaseLabel} — {phase.title}</div>
+            <div className="mt-1 text-sm font-bold text-zinc-300 group-hover:text-primary transition-colors">{phaseLabel} — {phase.title}</div>
           </Link>
         )}
         {nextTopic ? (
           <Link
             href={`/phase/${phase.slug}/${nextTopic.id}`}
-            className="group rounded-xl border border-border/60 bg-card/40 p-4 text-right transition-colors hover:border-primary/40 hover:bg-card/80"
+            className="group rounded-xl border border-white/5 bg-white/[0.01] p-4 text-right transition-all hover:border-white/10 hover:bg-white/[0.03]"
           >
-            <div className="flex items-center justify-end gap-1.5 text-xs text-muted-foreground">
-              Bài tiếp theo <ArrowRight className="h-3.5 w-3.5" />
+            <div className="flex items-center justify-end gap-1.5 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+              Bài tiếp theo <ArrowRight className="h-3 w-3" />
             </div>
-            <div className="mt-1 font-medium">
+            <div className="mt-1 text-sm font-bold text-zinc-300 group-hover:text-primary transition-colors">
               {nextTopic.code} · {nextTopic.title}
             </div>
           </Link>

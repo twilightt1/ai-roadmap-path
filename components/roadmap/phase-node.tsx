@@ -1,23 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { motion } from "motion/react";
+import { useState } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import { ChevronDown, Target } from "lucide-react";
 import type { Phase } from "@/lib/types";
 import { accentMap } from "@/lib/theme";
-import { PhaseIcon } from "@/components/shared/phase-icon";
 import { TopicList } from "./topic-list";
 import { ProjectCard } from "./project-card";
 
-/**
- * Một node phase trên timeline dọc.
- * Click header để mở rộng xem topics + projects ngay tại chỗ.
- */
 export function PhaseNode({ phase }: { phase: Phase }) {
+  const [isOpen, setIsOpen] = useState(false);
   const a = accentMap[phase.accent];
-  const phaseLabel = phase.isCapstone
-    ? "Capstone"
-    : `Phase ${phase.number}`;
+  const phaseLabel = phase.isCapstone ? "Capstone" : `Phase ${phase.number}`;
 
   return (
     <motion.div
@@ -28,73 +23,100 @@ export function PhaseNode({ phase }: { phase: Phase }) {
       className="relative pl-14 sm:pl-20"
     >
       {/* Dot trên đường dọc */}
-      <div className="absolute left-[18px] top-1.5 sm:left-[26px]">
-        <span
-          className={`relative flex h-9 w-9 items-center justify-center rounded-full ${a.bg} ${a.glow} ring-4 ring-background`}
+      <div className="absolute left-[18px] top-1.5 sm:left-[26px] z-10">
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className={`relative flex h-9 w-9 items-center justify-center rounded-full border bg-zinc-950 text-xs font-mono font-bold ring-4 ring-background transition-all hover:scale-[1.05] cursor-pointer outline-none ${
+            isOpen
+              ? `${a.text} ${a.border} shadow-md`
+              : "border-white/5 text-zinc-500 hover:border-zinc-700"
+          }`}
         >
-          <PhaseIcon name={phase.icon} className="h-4 w-4 text-white" />
-        </span>
+          {phase.isCapstone ? "★" : String(phase.number).padStart(2, "0")}
+        </button>
       </div>
 
-      <motion.details
-        className={`group rounded-2xl border ${a.border} bg-card/60 backdrop-blur-sm transition-colors open:bg-card/80`}
+      <div
+        className={`group overflow-hidden rounded-2xl border transition-all duration-200 ${
+          isOpen
+            ? `${a.border} bg-card/50`
+            : "border-white/5 bg-card/30 hover:border-white/10"
+        }`}
       >
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4 sm:p-5">
-          <div className="flex flex-col gap-1">
+        {/* Accordion Trigger */}
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className="flex w-full cursor-pointer items-center justify-between gap-4 p-4 text-left sm:p-5 outline-none border-none bg-transparent"
+        >
+          <div className="flex flex-col gap-1 min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span
-                className={`rounded-md ${a.bgSoft} ${a.text} px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider`}
+                className={`rounded px-2 py-0.5 text-[9px] font-mono font-bold uppercase tracking-wider ${a.bgSoft} ${a.text}`}
               >
                 {phaseLabel}
               </span>
-              <span className="text-[11px] text-muted-foreground">
-                {phase.topics.length} chủ đề · {phase.projects.length} dự án
+              <span className="text-[10px] text-zinc-500 font-mono">
+                {phase.topics.length} CHỦ ĐỀ · {phase.projects.length} DỰ ÁN
               </span>
             </div>
-            <h3 className="text-lg font-semibold leading-tight sm:text-xl">
+            <h3 className="text-base font-bold leading-tight sm:text-lg text-zinc-200 group-hover:text-foreground transition-colors">
               {phase.title}
             </h3>
-            <p className="flex items-start gap-1.5 text-sm text-muted-foreground">
+            <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
               <Target className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${a.text}`} />
               {phase.goal}
             </p>
           </div>
           <ChevronDown
-            className={`h-5 w-5 shrink-0 text-muted-foreground transition-transform duration-300 group-open:rotate-180`}
+            className={`h-4 w-4 shrink-0 text-zinc-500 transition-transform duration-300 ${
+              isOpen ? "rotate-180 text-foreground" : ""
+            }`}
           />
-        </summary>
+        </button>
 
-        <div className="border-t border-border/50 px-4 pb-4 pt-4 sm:px-5">
-          {phase.projects.length > 0 && (
-            <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {phase.projects.map((p) => (
-                <ProjectCard key={p.id} project={p} />
-              ))}
-            </div>
+        {/* Accordion Content */}
+        <AnimatePresence initial={false}>
+          {isOpen && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <div className="border-t border-white/5 px-4 pb-5 pt-4 sm:px-5">
+                {phase.projects.length > 0 && (
+                  <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {phase.projects.map((p) => (
+                      <ProjectCard key={p.id} project={p} />
+                    ))}
+                  </div>
+                )}
+
+                <TopicList
+                  topics={phase.topics}
+                  phaseSlug={phase.slug}
+                  accent={phase.accent}
+                />
+
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <Link
+                    href={`/phase/${phase.slug}`}
+                    className={`inline-flex items-center gap-1.5 rounded-lg ${a.bg} px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-sm transition-transform hover:scale-[1.02]`}
+                  >
+                    Chi tiết phase →
+                  </Link>
+                  <Link
+                    href={`/projects?phase=${phase.number}`}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-1.5 text-xs font-medium text-zinc-400 hover:text-foreground hover:bg-white/[0.05]"
+                  >
+                    Dự án của phase
+                  </Link>
+                </div>
+              </div>
+            </motion.div>
           )}
-
-          <TopicList
-            topics={phase.topics}
-            phaseSlug={phase.slug}
-            accent={phase.accent}
-          />
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Link
-              href={`/phase/${phase.slug}`}
-              className={`inline-flex items-center gap-1.5 rounded-lg ${a.bg} px-3 py-1.5 text-xs font-semibold text-white transition-transform hover:scale-[1.03]`}
-            >
-              Chi tiết phase →
-            </Link>
-            <Link
-              href={`/projects?phase=${phase.number}`}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/40 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
-            >
-              Dự án của phase
-            </Link>
-          </div>
-        </div>
-      </motion.details>
+        </AnimatePresence>
+      </div>
     </motion.div>
   );
 }

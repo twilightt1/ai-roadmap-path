@@ -1,0 +1,190 @@
+Lý thuyết thiết kế thì dễ, nhưng ghép các mảnh lego kiến trúc lại để chịu tải cho hàng triệu người dùng mới là nghệ thuật. Kỹ sư giỏi không bao giờ thiết kế mọi thứ từ con số không (scratch); họ tái sử dụng các mẫu thiết kế kinh điển (Classic Patterns) đã được kiểm chứng qua lửa đạn của ngành công nghiệp. Chương này bóc tách bản thiết kế kỹ thuật (blueprints) của ba hệ thống AI phổ biến nhất hiện nay, dưới góc nhìn của một Kỹ sư Hệ thống thực chiến.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Chatbot 'Đãng trí' và 'Nghẽn cổ chai DB'">
+**Bối cảnh:** Startup Y xây dựng một AI Chatbot giống ChatGPT cho dân Sale. Để AI "nhớ" được câu chuyện, kỹ sư thiết kế lưu toàn bộ lịch sử tin nhắn (Chat history) vào CSDL quan hệ PostgreSQL. Mỗi khi có request, Backend truy vấn bảng `messages` để ghép 20 tin nhắn gần nhất vào Prompt, sau đó gửi lên OpenAI.
+
+**Sự cố:** Khi chạy chiến dịch quảng cáo, 1,000 nhân viên Sale truy cập cùng lúc. CSDL PostgreSQL bị sập (Crash) ngay lập tức do hiện tượng "Connection Pool Exhaustion" (Cạn kiệt kết nối) vì có quá nhiều lượt Đọc/Ghi liên tục mỗi giây. Khi DB sập, Chatbot mắc chứng "đãng trí", trả lời không nhớ ngữ cảnh cũ, khiến người dùng nổi giận rời bỏ app.
+
+**Hậu quả:** Ứng dụng dính Downtime 6 giờ. Cấu trúc DB phải đập đi xây lại hoàn toàn sang kiến trúc In-Memory (Redis).
+</Callout>
+
+Bài học rút ra: Database quan hệ (SQL) sinh ra để giữ tính toàn vẹn dữ liệu dài hạn, không sinh ra để cung cấp Context siêu tốc độ cao cho LLM. Thiết kế một hệ thống nhớ (Memory System) sai chỗ là thảm họa kiến trúc kinh điển nhất.
+
+---
+
+## 2. Architecture Blueprint (Kiến trúc giải pháp)
+
+Dưới đây là 3 bản thiết kế (Blueprints) kinh điển nhất trong System Design cho AI:
+
+### Mẫu 1: AI Chatbot với Redis Session Memory
+Cách ChatGPT ghi nhớ hàng triệu cuộc hội thoại mà không sập hệ thống cơ sở dữ liệu.
+
+```text
+[ Người dùng ]
+      │
+      ▼
+[ API Gateway / Load Balancer ]
+      │
+      ▼
+[ Chatbot Backend (Stateless) ] ── (Lấy Session_ID) ──> [ REDIS CLUSTER ] (Tốc độ bộ nhớ RAM)
+      │                                                     │
+      ├── 1. Kéo 10 tin nhắn gần nhất từ Redis <────────────┤
+      ├── 2. Bọc vào Prompt gửi lên LLM                     │
+      ├── 3. Nhận phản hồi & stream về User                 │
+      └── 4. Đẩy (Push) câu trả lời mới vào lại Redis ──────┘
+                                                            │
+                           (Bất đồng bộ - Async Save)       │
+                        [ Postgres / MongoDB ] <────────────┘
+```
+**Bí quyết:** Redis là bộ nhớ đệm tốc độ ánh sáng (1ms). Bạn thiết lập TTL (Time To Live - Thời gian sống) là 1 giờ cho các Key hội thoại. Nếu user rời đi, Redis tự xóa để giải phóng RAM. Dữ liệu dài hạn được đồng bộ ngầm xuống DB SQL.
+
+### Mẫu 2: PDF Q&A at Scale (RAG cho 10,000 Users)
+Thiết kế hệ thống tải file PDF khổng lồ mà không làm cháy bộ nhớ hệ thống.
+
+```text
+[ User Uploads PDF ] ---> [ S3 / Cloud Storage ] ---> (Bắn Event) ---> [ Message Queue (RabbitMQ) ]
+                                                                                │
+                                                                                ▼
+[ Vector DB (Qdrant/Pinecone) ] <--- (Nhúng - Embed) <--- [ Background Worker (Celery/K8s Job) ]
+                                                                                │
+                                                                                ├── Tải PDF từ S3
+                                                                                └── Bóc tách (OCR), Cắt nhỏ (Chunk)
+                                                                                
+(Lúc truy vấn)
+[ User Query ] ---> [ Embedding API ] ---> [ Vector DB (Tìm Top-5) ] ---> [ Reranker ] ---> [ LLM Generate ]
+```
+**Bí quyết:** Không bao giờ xử lý bóc tách PDF trên luồng chính của Web Server. Mọi tác vụ Ingestion (Hấp thụ dữ liệu) phải được đẩy xuống Background Workers qua hàng đợi (Queue) để dễ dàng Scale chiều ngang (Nhiều PDF -> Mở thêm Worker).
+
+### Mẫu 3: AI Customer Support (Intent Classifier -> Router)
+Hệ thống CSKH tự động giải quyết 90% yêu cầu lặp đi lặp lại với chi phí siêu rẻ.
+
+```text
+[ Lời than phiền của Khách hàng ]
+             │
+             ▼
+[ Mô hình Nhỏ tự host (DistilBERT / LLaMA-8B) ] ---> (Phân loại ý định - Intent Classification)
+             │
+     ┌───────┼─────────────────────────┐
+     ▼       ▼                         ▼
+ [ Hỏi giá ] [ Yêu cầu hoàn tiền ]  [ Lỗi phức tạp / Khiếu nại ]
+     │       │                         │
+     │       │                         ▼
+     │       │                [ Escalation (Chuyển cho Nhân viên thật) ]
+     ▼       ▼
+[ Truy xuất Vector DB Policy ] -> [ Mô hình Lớn (GPT-4o) ] -> [ Trả lời cho Khách ]
+```
+**Bí quyết:** Gọi GPT-4o cho mọi câu hỏi là ném tiền qua cửa sổ. Dùng một mô hình Fast/Cheap Classifier ở cửa ngõ để bẻ lái luồng dữ liệu (Router). Những câu hỏi không có trong hệ thống hoặc khách hàng tức giận phải được chuyển thẳng cho người thật (Human-in-the-loop).
+
+---
+
+## 3. Tooling Landscape (Ma trận Công cụ & Kiến trúc)
+
+| Mẫu Thiết Kế | Trọng tâm SRE / Tối ưu hóa | Công nghệ / Framework Đại diện |
+|---|---|---|
+| **Chatbot Memory** | Tối ưu độ trễ đọc/ghi siêu tốc, tránh làm phình to DB vật lý, xử lý việc ngắt kết nối Streaming bằng SSE. | Redis (Lưu trữ Session List), LangChain (BufferWindowMemory), Server-Sent Events (SSE). |
+| **Enterprise RAG** | Quản lý vòng đời Ingestion (Xóa/Cập nhật file PDF phải phản ánh vào Vector DB). Phân quyền bảo mật đa khách hàng (Multi-tenant ACL). | S3/GCS (Lưu trữ File thô), Celery/Kafka (Luồng xử lý), Qdrant/Pinecone (Màng lọc Filter Tenant). |
+| **Intent Router** | Tối ưu hóa điểm nghẽn cổ chai (Bottleneck) ở khâu Router. Đảm bảo mô hình phân loại chạy với độ trễ < 50ms. | ONNX Runtime / TensorRT (Chạy mô hình nhỏ siêu tốc), FastAPI. |
+
+---
+
+## 4. Implementation Playbook (Thực thi)
+
+Dưới đây là mã giả hệ thống (System pseudo-code) cho Mẫu thiết kế 1: **Chatbot với Redis Memory**, triển khai bằng Python và Fastapi. Nó thể hiện rõ tư duy "Backend phi trạng thái (Stateless)" để có thể Scale lên hàng chục máy chủ.
+
+```python
+import redis
+import json
+from fastapi import FastAPI, Depends
+
+app = FastAPI()
+# Kết nối Redis Pool để chịu tải cao
+redis_client = redis.Redis(host='redis-server', port=6379, db=0)
+
+# Hàm lấy 5 cặp hội thoại gần nhất (10 tin nhắn)
+def get_chat_history(session_id: str, limit: int = 10) -> list:
+    # Lấy danh sách từ dưới lên (Mới nhất)
+    raw_history = redis_client.lrange(f"chat:{session_id}", -limit, -1)
+    return [json.loads(msg) for msg in raw_history]
+
+# Hàm lưu tin nhắn ngầm vào Redis với hạn sử dụng (TTL) 1 tiếng
+def save_message_async(session_id: str, role: str, content: str):
+    msg = json.dumps({"role": role, "content": content})
+    key = f"chat:{session_id}"
+    redis_client.rpush(key, msg)
+    # Tự hủy dữ liệu sau 3600s (1 Giờ) -> Tiết kiệm RAM
+    redis_client.expire(key, 3600)
+
+@app.post("/chat")
+async def chat_endpoint(user_message: str, session_id: str):
+    # 1. Kéo ngữ cảnh siêu tốc (1ms) từ Redis
+    history = get_chat_history(session_id)
+    
+    # 2. Xây dựng cấu trúc Prompt
+    messages = [{"role": "system", "content": "You are a helpful assistant."}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+    
+    # 3. Gọi LLM API
+    llm_response = call_llm_provider(messages)
+    
+    # 4. Lưu lại lịch sử theo cơ chế "Bắn và Quên" (Fire-and-forget)
+    save_message_async(session_id, "user", user_message)
+    save_message_async(session_id, "assistant", llm_response)
+    
+    # (Tùy chọn) Kích hoạt Job đồng bộ dữ liệu quan trọng xuống CSDL SQL để phân tích sau
+    # background_tasks.add_task(sync_to_postgresql, session_id)
+    
+    return {"reply": llm_response}
+```
+
+---
+
+## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+Kiến trúc kinh điển vẫn có những cái bẫy sát thủ nếu bạn cấu hình sai thông số kỹ thuật.
+
+<Callout type="warning" title="Pitfall 1: Tràn bộ nhớ RAM vì Redis Memory Leak">
+**Triệu chứng:** Sau 2 tuần chạy Mẫu thiết kế Chatbot, máy chủ Redis sập nguồn (OOM) kéo theo toàn bộ hệ thống API báo lỗi 500.
+**Nguyên nhân:** Lập trình viên quên thiết lập thời gian sống (TTL / Expire) cho các khóa (Keys) lịch sử trò chuyện. Người dùng chat xong rời đi, nhưng dữ liệu rác vẫn nằm vĩnh viễn trên RAM.
+**Cách khắc phục (Fix):** Luôn gài lệnh `EXPIRE` trên mọi Key liên quan đến Session. Cấu hình cơ chế giải phóng bộ nhớ tự động của Redis (`maxmemory-policy allkeys-lru`) để tự "đá" dữ liệu cũ nhất ra ngoài khi RAM sắp đầy.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: 'Góa phụ' Vector (Dangling Vector Pointers) trong RAG">
+**Triệu chứng:** Người dùng phản ánh kết quả tìm kiếm của AI trả về những đoạn văn thuộc một tài liệu PDF đã bị quản trị viên xóa khỏi hệ thống từ tháng trước.
+**Nguyên nhân:** Kiến trúc tách rời CSDL SQL (lưu file) và Vector DB. Quản trị viên bấm "Xóa PDF" trên giao diện Web, hệ thống SQL xóa file, nhưng không có lệnh báo cho Vector DB để xóa các Embeddings tương ứng.
+**Cách khắc phục (Fix):** Thiết lập mô hình **Event-driven Deletion** (Xóa hướng sự kiện). Khi SQL xóa file, phải phát ra một sự kiện lên Kafka/RabbitMQ. Một Worker chuyên dụng sẽ nhận sự kiện này và chạy lệnh xóa sạch (Tombstone) các chunks liên quan trong Vector DB.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Tắc nghẽn Router làm sập hệ thống CSKH">
+**Triệu chứng:** Hệ thống CSKH theo mô hình Intent Router bị đứng. API phản hồi mất 10 giây dù chỉ gọi mô hình nhỏ.
+**Nguyên nhân:** Bạn gọi mô hình Intent Classifier thông qua thư viện `transformers` với `pipeline()` ngay trong luồng đồng bộ của FastAPI. Hàm này dùng CPU để tính toán, khiến CPU đạt 100% Load và khóa cứng (Block) toàn bộ các Request khác.
+**Cách khắc phục (Fix):** Với mô hình nhỏ chạy làm Router, hãy xuất (Export) mô hình đó sang định dạng ONNX và sử dụng thư viện `onnxruntime` để chạy siêu tốc bằng CPU C++, hoặc cấu hình mô hình chạy như một Microservice độc lập tách biệt khỏi API nhận Request.
+</Callout>
+
+---
+
+## 6. Cost & Performance Unit Economics
+
+Tối ưu hóa kiến trúc không chỉ để phần mềm chạy mượt, mà để tiết kiệm tiền cho công ty.
+
+| Mẫu Kiến Trúc | Phân tích SRE (Ý nghĩa kinh tế) | Tối ưu hóa (Optimization) |
+|---|---|---|
+| **Chatbot Memory** | Càng nhớ nhiều tin nhắn cũ, số lượng Token gửi đi mỗi lượt chat càng tăng theo cấp số cộng. Chi phí nổ tung. | Sử dụng kiến trúc **Summary Memory**. Khi lịch sử vượt quá 10 tin, gọi một mô hình cực rẻ (GPT-4o-mini) tạo một bản tóm tắt 100 từ và lưu vào Redis thay cho toàn bộ cục Text cũ. Giảm 80% Token input. |
+| **Enterprise RAG (Ingestion)** | Việc gọi OpenAI Embeddings API để băm nhỏ 10,000 cuốn sách PDF có thể tốn hàng trăm đô la. | Quá trình Ingestion (Băm PDF) không yêu cầu thời gian thực. Hãy dùng mô hình nhúng Mã nguồn mở cực mạnh (như `BGE-m3` hoặc `nomic-embed`) chạy ngầm trên GPU nội bộ rẻ tiền, thay vì gọi API Đám mây đắt đỏ. |
+| **Intent Router** | Router gạt 80% Request rác/đơn giản xuống mô hình rẻ ($0.15/1M Tokens), chỉ để lại 20% vào mô hình đắt ($5/1M Tokens). | Hiệu quả kinh tế (ROI) của kiến trúc Router là lớn nhất trong AI System Design. Hệ thống tiết kiệm trung bình 60-70% tổng chi phí vận hành API so với kiến trúc Mono-Model. |
+
+---
+
+## Điểm cần nhớ
+
+- **Stateless Backend (Backend phi trạng thái):** Đừng bao giờ lưu trạng thái (Memory) của LLM vào bộ nhớ của API Server. API Server có thể bị hủy và tạo mới liên tục bởi Kubernetes. Hãy đẩy trạng thái ra Redis (In-memory DB).
+- **Background Processing (Xử lý ngầm):** Trong AI, mọi tác vụ nặng nề (Băm PDF, gọi Embeddings, OCR) phải bị đẩy ra khỏi luồng chính (Main Thread) và đưa xuống các Worker chạy ngầm thông qua hàng đợi (Queue).
+- **Đồng bộ hóa Xóa (Deletion Sync):** Hệ thống RAG doanh nghiệp không chỉ có thao tác Thêm (Insert). Thao tác Xóa (Delete/Update) phải được thiết kế tính nhất quán cực kỳ chặt chẽ giữa CSDL chính và Vector DB.
+
+## Next chapter bridge
+
+Các bản thiết kế kinh điển ở trên đều chỉ ra một nguyên lý tối thượng: Không bao giờ chạy các tác vụ nặng ngay trên luồng chính của ứng dụng. Nhưng câu hỏi đặt ra là: Nếu vậy thì thực sự chúng ta nên đặt "Cỗ máy suy luận" (Inference Engine) ở đâu trong hệ thống mạng để vừa bảo mật, vừa không làm sập ứng dụng? Ở ngay trong Backend, ở một Server hoàn toàn riêng biệt, hay tải thẳng nó xuống trình duyệt của khách hàng (Edge Computing)? Chương tiếp theo: **Inference Placement Strategy** — Nơi các Kiến trúc sư AI đấu trí để tìm ra vị trí hoàn hảo cho bộ não AI.

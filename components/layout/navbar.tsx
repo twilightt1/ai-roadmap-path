@@ -13,11 +13,11 @@ const navItems = [
 
 export function Navbar() {
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-border/60 bg-background/70 backdrop-blur-xl">
+    <header className="sticky top-0 z-40 w-full border-b border-white/5 bg-background/65 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
         <Link href="/" className="group flex items-center gap-2.5">
-          <span className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-cyan-400 text-background shadow-lg shadow-violet-500/20">
-            <BrainCircuit className="h-5 w-5" strokeWidth={2.2} />
+          <span className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-400 to-teal-500 text-background shadow-md shadow-emerald-500/10">
+            <BrainCircuit className="h-5 w-5 text-black" strokeWidth={2.2} />
           </span>
           <span className="flex flex-col leading-none">
             <span className="text-sm font-semibold tracking-tight">
@@ -28,7 +28,7 @@ export function Navbar() {
             </span>
           </span>
         </Link>
-
+ 
         <nav className="hidden items-center gap-1 md:flex">
           {navItems.map((item) => (
             <Link
@@ -36,19 +36,19 @@ export function Navbar() {
               href={item.href}
               className={cn(
                 "rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground",
-                "transition-colors hover:bg-accent hover:text-foreground"
+                "transition-colors hover:bg-secondary hover:text-foreground"
               )}
             >
               {item.label}
             </Link>
           ))}
         </nav>
-
+ 
         <div className="flex items-center gap-2">
           <SearchTrigger className="hidden sm:inline-flex" />
           <Link
             href="/roadmap"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 px-3.5 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition-transform hover:scale-[1.03] active:scale-95"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-transform hover:scale-[1.02] active:scale-95"
           >
             Bắt đầu
           </Link>

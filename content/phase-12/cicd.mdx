@@ -1,0 +1,183 @@
+Continuous Integration & Continuous Deployment (CI/CD) trong AI không chỉ là việc đóng gói mã nguồn (code) và tải lên máy chủ. Một hệ thống MLOps hoàn chỉnh yêu cầu một "luồng ba ngã" (3-way pipeline): Code thay đổi, Data thay đổi, và Model thay đổi. Việc bấm nút Deploy một mô hình mới mà không trải qua bộ lưới lọc tự động (Automated Evaluation Gates) là hành động đánh cược sự an toàn của toàn bộ doanh nghiệp.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Dòng Code 'Hủy Diệt' Ngày Thứ Sáu">
+**Bối cảnh:** Chiều thứ Sáu, một kỹ sư Prompt Engineering quyết định sửa nhẹ (tweak) dòng System Prompt của Chatbot hỗ trợ tài chính từ *"Hãy trả lời lịch sự"* thành *"Hãy đưa ra lời khuyên tài chính quyết đoán hơn"*. Anh ta cam kết (commit) mã nguồn trực tiếp vào nhánh `main`. Pipeline CI/CD truyền thống (vốn chỉ chạy Unit Test để kiểm tra lỗi cú pháp Python) trả về màu xanh (Passed). Ứng dụng tự động cập nhật lên Production.
+
+**Sự cố:** Suốt hai ngày cuối tuần, Chatbot liên tục khuyên khách hàng... bán khống cổ phiếu (short selling) thay vì hướng dẫn họ cách đổi mật khẩu thẻ tín dụng. Không một cảnh báo nào được phát ra vì mã nguồn vẫn "chạy không lỗi".
+
+**Hậu quả:** Công ty bị Ủy ban Chứng khoán điều tra vì tội "Tư vấn tài chính không phép". Kỹ sư bay việc.
+</Callout>
+
+Bài học rút ra: Unit Test thông thường vô dụng đối với LLM. Mã nguồn không lỗi (No Exception) không có nghĩa là đầu ra có ý nghĩa (Semantic Correctness). Bạn phải xây dựng **CI/CD cho AI**, nơi đánh giá chất lượng tự động (Automated Evals) được nhúng sâu vào đường ống triển khai.
+
+---
+
+## 2. Architecture Blueprint (Kiến trúc giải pháp)
+
+Trong CI/CD cho phần mềm truyền thống, bạn biên dịch (build) và kiểm thử (test) mã nguồn. Trong CI/CD cho AI (hay còn gọi là **CT/CI/CD** - Continuous Training, Continuous Integration, Continuous Deployment), quy trình mở rộng ra rất nhiều:
+
+```text
+[ GitHub / GitLab ] (Code / Prompt Update)
+       │
+       ▼
+==================== [ CI: CONTINUOUS INTEGRATION ] ====================
+  ├── 1. Code Linting & Security Scan (Bandit / Flake8)
+  ├── 2. Traditional Unit Tests (PyTest cho Logic Backend)
+  └── 3. LLM Regression Tests (Chạy Prompt mới trên 500 Golden Dataset cases)
+       └──> So sánh điểm số (Score) qua LLM-as-a-judge (VD: >= 4.5/5.0 mới Pass)
+========================================================================
+       │
+       ▼ (Nếu PASS)
+==================== [ CD: CONTINUOUS DEPLOYMENT ] =====================
+  ├── 1. Build Docker Image (Gắn Tag Version: v1.2.3)
+  ├── 2. Push Image -> Container Registry (ECR / DockerHub)
+  └── 3. Kubernetes / ArgoCD Sync (Triển khai không gián đoạn)
+         ├── Canary Release (Chỉ chuyển 5% User sang Prompt mới)
+         └── Monitor Error Rate (Theo dõi 15 phút, nếu OK -> 100% User)
+========================================================================
+```
+
+---
+
+## 3. Tooling Landscape (Ma trận công cụ)
+
+| Lớp công cụ | Đại diện tiêu biểu | Vai trò trong CI/CD (SRE Use-case) |
+|---|---|---|
+| **Pipeline Orchestrator** | GitHub Actions, GitLab CI | Trái tim của hệ thống. Kích hoạt tự động khi có thao tác gộp nhánh (Merge PR). |
+| **Model Registry / Evals** | W&B Models, MLflow | Quản lý vòng đời mô hình (Model Lifecycle). Ngăn chặn việc deploy mô hình nếu trạng thái không phải là `Production-Ready`. |
+| **Prompt Testing Framework** | Promptfoo, DeepEval | Công cụ chuyên biệt chạy trong CI/CD để tự động gọi API, tính toán điểm số (Groundedness, Toxicity) và xuất báo cáo (Report) đính kèm vào Pull Request. |
+| **Progressive Delivery** | Argo Rollouts, Flagger | Quản lý Kubernetes để thực hiện Blue/Green Deployment hoặc Canary Release, giúp rollback (lùi phiên bản) ngay lập tức nếu AI "bị ngáo" trên production. |
+
+---
+
+## 4. Implementation Playbook (Thực thi)
+
+Hãy cùng thiết lập một đường ống (Pipeline) GitHub Actions cực kỳ thực dụng. Khi một kỹ sư tạo Pull Request (PR) thay đổi Prompt, GitHub Actions sẽ tự động chạy bộ đánh giá chất lượng (Eval) và bình luận kết quả thẳng vào PR đó.
+
+### Bước 1: Viết Script chạy Eval (Python + DeepEval)
+Tạo file `ci_eval.py`. Kịch bản này sẽ kiểm tra xem Prompt mới có trả lời đúng các câu hỏi hóc búa (Golden Dataset) hay không.
+
+```python
+# ci_eval.py
+import os
+import sys
+from deepeval import evaluate
+from deepeval.test_case import LLMTestCase
+from deepeval.metrics import AnswerRelevancyMetric
+
+def run_ci_eval():
+    # 1. Tải Golden Dataset (Ví dụ: 100 câu hỏi khó đã được dán nhãn chuẩn)
+    # 2. Sinh câu trả lời từ mô hình với đoạn Prompt MỚI vừa được lập trình viên sửa
+    # (Giả lập kết quả)
+    test_case = LLMTestCase(
+        input="Làm thế nào để đổi mật khẩu?",
+        actual_output="Truy cập mục Cài đặt -> Đổi mật khẩu.",
+        expected_output="Vào Cài đặt -> Bảo mật -> Đổi mật khẩu."
+    )
+    
+    # Sử dụng LLM-as-a-judge để chấm điểm độ liên quan (Relevancy)
+    metric = AnswerRelevancyMetric(threshold=0.8)
+    
+    try:
+        # Chạy đánh giá
+        evaluate([test_case], [metric])
+        print("✅ LLM Eval Passed! Hệ thống đáp ứng tiêu chuẩn.")
+        sys.exit(0) # Trả về 0 -> GitHub Actions báo Xanh (Success)
+    except Exception as e:
+        print(f"❌ LLM Eval Failed! Lỗi suy giảm chất lượng (Regression detected): {e}")
+        sys.exit(1) # Trả về 1 -> GitHub Actions báo Đỏ (Failed)
+
+if __name__ == "__main__":
+    run_ci_eval()
+```
+
+### Bước 2: Tích hợp vào GitHub Actions
+Tạo file cấu hình YAML tại `.github/workflows/ai_ci.yml`.
+
+```yaml
+name: AI CI Pipeline - Prompt Regression Test
+
+on:
+  pull_request:
+    branches: [ "main" ] # Chạy mỗi khi có ai muốn gộp code vào nhánh Main
+
+jobs:
+  run-evals:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Cài đặt thư viện AI
+        run: pip install deepeval openai
+
+      - name: Chạy LLM Evaluation Script
+        env:
+          # Bắt buộc: Kéo API Key từ GitHub Secrets một cách an toàn
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} 
+        run: python ci_eval.py
+
+      # (Tùy chọn nâng cao) Gửi thông báo Slack / Bình luận thẳng vào PR nếu thất bại
+```
+
+Với đường ống này, lập trình viên không thể tự ý đẩy một Prompt kém chất lượng lên hệ thống. Nó tạo ra một hàng rào tự động hóa (Automated Guardrail).
+
+---
+
+## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+Triển khai CI/CD cho AI là một nghệ thuật cân bằng giữa "Sự an toàn" và "Tốc độ". 
+
+<Callout type="warning" title="Pitfall 1: Pipeline chạy mất... 5 tiếng đồng hồ">
+**Triệu chứng:** Kỹ sư tạo một PR đơn giản (sửa lỗi chính tả), nhưng GitHub Actions chạy mất 5 giờ để hoàn thành. Lập trình viên phẫn nộ vì phải chờ đợi.
+**Nguyên nhân:** Tập kiểm thử nội bộ (Golden Dataset) quá khổng lồ (hàng ngàn câu). Gọi API GPT-4 cho từng câu tuần tự làm thời gian chạy (Execution time) phình to.
+**Cách khắc phục (Fix):**
+1. **Tiered Testing (Kiểm thử phân tầng):** Trên mỗi PR, chỉ chạy bộ test nhỏ (Sanity Set - 50 câu quan trọng nhất). Nếu Pass thì cho Merge. Chỉ chạy toàn bộ 10,000 câu (Full Suite) vào lúc nửa đêm (Nightly build).
+2. **Concurrency (Đồng thời):** Sử dụng các thư viện hỗ trợ gọi API bất đồng bộ (Asyncio) hoặc Bulk/Batch API để chấm điểm hàng loạt (Parallel Evaluation).
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: 'Flaky Tests' (Lúc Đỏ lúc Xanh)">
+**Triệu chứng:** Kỹ sư không thay đổi dòng code nào, ấn chạy lại CI Pipeline 3 lần thì 2 lần Failed, 1 lần Passed.
+**Nguyên nhân:** Bản chất của mô hình LLM là có tính ngẫu nhiên (Stochastic). Dù đặt `temperature=0`, cấu trúc câu trả lời vẫn có thể sai lệch nhẹ, làm hệ thống Regex/Metric truyền thống chấm trượt.
+**Cách khắc phục (Fix):** Ngừng việc sử dụng các hàm so sánh chuỗi tĩnh (như `exact_match` hoặc `assert "cảm ơn" in response`). Bắt buộc chuyển sang dùng LLM-as-a-judge (với Metric Semantic Similarity) để đánh giá hệ thống dựa trên ý nghĩa (Meaning) thay vì chữ viết (Tokens).
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Triển khai trực tiếp 100% Traffic (Big Bang Deployment)">
+**Triệu chứng:** Pipeline CI báo Xanh. Code được Merge. 100% người dùng trên Production lập tức sử dụng Prompt mới. Server ngay lập tức quá tải (Rate limit) do Prompt mới dài gấp đôi Prompt cũ.
+**Cách khắc phục (Fix):** Áp dụng **Canary Release** kết hợp với **Feature Flags**.
+- Ngày 1: Bật Feature Flag chỉ cho luồng Traffic nội bộ của công ty thử nghiệm.
+- Ngày 2: Bật cho 5% người dùng miễn phí (Free tier). Theo dõi lỗi.
+- Ngày 3: Bật cho 100% người dùng. Nếu có lỗi, chỉ cần tắt cờ (Feature Flag = False) để đưa ứng dụng về lại trạng thái cũ ngay lập tức (Rollback) thay vì phải chờ biên dịch lại Code.
+</Callout>
+
+---
+
+## 6. Cost & Performance Unit Economics
+
+Tự động hóa có thể đốt tiền nhanh hơn con người. Một kỹ sư SRE phải canh gác hóa đơn Cloud trong các luồng CI/CD.
+
+| Hoạt động CI/CD | Phân tích SRE (Ý nghĩa kinh tế) | Tối ưu hóa (Optimization) |
+|---|---|---|
+| **API Costs trong Testing** | 1 PR chạy 1,000 test cases dùng GPT-4. Một ngày có 50 PRs = 50,000 API calls chỉ để test. Cost: $500/ngày. | Dùng mô hình rẻ hơn (như GPT-4o-mini hoặc LLaMA-3 8B tự host) làm Judge cho các khâu kiểm thử cơ bản trên PR. Chỉ dùng GPT-4o cho bản Nightly Build cuối ngày. |
+| **Model Pulls / Egress Costs** | Mỗi lần CI/CD build Docker Image, nó tải mô hình 30GB từ Hugging Face. Một ngày build 20 lần = 600GB băng thông tải xuống. Tốn thời gian (30 phút/build) và tiềm ẩn lỗi nghẽn mạng. | Không nướng mô hình vào Docker Image trong lúc Build. Thay vào đó, tải mô hình 1 lần lưu sẵn trên đĩa mạng (AWS EFS) và Mount trực tiếp đĩa này vào Pod Kubernetes khi Container khởi chạy. |
+
+---
+
+## Điểm cần nhớ
+
+- Lỗi cú pháp thì sập phần mềm, lỗi Prompt thì sập công ty. CI/CD cho AI bắt buộc phải có bước đánh giá ngữ nghĩa (LLM-as-a-judge) được tự động hóa.
+- Tốc độ Pipeline là sinh mệnh của nhóm phát triển. Phân tầng kiểm thử (Tiered Testing) để đảm bảo PR chạy nhanh gọn, dồn các tác vụ nặng vào ban đêm.
+- Deploy ra Production không bao giờ là "Tất cả hoặc Không có gì". Hãy sử dụng Canary Release và Feature Flags để có đường lui (Rollback) trong vòng 1 giây.
+
+## Next chapter bridge
+
+Mô hình đã tự động hóa kiểm thử, tự động hóa đóng gói và tự động hóa triển khai thành công. Tuy nhiên, hệ thống của bạn càng tự động và càng quyền lực, nó càng trở thành miếng mồi ngon cho các cuộc tấn công mạng. Điều gì xảy ra khi một kẻ tấn công lợi dụng lỗ hổng Prompt Injection để khiến hệ thống của bạn tiết lộ toàn bộ thông tin nội bộ của công ty? Chương cuối cùng của Phase 12: **LLM Security & Safety** — nơi chúng ta khoác lên hệ thống AI những lớp giáp bảo mật kiên cố nhất.

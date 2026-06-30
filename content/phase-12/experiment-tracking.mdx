@@ -1,0 +1,164 @@
+Trong một dự án AI thực tế, bạn không bao giờ huấn luyện (train) mô hình chỉ một lần. Kỹ sư AI sẽ thử nghiệm hàng chục cấu hình Learning Rate, hàng trăm cách kết hợp Batch Size và thử qua nhiều phương pháp Optimizer khác nhau để tìm ra mô hình tốt nhất. Nếu không có một hệ thống **Experiment Tracking (Theo dõi thử nghiệm)** chuyên nghiệp, quá trình này sẽ nhanh chóng biến thành một mớ hỗn độn (chaos) lưu trữ trong các file Excel hoặc tên file thư mục như `model_v1_final_real_fixed.pt`.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Mô hình 'Chén Thánh' bị thất lạc">
+**Bối cảnh:** Nhóm MLOps có 3 tuần để fine-tune mô hình LLaMA-3 cho bài toán Medical QA. Kỹ sư Lead chạy hơn 40 thử nghiệm (experiments) vào cuối tuần bằng cách ssh trực tiếp vào máy chủ GPU và ghi chú các tham số (learning rate, epoch) vào một cuốn sổ tay.
+
+**Sự cố:** Sáng thứ hai, kỹ sư thông báo: "Run số 27 cho kết quả xuất sắc nhất, Loss giảm mượt và độ chính xác đạt 92%". Tuy nhiên, khi nhóm Engineering yêu cầu cung cấp lại cấu hình chính xác (Hyperparameters) và phiên bản tập dữ liệu (Dataset version) để tái tạo (reproduce) mô hình cho môi trường Production, kỹ sư Lead phát hiện ra mình đã... quên lưu lại hệ số Weight Decay và tên file mã nguồn `train.py` tại thời điểm chạy Run 27 đã bị ghi đè.
+
+**Hậu quả:** Nhóm phải tốn thêm 4 ngày chạy lại hàng loạt thử nghiệm để "dò dẫm" lại cấu hình của Run 27. Thiệt hại hàng nghìn đô la tiền máy chủ GPU chỉ vì thiếu hệ thống Tracking tự động.
+</Callout>
+
+Bài học rút ra: Con người có trí nhớ hữu hạn. Máy móc (W&B, MLflow) sinh ra để ghi nhớ thay bạn mọi thứ: từ Hyperparameters, Metrics, cho đến mã nguồn (Git commit) và tài nguyên hệ thống (GPU Temp, VRAM usage).
+
+---
+
+## 2. Architecture Blueprint (Kiến trúc giải pháp)
+
+Một hệ thống Experiment Tracking chuẩn SRE (Site Reliability Engineering) không hoạt động cô lập. Nó nằm ở vị trí trung tâm, thu thập luồng đo lường (Telemetry) từ hạ tầng GPU và pipeline huấn luyện.
+
+```text
+[ Data / Code ]                    [ Hardware / GPU ]
+      │                                    │
+      ▼                                    ▼
+[ Training Script (PyTorch / HuggingFace) ]
+      │
+      │ (Gửi Logs qua REST API bất đồng bộ)
+      │ 1. Hyperparameters (LR, Batch size, Epochs)
+      │ 2. Metrics (Train loss, Eval loss, Accuracy)
+      │ 3. System (VRAM, GPU Usage, Temp)
+      │ 4. Artifacts (Model weights, Dataset hashes)
+      ▼
+[ MLOps Tracking Server (W&B / MLflow) ]
+      │
+      ├──> Dashboard trực quan (Biểu đồ Loss, So sánh Run)
+      └──> Model Registry (Quản lý trạng thái: Staging -> Production)
+```
+
+Kiến trúc này đảm bảo rằng ngay cả khi máy chủ GPU bị sập (Crash / OOM), toàn bộ nhật ký tiến trình trước đó đã được lưu trữ an toàn trên máy chủ MLOps.
+
+---
+
+## 3. Tooling Landscape (Ma trận công cụ)
+
+| Công cụ | Mô hình triển khai | Ưu điểm (Pros) | Nhược điểm (Cons) | Khi nào nên dùng |
+|---|---|---|---|---|
+| **Weights & Biases (W&B)** | SaaS (Đám mây) hoặc Enterprise On-premise | Cực kỳ trực quan, tích hợp sâu với HuggingFace, cộng đồng LLM dùng nhiều nhất, theo dõi System Metrics xuất sắc. | Giới hạn dung lượng lưu trữ Artifacts ở bản miễn phí. | Lựa chọn **số 1** cho các dự án LLM/Deep Learning hiện đại. |
+| **MLflow** | Open-source (Tự Host) hoặc managed (Databricks) | Mã nguồn mở 100%, bảo mật dữ liệu tuyệt đối khi tự host, hệ thống Model Registry chuẩn công nghiệp. | Giao diện UI cũ kỹ, setup hạ tầng ban đầu phức tạp (cần Database + S3). | Doanh nghiệp có yêu cầu bảo mật dữ liệu khắt khe (On-premise). |
+| **TensorBoard** | Open-source (Local) | Đi kèm sẵn với PyTorch/TensorFlow, dễ sử dụng cho các dự án cá nhân nhỏ. | Không có tính năng làm việc nhóm (Collaboration), khó so sánh hàng chục runs cùng lúc. | Học tập cá nhân, test nhanh trên máy tính cục bộ. |
+
+---
+
+## 4. Implementation Playbook (Thực thi)
+
+Hãy cùng thiết lập một hệ thống theo dõi thử nghiệm chuẩn công nghiệp sử dụng **Weights & Biases (W&B)** kết hợp với `Trainer` API của HuggingFace.
+
+### Bước 1: Khởi tạo và Xác thực W&B
+Tuyệt đối không lưu cứng (hardcode) API Key trong mã nguồn. Hãy sử dụng biến môi trường (Environment Variables).
+
+```bash
+# Trên máy chủ GPU hoặc trong tệp .env
+export WANDB_API_KEY="your_api_key_here"
+export WANDB_PROJECT="llm-finetuning-medical"
+export WANDB_LOG_MODEL="checkpoint" # Tự động lưu weights của mô hình tốt nhất
+```
+
+### Bước 2: Tích hợp vào Training Script
+Chỉ cần vài dòng code để liên kết HuggingFace Trainer với W&B.
+
+```python
+import os
+import wandb
+from transformers import TrainingArguments, Trainer
+
+# 1. Khởi tạo một Run (Thử nghiệm) mới trên W&B
+# Lưu ý: Ghi lại cấu hình máy chủ, dataset version để đảm bảo tính tái lập (Reproducibility)
+wandb.init(
+    project=os.environ.get("WANDB_PROJECT", "default_project"),
+    name="run_027_lr2e5_batch16_lora", # Đặt tên Run rõ ràng
+    config={
+        "dataset_version": "v3_cleaned",
+        "gpu_type": "NVIDIA A100",
+        "lora_rank": 16,
+        "notes": "Testing cosine scheduler with warmup 0.05"
+    }
+)
+
+# 2. Cấu hình HuggingFace Trainer
+training_args = TrainingArguments(
+    output_dir="./results",
+    learning_rate=2e-5,
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=4,
+    num_train_epochs=3,
+    evaluation_strategy="steps", # Đánh giá liên tục
+    eval_steps=50,
+    logging_steps=10,            # Gửi log (Loss) lên W&B mỗi 10 bước
+    report_to="wandb",           # BẬT TÍNH NĂNG TÍCH HỢP W&B
+    run_name="run_027_lr2e5_batch16_lora" # Đồng bộ tên Run
+)
+
+# 3. Chạy huấn luyện
+# trainer = Trainer(..., args=training_args)
+# trainer.train()
+
+# 4. Kết thúc và đóng kết nối an toàn
+wandb.finish()
+```
+
+---
+
+## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+Dưới đây là các tình huống lỗi phổ biến khi vận hành Experiment Tracking trong môi trường phân tán:
+
+<Callout type="warning" title="Pitfall 1: Tràn đĩa cứng (Disk Full) do Log Model liên tục">
+**Triệu chứng:** Máy chủ Training bị crash với lỗi `No space left on device`.
+**Nguyên nhân:** Biến môi trường `WANDB_LOG_MODEL="true"` ra lệnh cho W&B tự động upload toàn bộ trọng số (weights) của mô hình lên đám mây sau MỖI lần lưu checkpoint (ví dụ mỗi 500 steps). Một mô hình 7B nặng 14GB, lưu 10 lần sẽ tốn 140GB dung lượng đĩa tạm và băng thông mạng.
+**Fix (Cách khắc phục):** Chỉ lưu (log) mô hình tốt nhất ở cuối cùng (End of training) thay vì mọi checkpoint. Chuyển thành `WANDB_LOG_MODEL="end"` hoặc quản lý việc lưu Artifacts thủ công trong mã nguồn.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Máy chủ Cloud không có Internet (Headless/Air-gapped)">
+**Triệu chứng:** Script Python bị treo cứng (hang) ngay ở dòng `trainer.train()` khi chạy trên cụm GPU nội bộ của ngân hàng (không có kết nối Internet ra ngoài).
+**Nguyên nhân:** W&B client cố gắng mở kết nối HTTP ra máy chủ đám mây nhưng bị tường lửa (Firewall) chặn, dẫn đến kết nối bị time-out vô tận.
+**Fix (Cách khắc phục):** Chạy W&B ở chế độ ngoại tuyến (Offline mode). Dữ liệu log sẽ được lưu thành các file nội bộ trên ổ cứng. Khi nào bạn mang dữ liệu sang máy tính có mạng, bạn mới chạy lệnh đồng bộ.
+```bash
+export WANDB_MODE="offline"
+# Sau khi train xong, dùng lệnh sau ở máy có mạng để đẩy dữ liệu lên web:
+# wandb sync ./wandb/run-offline-directory
+```
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: So sánh (Compare) các Runs có cấu trúc dữ liệu khác nhau">
+**Triệu chứng:** Bạn thấy `eval_loss` của Run A (hôm nay) giảm xuống 0.5, thấp hơn hẳn Run B (tuần trước) là 1.2. Bạn kết luận Run A tốt hơn và đem đi deploy. Thực tế, Run A thảm họa.
+**Nguyên nhân:** Tuần trước bạn dùng tập Validation Set có độ dài ngữ cảnh trung bình 2,000 tokens (bài toán khó). Tuần này, một kỹ sư data đã "vô tình" thay đổi Validation Set chỉ còn 200 tokens (bài toán dễ). Mọi phép so sánh Loss giữa hai Run này là **vô nghĩa (Invalid Comparison)**.
+**Fix (Cách khắc phục):** Luôn ghi log (hash checksum) phiên bản của tập validation (thông qua DVC) vào W&B `config`. Bảng điều khiển (Dashboard) phải cấu hình để cảnh báo nếu so sánh hai Run có Hash dữ liệu đầu vào khác nhau.
+</Callout>
+
+---
+
+## 6. Cost & Performance Unit Economics
+
+Hệ thống theo dõi không chỉ để xem biểu đồ Loss, nó còn là công cụ đo đếm hiệu quả kinh tế (FinOps cho AI):
+
+| Chỉ số (Metrics) | Cách đọc trên W&B Dashboard | Phân tích SRE (Ý nghĩa kinh tế) |
+|---|---|---|
+| **GPU Memory Allocated** | Biểu đồ đường VRAM theo thời gian thực. | Nếu VRAM đỉnh (Peak) chỉ đạt 50% dung lượng GPU, bạn đang lãng phí tiền thuê GPU. Cần tăng `batch_size` lên gấp đôi để tối đa hóa thông lượng (throughput) và giảm thời gian thuê máy. |
+| **GPU Power Usage (W)** | Biểu đồ tiêu thụ điện năng. | Nếu biểu đồ điện năng có dạng răng cưa (rớt xuống thấp theo chu kỳ), có nghĩa là GPU đang phải "chờ" CPU tải dữ liệu từ ổ cứng (I/O Bottleneck). Cần tối ưu hóa Data Loader (dùng num_workers cao hơn). |
+| **Step Time / Throughput** | Số giây / Step. | Cho phép tính toán chính xác "Burn Rate". Ví dụ: Máy chủ giá $3/giờ, tốc độ 10s/step. Train 10,000 steps sẽ mất ~28 giờ = $84. Quyết định xem có nên thử nghiệm tiếp hay cắt lỗ (early stopping). |
+
+---
+
+## Điểm cần nhớ
+
+- **Experiment Tracking là sổ nhật ký điện tử bắt buộc** của AI Engineer, ghi lại sự liên kết giữa Code, Data, Hyperparameters và Model Weights.
+- **W&B và MLflow** là hai tiêu chuẩn công nghiệp. Dùng W&B cho sự tiện lợi và hệ sinh thái; dùng MLflow khi có yêu cầu nghiêm ngặt về bảo mật nội bộ.
+- Phải luôn thiết lập biến môi trường thay vì hardcode API Keys, và chú ý kiểm soát dung lượng lưu trữ khi upload các Checkpoints của mô hình lớn.
+- Bảng điều khiển (Dashboard) giám sát GPU (VRAM, Utilization) là chìa khóa để phát hiện điểm nghẽn cổ chai (bottlenecks) phần cứng, giúp tối ưu hóa chi phí thuê máy chủ cloud.
+
+## Next chapter bridge
+
+Sau khi bạn đã biết cách quản lý dữ liệu (DVC) và thiết lập trung tâm theo dõi thử nghiệm (W&B), đã đến lúc chúng ta nổ máy cho các cỗ máy tính toán khổng lồ. Tuy nhiên, việc vận hành một hoặc một cụm GPU không đơn giản là nhấn nút "Chạy". Chương tiếp theo: **Training Infrastructure** — nơi chúng ta sẽ khám phá cách phân bổ khối lượng công việc khổng lồ của LLM qua nhiều thẻ GPU bằng PyTorch DDP, DeepSpeed, và cách duy trì sự ổn định của hệ thống trước sự cố sập phần cứng.

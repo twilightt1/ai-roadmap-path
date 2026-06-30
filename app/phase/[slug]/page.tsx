@@ -7,7 +7,6 @@ import { accentMap } from "@/lib/theme";
 import { PhaseIcon } from "@/components/shared/phase-icon";
 import { TopicList } from "@/components/roadmap/topic-list";
 import { ProjectCard } from "@/components/roadmap/project-card";
-import { Badge } from "@/components/ui/badge";
 
 type Props = { params: Promise<{ slug: string }> };
 
@@ -41,44 +40,48 @@ export default async function PhaseDetailPage({ params }: Props) {
       {/* Breadcrumb */}
       <Link
         href="/roadmap"
-        className="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+        className="mb-6 inline-flex items-center gap-1.5 text-xs font-mono text-zinc-500 hover:text-foreground"
       >
-        <ArrowLeft className="h-4 w-4" /> Quay lại roadmap
+        <ArrowLeft className="h-3.5 w-3.5" /> Quay lại roadmap
       </Link>
 
       {/* Header */}
-      <div className={`rounded-2xl border ${a.border} bg-card/60 p-6 sm:p-8`}>
-        <div className="flex items-center gap-3">
-          <span
-            className={`flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br ${a.gradient} text-white shadow-lg`}
-          >
-            <PhaseIcon name={phase.icon} className="h-6 w-6" />
-          </span>
-          <div>
-            <div className="flex items-center gap-2">
-              <Badge
-                className={`${a.bg} text-white border-0`}
-              >
-                {phaseLabel}
-              </Badge>
-              <span className="text-xs text-muted-foreground">
-                {phase.topics.length} chủ đề · {phase.projects.length} dự án
-              </span>
+      <div className={`rounded-2xl border ${a.border} bg-card/35 p-6 sm:p-8 relative overflow-hidden`}>
+        <div
+          className={`absolute -right-8 -top-8 h-24 w-24 rounded-full ${a.bgSoft} blur-3xl opacity-40`}
+        />
+        <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-4">
+            <span
+              className={`flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br ${a.gradient} text-white shadow`}
+            >
+              <PhaseIcon name={phase.icon} className="h-6 w-6" />
+            </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className={`text-[10px] font-mono font-bold uppercase tracking-wider ${a.text}`}>
+                  {phaseLabel}
+                </span>
+                <span className="text-xs text-zinc-500 font-mono">
+                  · {phase.topics.length} CHỦ ĐỀ · {phase.projects.length} DỰ ÁN
+                </span>
+              </div>
+              <h1 className="mt-1 text-2xl font-extrabold tracking-tight sm:text-3xl text-zinc-100">
+                {phase.title}
+              </h1>
             </div>
-            <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">
-              {phase.title}
-            </h1>
           </div>
         </div>
-        <p className="mt-4 text-sm text-muted-foreground leading-relaxed">
+        <p className="mt-4 relative text-sm text-muted-foreground leading-relaxed max-w-2xl">
           {phase.goal}
         </p>
       </div>
 
       {/* Projects */}
       {phase.projects.length > 0 && (
-        <section className="mt-8">
-          <h2 className="mb-4 text-lg font-semibold">
+        <section className="mt-12">
+          <span className="text-[9px] font-mono uppercase tracking-[0.2em] text-emerald-400">Practical Work</span>
+          <h2 className="mt-1 mb-4 text-lg font-bold text-zinc-200">
             Dự án thực hành ({phase.projects.length})
           </h2>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -90,15 +93,15 @@ export default async function PhaseDetailPage({ params }: Props) {
       )}
 
       {/* Topics */}
-      <section className="mt-8">
-        <h2 className="mb-4 text-lg font-semibold">
+      <section className="mt-12">
+        <span className="text-[9px] font-mono uppercase tracking-[0.2em] text-emerald-400">Knowledge Curriculum</span>
+        <h2 className="mt-1 mb-2 text-lg font-bold text-zinc-200">
           Chủ đề chi tiết ({phase.topics.length})
         </h2>
-        <p className="mb-4 text-sm text-muted-foreground">
-          Mở rộng mỗi mục để xem tóm tắt, rồi nhấp &quot;Đọc bài đầy đủ&quot; để vào chương
-          giảng chi tiết.
+        <p className="mb-4 text-xs text-muted-foreground leading-relaxed">
+          Mở rộng mỗi mục để xem tóm tắt, rồi nhấp &quot;Đọc bài đầy đủ&quot; để vào chương giảng chi tiết.
         </p>
-        <div className="rounded-xl border border-border/60 bg-card/40">
+        <div className="rounded-xl border border-white/5 bg-zinc-950/20">
           <TopicList
             topics={phase.topics}
             phaseSlug={phase.slug}
@@ -109,16 +112,17 @@ export default async function PhaseDetailPage({ params }: Props) {
       </section>
 
       {/* Navigation */}
-      <div className="mt-10 flex items-center justify-between gap-4 border-t border-border/40 pt-8">
+      <div className="mt-16 flex items-center justify-between gap-4 border-t border-white/5 pt-8">
         {prev ? (
           <Link
             href={`/phase/${prev.slug}`}
-            className="group flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+            className="group flex flex-col items-start gap-1 rounded-xl border border-white/5 bg-white/[0.01] p-4 text-left transition-all hover:border-white/10 hover:bg-white/[0.03]"
           >
-            <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
-            <span>
-              {prev.isCapstone ? "Capstone" : `Phase ${prev.number}`} —{" "}
-              <span className="font-medium">{prev.title}</span>
+            <span className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+              <ArrowLeft className="h-3 w-3" /> Phase trước
+            </span>
+            <span className="text-sm font-bold text-zinc-300 group-hover:text-primary transition-colors">
+              {prev.isCapstone ? "Capstone" : `Phase ${prev.number}`} — {prev.title}
             </span>
           </Link>
         ) : (
@@ -127,13 +131,14 @@ export default async function PhaseDetailPage({ params }: Props) {
         {next ? (
           <Link
             href={`/phase/${next.slug}`}
-            className="group flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+            className="group flex flex-col items-end gap-1 rounded-xl border border-white/5 bg-white/[0.01] p-4 text-right transition-all hover:border-white/10 hover:bg-white/[0.03]"
           >
-            <span>
-              {next.isCapstone ? "Capstone" : `Phase ${next.number}`} —{" "}
-              <span className="font-medium">{next.title}</span>
+            <span className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+              Phase sau <ArrowRight className="h-3 w-3" />
             </span>
-            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+            <span className="text-sm font-bold text-zinc-300 group-hover:text-primary transition-colors">
+              {next.isCapstone ? "Capstone" : `Phase ${next.number}`} — {next.title}
+            </span>
           </Link>
         ) : (
           <div />

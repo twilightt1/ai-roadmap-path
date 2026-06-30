@@ -1,4 +1,4 @@
-Parameter-Efficient Fine-Tuning (PEFT) là phương pháp thích ứng các mô hình ngôn ngữ lớn (LLM) bằng cách chỉ huấn luyện một lượng nhỏ tham số bổ sung (thường <1% tổng tham số) trong khi đóng băng (freezing) hoàn toàn mô hình nền (base model). Trong kỹ nghệ AI hiện đại, các phương pháp PEFT — đặc biệt là **LoRA** và **QLoRA** — đã trở thành chuẩn công nghiệp thực tế (de facto standard) vì chúng giải quyết triệt để bài toán thắt nút cổ chai về tài nguyên phần cứng (VRAM) và chi phí lưu trữ đa mô hình trong production.
+Parameter-Efficient Fine-Tuning (PEFT) là phương pháp thích ứng các mô hình ngôn ngữ lớn (LLM) bằng cách chỉ huấn luyện một lượng nhỏ tham số bổ sung (thường dưới 1% tổng tham số) trong khi đóng băng (freezing) hoàn toàn mô hình nền (base model). Trong kỹ nghệ AI hiện đại, các phương pháp PEFT — đặc biệt là **LoRA** và **QLoRA** — đã trở thành chuẩn công nghiệp thực tế (de facto standard) vì chúng giải quyết triệt để bài toán thắt nút cổ chai về tài nguyên phần cứng (VRAM) và chi phí lưu trữ đa mô hình trong production.
 
 ## Why this matters
 
@@ -37,11 +37,11 @@ Bạn nên biết:
 
 Ý tưởng cốt lõi của LoRA (Hu et al., 2021) dựa trên giả thuyết: **Sự thay đổi của các trọng số trong quá trình thích ứng tác vụ (\Delta W) có một số chiều bản chất thấp (low intrinsic dimension / low intrinsic rank).**
 
-Giả sử một lớp tuyến tính (Linear Layer) trong Transformer có ma trận trọng số gốc là W_0 thuộc R^{d \times k} (với d là input dimension và k là output dimension). Trong Full Fine-Tuning, ta cập nhật W = W_0 + \Delta W, với \Delta W có cùng kích thước (d \times k).
+Giả sử một lớp tuyến tính (Linear Layer) trong Transformer có ma trận trọng số gốc là `W_0` thuộc `R^(d x k)` (với `d` là input dimension và `k` là output dimension). Trong Full Fine-Tuning, ta cập nhật `W = W_0 + ΔW`, với `ΔW` có cùng kích thước `(d x k)`.
 
-LoRA đóng băng hoàn toàn W_0 và biểu diễn ma trận cập nhật \Delta W dưới dạng tích của hai ma trận có rank thấp A thuộc R^{d \times r} và B thuộc R^{r \times k}, với r \ll \min(d, k):
+LoRA đóng băng hoàn toàn `W_0` và biểu diễn ma trận cập nhật `ΔW` dưới dạng tích của hai ma trận có rank thấp `A` thuộc `R^(d x r)` và `B` thuộc `R^(r x k)`, với `r ≪ min(d, k)`:
 
-\Delta W = B \times A
+`ΔW = B * A`
 
 ```text
                Input x (dimension d)
@@ -59,17 +59,17 @@ LoRA đóng băng hoàn toàn W_0 và biểu diễn ma trận cập nhật \Delt
                Output y (dimension k)
 ```
 
-Công thức toán học của đầu ra h sau khi áp dụng LoRA là:
+Công thức toán học của đầu ra `h` sau khi áp dụng LoRA là:
 
-h = W_0 x + \Delta W x = W_0 x + \frac{\alpha}{r} (B A) x
+`h = W_0 * x + ΔW * x = W_0 * x + (α / r) * (B * A) * x`
 
 Trong đó:
-- r (Rank) là số chiều của không gian ẩn trung gian. Giá trị phổ biến: 8, 16, 32, 64. Rank càng lớn, khả năng biểu diễn của adapter càng mạnh nhưng tốn nhiều VRAM hơn và dễ overfit.
-- \alpha (Alpha) là hệ số tỉ lệ (scaling factor). Khi huấn luyện, các giá trị cập nhật của LoRA được nhân với \frac{\alpha}{r}. Việc giữ nguyên tỉ số này giúp chúng ta không phải điều chỉnh lại Learning Rate khi thay đổi Rank r.
+- `r` (Rank) là số chiều của không gian ẩn trung gian. Giá trị phổ biến: 8, 16, 32, 64. Rank càng lớn, khả năng biểu diễn của adapter càng mạnh nhưng tốn nhiều VRAM hơn và dễ overfit.
+- `α` (Alpha) là hệ số tỉ lệ (scaling factor). Khi huấn luyện, các giá trị cập nhật của LoRA được nhân với `α / r`. Việc giữ nguyên tỉ số này giúp chúng ta không phải điều chỉnh lại Learning Rate khi thay đổi Rank `r`.
 - **Cơ chế khởi tạo (Initialization):** 
-  - Ma trận A được khởi tạo theo phân phối chuẩn Gaussian ngẫu nhiên N(0, \sigma^2).
-  - Ma trận B được khởi tạo bằng tất cả các giá trị 0.
-  - Do đó, tại Step 0 của quá trình huấn luyện: \Delta W = B A = 0, mô hình hoạt động chính xác giống như mô hình nền gốc, tránh hiện tượng sốc gradient ban đầu.
+  - Ma trận `A` được khởi tạo theo phân phối chuẩn Gaussian ngẫu nhiên `N(0, σ^2)`.
+  - Ma trận `B` được khởi tạo bằng tất cả các giá trị 0.
+  - Do đó, tại Step 0 của quá trình huấn luyện: `ΔW = B * A = 0`, mô hình hoạt động chính xác giống như mô hình nền gốc, tránh hiện tượng sốc gradient ban đầu.
 
 ---
 
@@ -80,11 +80,11 @@ QLoRA (Dettmers et al., 2023) tích hợp kỹ thuật lượng hóa (quantizati
 ### 1. Kiểu dữ liệu NF4 (NormalFloat 4)
 Kiểu dữ liệu lượng hóa 4-bit thông thường (FP4/INT4) chia đều các khoảng số thực. Tuy nhiên, các trọng số của mạng neural thường có phân phối chuẩn (Gaussian distribution) tập trung quanh trị số 0. 
 
-NF4 thiết kế các khoảng lượng hóa sao cho mỗi khoảng chứa một số lượng tham số tương đương nhau (quantile quantization). Công thức xác định các điểm lượng hóa q_i của NF4 là:
+NF4 thiết kế các khoảng lượng hóa sao cho mỗi khoảng chứa một số lượng tham số tương đương nhau (quantile quantization). Công thức xác định các điểm lượng hóa `q_i` của NF4 là:
 
-q_i = \frac{1}{2} \left( Q_X\left(\frac{i}{2^k}\right) + Q_X\left(\frac{i+1}{2^k}\right) \right)
+`q_i = 1/2 * ( Q_X(i / 2^k) + Q_X((i + 1) / 2^k) )`
 
-Với Q_X là hàm phân vị (quantile function) của phân phối chuẩn tắc N(0, 1) và k=4 bits. NF4 giúp giảm thiểu tối đa sai số lượng hóa (quantization error) so với INT4.
+Với `Q_X` là hàm phân vị (quantile function) của phân phối chuẩn tắc `N(0, 1)` và `k=4` bits. NF4 giúp giảm thiểu tối đa sai số lượng hóa (quantization error) so với INT4.
 
 ### 2. Double Quantization (DQ)
 Để lượng hóa mô hình, ta cần các hằng số lượng hóa (quantization constants) dạng FP32 cho mỗi block trọng số (ví dụ: cứ 64 trọng số có 1 hằng số). Bản thân các hằng số này cũng chiếm bộ nhớ VRAM lớn khi scale model. 
@@ -102,9 +102,9 @@ Khi xử lý các chuỗi dài đột xuất (context spike), kích thước Act
 |---|---|---|---|---|
 | **LoRA** | Cộng thêm ma trận song song BA vào các lớp tuyến tính | 0.1% - 1% | Không tăng latency sau khi merge | Tăng dung lượng đĩa cứng lưu trữ |
 | **QLoRA** | LoRA trên nền mô hình lượng hóa 4-bit (NF4) | 0.1% - 1% | **Tiết kiệm VRAM nhất** (train 70B trên 1 GPU) | Tốc độ train chậm hơn LoRA FP16 ~20% |
-| **Prompt Tuning** | Thêm các virtual tokens học được vào prompt đầu vào | < 0.01% | Cực kỳ nhẹ | Khó hội tụ, nhạy cảm với chiều dài prompt |
+| **Prompt Tuning** | Thêm các virtual tokens học được vào prompt đầu vào | dưới 0.01% | Cực kỳ nhẹ | Khó hội tụ, nhạy cảm với chiều dài prompt |
 | **Prefix Tuning** | Thêm các khóa ảo học được (K, V) vào tất cả các lớp Attention | 0.1% - 2% | Chất lượng tốt cho các tác vụ sinh | Giảm chiều dài ngữ cảnh hữu dụng của prompt |
-| **IA3** | Nhân trực tiếp activation vectors với các vector học được | < 0.05% | Cực kỳ nhẹ, tính toán nhanh | Khả năng thích ứng hành vi yếu hơn LoRA |
+| **IA3** | Nhân trực tiếp activation vectors với các vector học được | dưới 0.05% | Cực kỳ nhẹ, tính toán nhanh | Khả năng thích ứng hành vi yếu hơn LoRA |
 
 ---
 
@@ -221,7 +221,7 @@ Nếu bạn chỉ cấu hình target_modules là `["q_proj", "v_proj"]`, mô hì
 </Callout>
 
 <Callout type="danger" title="Mistake 3: Đặt lora_alpha sai lệch lớn so với rank r">
-Nếu đặt `lora_alpha` quá nhỏ so với `r` (ví dụ: `r=64`, `lora_alpha=1`), hệ số scaling $\frac{\alpha}{r} = \frac{1}{64}$ sẽ làm suy yếu nghiêm trọng các cập nhật của gradient, khiến mô hình gần như không học được gì từ tập dataset mới. Hãy giữ tỉ lệ $\alpha = 2 \times r$.
+Nếu đặt `lora_alpha` quá nhỏ so với `r` (ví dụ: `r=64`, `lora_alpha=1`), hệ số scaling `α / r = 1 / 64` sẽ làm suy yếu nghiêm trọng các cập nhật của gradient, khiến mô hình gần như không học được gì từ tập dataset mới. Hãy giữ tỉ lệ `α = 2 * r`.
 </Callout>
 
 ### Checklist cấu hình PEFT:
@@ -237,7 +237,7 @@ Nếu đặt `lora_alpha` quá nhỏ so với `r` (ví dụ: `r=64`, `lora_alpha
 
 ## Practice exercises
 
-1. **Tính toán số lượng tham số:** Cho một lớp Attention tuyến tính với d_model = 4096. Hãy tính toán số lượng tham số cần huấn luyện của ma trận LoRA A và B khi cấu hình Rank r = 16. So sánh con số này với số lượng tham số của ma trận trọng số gốc W_0 thuộc R^{4096 \times 4096}.
+1. **Tính toán số lượng tham số:** Cho một lớp Attention tuyến tính với `d_model = 4096`. Hãy tính toán số lượng tham số cần huấn luyện của ma trận LoRA A và B khi cấu hình Rank `r = 16`. So sánh con số này với số lượng tham số của ma trận trọng số gốc `W_0` thuộc `R^(4096 x 4096)`.
 2. **Viết Script Benchmark Latency:** Viết một đoạn code đo lường thời gian sinh token (tokens per second) trên cùng một GPU giữa: (a) Base Model 4-bit + Adapter LoRA chạy song song, (b) Mô hình sau khi đã chạy `merge_and_unload`.
 3. **Cấu hình IA3 Adapter:** Tìm hiểu cấu hình `IA3Config` trong thư viện `peft`. Viết code khởi tạo mô hình IA3 và so sánh số lượng tham số trainable của nó với cấu hình LoRA có cùng target modules.
 
@@ -248,7 +248,7 @@ Nếu đặt `lora_alpha` quá nhỏ so với `r` (ví dụ: `r=64`, `lora_alpha
 1. Tại sao phương pháp LoRA không làm tăng độ trễ suy luận (inference latency) sau khi đã chạy quy trình merge?
 2. Cơ chế khởi tạo của ma trận A và B trong LoRA có ý nghĩa gì đối với hàm loss ở Step 0?
 3. Tại sao kiểu dữ liệu NF4 trong QLoRA lại có sai số lượng hóa thấp hơn kiểu dữ liệu INT4/FP4 truyền thống?
-4. Ý nghĩa của hệ số tỉ lệ \frac{\alpha}{r} trong công thức LoRA là gì?
+4. Ý nghĩa của hệ số tỉ lệ `α / r` trong công thức LoRA là gì?
 5. Tại sao PEFT giúp giảm thiểu rủi ro Catastrophic Forgetting hiệu quả hơn so với Full Fine-Tuning?
 6. Tính năng Paged Optimizers trong QLoRA hoạt động dựa trên cơ chế nào của phần cứng?
 
@@ -256,10 +256,10 @@ Nếu đặt `lora_alpha` quá nhỏ so với `r` (ví dụ: `r=64`, `lora_alpha
 
 ## Answer key
 
-1. Vì sau khi merge, ta thực hiện phép cộng ma trận vật lý W_{\text{new}} = W_0 + \frac{\alpha}{r}(BA) để tạo ra một ma trận trọng số duy nhất. Khi suy luận, mô hình chỉ chạy một phép nhân ma trận W_{\text{new}}x duy nhất.
-2. Ma trận A được khởi tạo Gaussian ngẫu nhiên và B khởi tạo bằng 0. Do đó \Delta W = B A = 0. Tại Step 0, mô hình fine-tuned có đầu ra trùng khớp 100% với mô hình nền gốc, giúp ổn định hàm loss ban đầu.
+1. Vì sau khi merge, ta thực hiện phép cộng ma trận vật lý `W_new = W_0 + (α / r) * (BA)` để tạo ra một ma trận trọng số duy nhất. Khi suy luận, mô hình chỉ chạy một phép nhân ma trận `W_new * x` duy nhất.
+2. Ma trận A được khởi tạo Gaussian ngẫu nhiên và B khởi tạo bằng 0. Do đó `ΔW = B * A = 0`. Tại Step 0, mô hình fine-tuned có đầu ra trùng khớp 100% với mô hình nền gốc, giúp ổn định hàm loss ban đầu.
 3. Vì NF4 được thiết kế dựa trên phân vị của phân phối chuẩn (quantile quantization), đảm bảo mỗi khoảng lượng hóa chứa một lượng trọng số tương đương nhau, phản ánh đúng phân phối tự nhiên của trọng số mạng neural.
-4. Nó là một hằng số tỉ lệ giúp điều chỉnh độ mạnh yếu của cập nhật LoRA tác động lên mô hình nền mà không yêu cầu chúng ta phải điều chỉnh lại Learning Rate khi thay đổi Rank r.
+4. Nó là một hằng số tỉ lệ giúp điều chỉnh độ mạnh yếu của cập nhật LoRA tác động lên mô hình nền mà không yêu cầu chúng ta phải điều chỉnh lại Learning Rate khi thay đổi Rank `r`.
 5. Vì toàn bộ trọng số gốc chứa đựng tri thức tổng quát của mô hình nền được đóng băng hoàn toàn, các cập nhật chỉ được ghi vào các ma trận bổ sung bên ngoài.
 6. Dựa trên tính năng Unified Memory của CUDA, cho phép tự động chuyển đổi các trang bộ nhớ (page) của optimizer states từ VRAM GPU sang RAM của CPU khi VRAM bị quá tải.
 

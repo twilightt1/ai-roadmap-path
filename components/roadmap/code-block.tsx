@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
+import { motion } from "motion/react";
 
 /**
  * Bọc <pre> do rehype-pretty-code sinh ra, thêm nút copy.
@@ -23,18 +24,20 @@ export function CodeBlock({ children }: { children?: ReactNode }) {
 
   return (
     <div className="group relative">
-      <button
+      <motion.button
         type="button"
         onClick={handleCopy}
         aria-label="Sao chép code"
-        className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background/60 text-muted-foreground opacity-0 backdrop-blur transition-all hover:text-foreground group-hover:opacity-100"
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.95 }}
+        className="absolute right-3 top-3 z-20 hidden h-6 w-6 items-center justify-center rounded border border-white/5 bg-zinc-900/80 text-zinc-400 opacity-0 backdrop-blur-sm transition-all hover:border-white/10 hover:text-zinc-200 group-hover:opacity-100 sm:flex"
       >
         {copied ? (
-          <Check className="h-3.5 w-3.5 text-emerald-400" />
+          <Check className="h-3 w-3 text-emerald-400" />
         ) : (
-          <Copy className="h-3.5 w-3.5" />
+          <Copy className="h-3 w-3" />
         )}
-      </button>
+      </motion.button>
       <pre>{children}</pre>
     </div>
   );
