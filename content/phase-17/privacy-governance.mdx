@@ -1,0 +1,434 @@
+Fairness audit cần dữ liệu để đo outcome theo nhóm, nhưng AI systems cũng có xu hướng sao chép dữ liệu khắp nơi: prompts, logs, traces, embeddings, caches, eval datasets, fine-tuning files và provider requests. Privacy vì vậy không thể xử lý bằng một dòng “chúng tôi tuân thủ GDPR” trong policy. Nó là bài toán kiến trúc dữ liệu.
+
+Privacy & Data Governance giúp bạn trả lời các câu hỏi production: dữ liệu cá nhân đi qua đâu, được lưu bao lâu, ai truy cập được, có nằm trong embeddings không, xóa thế nào, và có được dùng cho training/evaluation không.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Xóa user khỏi database nhưng PII vẫn nằm trong vector DB">
+**Bối cảnh:** Một SaaS có AI assistant cho customer support. User có thể yêu cầu xóa tài khoản và dữ liệu cá nhân. Backend xóa record trong bảng `users` và `conversations`.
+
+**Sự cố:** Một tháng sau, user phát hiện chatbot vẫn trích dẫn email cũ của họ trong câu trả lời nội bộ. Investigation cho thấy dữ liệu vẫn tồn tại ở nhiều nơi:
+
+1. Chunks trong vector database từ transcript support cũ.
+2. Prompt traces trong observability tool.
+3. Redis cache chưa hết TTL.
+4. Evaluation dataset được export thủ công.
+5. Backup snapshot chưa có retention/erasure policy rõ.
+
+**Hậu quả:** Công ty không thể chứng minh đã thực hiện right to erasure đầy đủ. Đây là governance failure, không chỉ là bug database.
+</Callout>
+
+Bài học rút ra: Trong AI systems, “delete from primary DB” không đủ. Bạn cần data lineage và erasure workflow cho mọi derived data: embeddings, logs, caches, eval sets và model artifacts.
+
+---
+
+## 2. Architecture Blueprint (AI Data Flow Map)
+
+Một request AI đi qua nhiều hệ thống:
+
+```text
+[ User Input ]
+      │
+      ├──> [ API Gateway Logs ]
+      │
+      ├──> [ Prompt Builder ]
+      │        ├── system prompt
+      │        ├── user prompt
+      │        ├── retrieved context
+      │        └── memory
+      │
+      ├──> [ LLM Provider / Self-hosted Model ]
+      │
+      ├──> [ Observability Traces ]
+      │        ├── prompt
+      │        ├── output
+      │        ├── token usage
+      │        └── tool calls
+      │
+      ├──> [ RAG / Vector DB ]
+      │        ├── documents
+      │        ├── chunks
+      │        └── embeddings
+      │
+      ├──> [ Analytics / Eval Datasets ]
+      │
+      ├──> [ Cache / Memory Store ]
+      │
+      └──> [ Backups / Archives ]
+```
+
+Privacy governance bắt đầu bằng data flow map. Nếu bạn không biết dữ liệu đi đâu, bạn không thể bảo vệ hoặc xóa nó.
+
+---
+
+## 3. PII trong Training và Inference
+
+PII (Personally Identifiable Information) có thể xuất hiện trong nhiều dạng:
+
+| Loại | Ví dụ |
+|---|---|
+| Direct identifiers | Tên, email, số điện thoại, địa chỉ |
+| Government/financial identifiers | CCCD/SSN, số tài khoản, thẻ tín dụng |
+| Sensitive data | Y tế, tài chính, pháp lý, tôn giáo, chính trị |
+| Secrets | API keys, passwords, internal tokens |
+| Quasi-identifiers | Zip code, job title hiếm, device ID |
+| Behavioral traces | Conversation history, clicks, tool usage |
+
+Trong AI systems, PII có thể nằm trong:
+
+- Prompt logs.
+- RAG chunks.
+- Embeddings.
+- Long-term memory.
+- Fine-tuning datasets.
+- Reward/preference datasets.
+- Screenshots/audio/video transcripts.
+- Provider-side logs nếu policy cho phép retention.
+
+<Callout type="warning" title="Embeddings không phải dữ liệu vô hại">
+Embeddings là derived data nhưng vẫn có thể liên kết ngược tới nội dung cá nhân hoặc hỗ trợ retrieval dữ liệu cá nhân. Đừng xem vector DB là ngoài phạm vi privacy.
+</Callout>
+
+---
+
+## 4. GDPR / Data Protection Concepts for Engineers
+
+Không cần trở thành luật sư, nhưng AI Engineer cần hiểu các khái niệm vận hành:
+
+| Khái niệm | Ý nghĩa kỹ thuật |
+|---|---|
+| Lawful basis | Vì sao bạn được xử lý dữ liệu này? |
+| Consent | User có đồng ý rõ ràng không, và có rút lại được không? |
+| Data minimization | Chỉ thu thập/gửi/lưu dữ liệu cần thiết |
+| Purpose limitation | Dữ liệu thu cho support không tự động dùng để train model |
+| Retention limitation | Dữ liệu có TTL/retention rõ |
+| Right to access | User có thể xem dữ liệu bạn giữ |
+| Right to erasure | User có thể yêu cầu xóa dữ liệu |
+| Data portability | Có thể export dữ liệu ở định dạng dùng được |
+| Data residency | Dữ liệu có được xử lý ở khu vực địa lý phù hợp không? |
+
+<Callout type="info" title="Compliance không chỉ là checkbox">
+Luật như GDPR yêu cầu process có thể chứng minh. Nếu bạn không có audit log, data inventory và erasure workflow, rất khó chứng minh compliance dù code “có vẻ” xóa dữ liệu.
+</Callout>
+
+---
+
+## 5. Data Minimization Principle
+
+Data minimization là nguyên tắc quan trọng nhất để giảm privacy risk:
+
+```text
+Collect less.
+Send less.
+Store less.
+Retain shorter.
+Aggregate when possible.
+```
+
+Practical controls:
+
+| Control | Ví dụ |
+|---|---|
+| Prompt minimization | Chỉ gửi chunks cần thiết, không gửi toàn bộ hồ sơ |
+| Field filtering | Loại PII trước khi gọi LLM provider |
+| Local preprocessing | Mask PII on-prem trước khi gửi cloud API |
+| Retention TTL | Prompt traces tự xóa sau 30 ngày |
+| Aggregation | Analytics theo aggregate, không lưu raw text |
+| Purpose tags | Record có tag `support_only`, không dùng cho training |
+
+Data không được lưu thì không bị leak, không cần xóa, không cần audit phức tạp.
+
+---
+
+## 6. Right to Erasure Workflow
+
+Một erasure request trong AI system phải đi qua nhiều store:
+
+```text
+[ Erasure Request ]
+       │
+       ▼
+[ Identity Resolution ]
+  - user_id
+  - tenant_id
+  - email/phone aliases
+       │
+       ▼
+[ Delete / Tombstone Primary Data ]
+  - users
+  - conversations
+  - messages
+       │
+       ▼
+[ Delete Derived Data ]
+  - memory records
+  - vector chunks
+  - embeddings
+  - caches
+  - eval exports
+       │
+       ▼
+[ Provider / Processor Requests ]
+  - external LLM logs if applicable
+       │
+       ▼
+[ Backup & Retention Handling ]
+  - expire by policy
+  - document limitation
+       │
+       ▼
+[ Audit Proof ]
+  - timestamp
+  - stores processed
+  - failures/retries
+  - operator/system actor
+```
+
+Erasure table schema gợi ý:
+
+```json
+{
+  "erasure_request_id": "erase_123",
+  "tenant_id": "tenant_abc",
+  "subject_user_id": "user_456",
+  "status": "completed_with_backup_retention_exception",
+  "stores": [
+    { "name": "postgres_conversations", "status": "deleted", "count": 128 },
+    { "name": "vector_chunks", "status": "deleted", "count": 42 },
+    { "name": "redis_cache", "status": "invalidated", "count": 9 },
+    { "name": "observability_traces", "status": "redacted", "count": 128 }
+  ],
+  "requested_at": "2026-06-30T10:00:00Z",
+  "completed_at": "2026-06-30T10:05:00Z"
+}
+```
+
+---
+
+## 7. Privacy Controls
+
+| Control | Mục tiêu |
+|---|---|
+| PII detection/masking | Không gửi/lưu PII không cần thiết |
+| Tokenization | Thay PII bằng token có thể map lại trong hệ an toàn |
+| Encryption at rest/in transit | Bảo vệ dữ liệu nếu storage/network bị lộ |
+| Access control | Chỉ role/service cần thiết được đọc dữ liệu |
+| Tenant isolation | Ngăn cross-tenant leakage |
+| Retention TTL | Dữ liệu tự hết hạn |
+| Audit logs | Biết ai truy cập/xóa/export dữ liệu |
+| DLP scanning | Phát hiện secrets/PII trong output/logs |
+| Provider review | Biết vendor lưu dữ liệu thế nào |
+
+<Callout type="danger" title="Masking sau khi logging là quá muộn">
+Nếu raw PII đã vào logs/traces trước khi masking, bạn đã tạo thêm một nơi cần bảo vệ/xóa. Mask càng gần input boundary càng tốt.
+</Callout>
+
+---
+
+## 8. Differential Privacy Basics
+
+Differential Privacy (DP) bảo vệ cá nhân trong thống kê hoặc training bằng cách thêm noise có kiểm soát.
+
+Intuition:
+
+```text
+Kết quả aggregate không nên thay đổi đáng kể nếu thêm/bớt một cá nhân khỏi dataset.
+```
+
+Khái niệm `epsilon`:
+
+- Epsilon nhỏ hơn → privacy mạnh hơn, noise nhiều hơn.
+- Epsilon lớn hơn → utility cao hơn, privacy yếu hơn.
+
+DP hữu ích cho:
+
+- Aggregate analytics.
+- Một số training setups với DP-SGD.
+- Báo cáo thống kê người dùng.
+
+DP không giải quyết:
+
+- Prompt logs chứa raw PII.
+- RAG retrieval rò dữ liệu.
+- Provider retention không rõ.
+- User gửi secret vào chatbot.
+
+---
+
+## 9. Federated Learning Basics
+
+Federated Learning train model trên thiết bị/local data và chỉ gửi updates về server.
+
+```text
+[ Device A data ] -> local training -> model update ┐
+[ Device B data ] -> local training -> model update ├──> aggregate global model
+[ Device C data ] -> local training -> model update ┘
+```
+
+Lợi ích:
+
+- Raw data ở lại thiết bị/local environment.
+- Phù hợp privacy-sensitive hoặc edge scenarios.
+- Có thể kết hợp secure aggregation/DP.
+
+Rủi ro/trade-off:
+
+- Gradients/updates vẫn có thể leak thông tin.
+- Thiết bị không đồng nhất.
+- Debug khó.
+- Communication cost.
+- Không thay thế access control/log governance.
+
+---
+
+## 10. Implementation Playbook: Data Inventory Template
+
+Data inventory giúp bạn biết dữ liệu nào tồn tại và policy nào áp dụng.
+
+```json
+{
+  "data_asset": "conversation_traces",
+  "owner": "ai-platform-team",
+  "data_subject": "end_user",
+  "contains_pii": true,
+  "contains_sensitive_data": true,
+  "purpose": ["debugging", "quality_monitoring"],
+  "not_allowed_for": ["model_training_without_consent"],
+  "storage": "observability_vendor_x",
+  "region": "eu-west-1",
+  "retention_days": 30,
+  "access_roles": ["ai_sre", "security_admin"],
+  "erasure_supported": true,
+  "masking_stage": "before_persist",
+  "downstream_derivatives": ["eval_samples", "quality_dashboards"]
+}
+```
+
+PII masking skeleton:
+
+```python
+import re
+
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+PHONE_RE = re.compile(r"\b(?:\+?\d{1,3})?[-.\s]?(?:\d{3})[-.\s]?\d{3}[-.\s]?\d{4}\b")
+
+
+def mask_pii(text: str) -> str:
+    text = EMAIL_RE.sub("[EMAIL]", text)
+    text = PHONE_RE.sub("[PHONE]", text)
+    return text
+
+
+def build_safe_prompt(user_input: str, retrieved_context: str) -> str:
+    safe_user_input = mask_pii(user_input)
+    safe_context = mask_pii(retrieved_context)
+    return f"""
+Answer using the provided context. Do not reveal personal data.
+
+<context>
+{safe_context}
+</context>
+
+User: {safe_user_input}
+"""
+```
+
+Production cần NLP/NER tốt hơn regex, language coverage, false positive review và audit logs.
+
+---
+
+## 11. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: PII nằm trong embeddings">
+**Triệu chứng:** Raw document đã xóa, nhưng semantic search vẫn retrieve thông tin cá nhân.
+
+**Nguyên nhân:** Chunks/embeddings derived từ document chưa bị xóa hoặc re-index.
+
+**Cách khắc phục:** Link every chunk/vector to source document and data subject. Erasure workflow phải delete derived vectors và rebuild indexes nếu cần.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Provider retention mismatch">
+**Triệu chứng:** Nội bộ xóa dữ liệu nhưng vendor vẫn giữ logs theo policy riêng.
+
+**Nguyên nhân:** Không review data processing terms hoặc không cấu hình zero-retention/enterprise mode.
+
+**Cách khắc phục:** Vendor review, DPA, region/residency controls, provider deletion API và data flow documentation.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Eval export trở thành shadow dataset">
+**Triệu chứng:** Một file CSV preference/eval chứa PII nằm trong bucket không được quản lý.
+
+**Nguyên nhân:** Data scientist export logs thủ công để đánh giá model, ngoài retention/erasure process.
+
+**Cách khắc phục:** Controlled dataset creation pipeline, automatic PII scan, dataset registry, expiration dates và access review.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Delete không xử lý cache và backup">
+**Triệu chứng:** User data biến mất khỏi DB chính nhưng vẫn xuất hiện trong cache hoặc restore từ backup.
+
+**Nguyên nhân:** Erasure workflow không include Redis/cache/backups.
+
+**Cách khắc phục:** Cache invalidation by subject ID, short TTL, backup retention policy và documented backup erasure limitations.
+</Callout>
+
+---
+
+## 12. Cost & Governance Unit Economics
+
+| Control | Lợi ích | Chi phí/Trade-off |
+|---|---|---|
+| PII masking | Giảm leak/provider exposure | False positives, mất ngữ cảnh |
+| Short retention | Giảm breach blast radius | Ít historical data để debug/eval |
+| Data inventory | Audit/compliance tốt | Cần duy trì khi hệ thống thay đổi |
+| Erasure workflow | Hỗ trợ quyền user | Phức tạp với derived data/backups |
+| Differential privacy | Bảo vệ aggregate analytics | Noise giảm utility |
+| Federated learning | Data locality | Hạ tầng phức tạp, vẫn cần privacy analysis |
+
+Privacy controls có chi phí, nhưng privacy incident thường đắt hơn: legal risk, user trust loss, breach notification và cleanup dữ liệu lan rộng.
+
+---
+
+## Practice exercises
+
+1. Vẽ data flow map cho một RAG chatbot nội bộ.
+2. Liệt kê tất cả nơi PII có thể xuất hiện trong AI support assistant.
+3. Thiết kế retention policy cho prompt traces, embeddings và eval datasets.
+4. Viết erasure workflow cho user memory + vector chunks.
+5. Nêu một case DP hữu ích và một case DP không giải quyết được.
+
+---
+
+## Knowledge check
+
+1. Data minimization nghĩa là gì?
+2. Vì sao embeddings vẫn nằm trong phạm vi privacy governance?
+3. Right to erasure trong AI system cần xử lý những store nào?
+4. Differential privacy bảo vệ ở mức nào?
+5. Federated learning có đảm bảo raw data không bao giờ leak không?
+
+---
+
+## Answer key
+
+1. Chỉ thu thập, gửi, lưu và giữ dữ liệu thật sự cần thiết cho mục đích đã định.
+2. Vì embeddings là derived data từ nội dung cá nhân và có thể hỗ trợ retrieval/liên kết ngược tới dữ liệu cá nhân.
+3. Primary DB, conversations, memory, vector chunks/embeddings, caches, logs/traces, eval exports, provider records nếu có, và backup theo policy.
+4. Bảo vệ đóng góp của cá nhân trong aggregate/statistical outputs bằng noise có kiểm soát.
+5. Không tuyệt đối. Updates/gradients vẫn có thể leak thông tin nếu không có secure aggregation/DP và threat model rõ.
+
+---
+
+## Điểm cần nhớ
+
+- Privacy trong AI là bài toán kiến trúc dữ liệu: prompts, logs, embeddings, caches, datasets và vendors.
+- “Delete from DB” không đủ nếu derived data vẫn tồn tại.
+- Data minimization là control mạnh nhất: dữ liệu không lưu thì không leak và không cần xóa.
+- PII masking nên xảy ra trước khi persist/log hoặc gửi provider.
+- Differential privacy và federated learning hữu ích nhưng không thay thế governance, access control và data lineage.
+- Data inventory và erasure workflow là nền tảng compliance thực dụng.
+
+## Next chapter bridge
+
+Khi dữ liệu đã được quản trị tốt, câu hỏi tiếp theo là: người dùng, auditor và stakeholder hiểu hệ thống AI như thế nào? Hệ thống dùng model nào, dữ liệu nào, giới hạn gì, và vì sao đưa ra quyết định? Chương tiếp theo: **AI Transparency & Explainability** — nơi chúng ta xây model cards, system cards và explanation layer cho sản phẩm AI.

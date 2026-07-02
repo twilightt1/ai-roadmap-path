@@ -21,7 +21,7 @@ export function TocSidebar({ items }: { items: TocItem[] }) {
           setActiveSlug(intersecting[0].target.id);
         }
       },
-      { rootMargin: "-80px 0px -70% 0px" } // Kích hoạt khi đề mục nằm ở phần trên của màn hình
+      { rootMargin: "-80px 0px -70% 0px" }
     );
 
     items.forEach((item) => {
@@ -45,7 +45,7 @@ export function TocSidebar({ items }: { items: TocItem[] }) {
               <a
                 key={item.slug}
                 href={`#${item.slug}`}
-                className={`block border-l-2 py-0.5 text-xs transition-all duration-150 ${
+                className={`block border-l-2 py-0.5 text-xs transition-colors duration-150 ${
                   isActive
                     ? "border-emerald-500 text-emerald-400 font-semibold"
                     : "border-transparent text-muted-foreground hover:text-foreground"

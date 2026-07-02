@@ -1,0 +1,447 @@
+Một model đã quantize vẫn có thể chậm nếu inference engine không quản lý tốt prefill, decode, KV cache và batching. Trong production, trải nghiệm người dùng không được quyết định bởi “model có chạy được không”, mà bởi chữ đầu tiên xuất hiện sau bao lâu, mỗi token sau đó sinh nhanh thế nào, và GPU có được lấp đầy công suất hay đang ngồi chờ request rời rạc.
+
+Inference Optimization là lớp kỹ thuật biến một mô hình thành dịch vụ sinh token ổn định, tận dụng GPU tốt và có unit economics chấp nhận được.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: GPU 80GB nhưng chatbot vẫn lag">
+**Bối cảnh:** Một công ty deploy mô hình 8B đã quantize INT4 lên GPU A100 80GB. Model load chỉ chiếm một phần VRAM, nên team kỳ vọng chatbot sẽ rất nhanh.
+
+**Sự cố:** Khi 200 người dùng cùng hỏi, dashboard cho thấy GPU utilization dao động thất thường. Người dùng phải chờ 5–8 giây mới thấy token đầu tiên, dù sau đó tốc độ streaming khá ổn.
+
+1. Prompt RAG dài 8,000 tokens khiến prefill rất chậm.
+2. Mỗi request chạy `model.generate()` riêng lẻ, không có continuous batching.
+3. KV cache tăng theo context length và concurrency, làm server phải reject request.
+4. Team chỉ đo tokens/sec trung bình, không đo TTFT và queue time.
+
+**Hậu quả:** Model đã được lượng hóa nhưng trải nghiệm vẫn tệ. Chi phí GPU không giảm vì máy chạy không đủ throughput, còn user tưởng hệ thống “đứng hình”.
+</Callout>
+
+Bài học rút ra: Tối ưu inference không chỉ là giảm kích thước weights. Bạn phải tối ưu toàn bộ vòng đời request: xếp hàng, prefill, decode, cache và batching.
+
+---
+
+## 2. Architecture Blueprint (Vòng đời một request LLM)
+
+Một request sinh văn bản đi qua nhiều giai đoạn:
+
+```text
+[ User Request ]
+       │
+       ▼
+[ Queue / Scheduler ]
+  - request chờ GPU slot
+  - batching decision
+       │
+       ▼
+[ Prefill Phase ]
+  - xử lý toàn bộ prompt đầu vào
+  - tạo KV cache cho context
+  - quyết định TTFT lớn hay nhỏ
+       │
+       ▼
+[ Decode Phase ]
+  - sinh từng token autoregressive
+  - mỗi bước đọc KV cache + weights
+  - quyết định TPOT / tokens/sec
+       │
+       ▼
+[ Streaming Response ]
+  - token gửi dần về client
+  - logs/metrics ghi lại latency, cost, status
+```
+
+Các metric quan trọng:
+
+| Metric | Ý nghĩa | Bottleneck thường gặp |
+|---|---|---|
+| TTFT | Time To First Token | Prompt dài, queue time, prefill chậm |
+| TPOT | Time Per Output Token | Decode loop, memory bandwidth, batch inefficiency |
+| Throughput | Tokens/sec hoặc requests/sec | Batching, GPU utilization, scheduler |
+| p95/p99 latency | Tail latency người dùng thấy | Queue burst, context dài, bad batching |
+| GPU memory utilization | VRAM dùng cho weights + KV cache | Context length, concurrency, fragmentation |
+
+---
+
+## 3. Prefill vs Decode
+
+LLM autoregressive có hai giai đoạn rất khác nhau.
+
+### Prefill
+
+Prefill xử lý toàn bộ prompt đầu vào trong một lần forward lớn. Với RAG, prompt có thể chứa system prompt, conversation history và nhiều chunks tài liệu.
+
+```text
+Prompt tokens: [t1, t2, t3, ..., t8000]
+        │
+        ▼
+Model forward tạo KV cache cho toàn bộ prompt
+        │
+        ▼
+Token đầu tiên có thể bắt đầu sinh
+```
+
+Prefill ảnh hưởng mạnh tới TTFT. Nếu user phải đợi 6 giây mới thấy chữ đầu tiên, thường vấn đề nằm ở prefill hoặc queue time.
+
+### Decode
+
+Decode sinh từng token một:
+
+```text
+Step 1: dùng prompt + KV cache -> sinh token 1
+Step 2: dùng KV cache + token 1 -> sinh token 2
+Step 3: dùng KV cache + token 2 -> sinh token 3
+...
+```
+
+Decode ảnh hưởng tới TPOT và tốc độ streaming. Vì mỗi bước sinh một token, decode thường bị giới hạn bởi memory bandwidth và cách engine batch nhiều sequence.
+
+<Callout type="info" title="Tối ưu đúng metric">
+Nếu TTFT cao, hãy nhìn queue time, prefill, prompt length và prefix caching. Nếu TPOT cao, hãy nhìn quantization, batch efficiency, memory bandwidth và serving engine.
+</Callout>
+
+---
+
+## 4. KV Cache: Bộ nhớ của Autoregressive Decoding
+
+Trong Transformer, mỗi token tạo ra Key/Value vectors ở từng layer attention. Nếu không cache, khi sinh token mới, model phải tính lại attention cho toàn bộ context trước đó.
+
+KV cache lưu lại các Key/Value này:
+
+```text
+Without KV Cache:
+  token 1: compute context 1..N
+  token 2: compute context 1..N+1 again
+  token 3: compute context 1..N+2 again
+
+With KV Cache:
+  prefill: compute context 1..N once
+  token 1: reuse cached K/V + append token 1
+  token 2: reuse cached K/V + append token 2
+```
+
+KV cache giúp decode khả thi, nhưng nó tiêu tốn VRAM theo công thức tư duy:
+
+```text
+KV cache memory ∝ batch_size × sequence_length × num_layers × hidden_size
+```
+
+Điều này tạo ra trade-off:
+
+- Context dài tăng TTFT và KV cache memory.
+- Concurrency cao tăng batch size và KV cache memory.
+- Output dài giữ sequence trong memory lâu hơn.
+- Quantization weights không nhất thiết quantize KV cache.
+
+<Callout type="warning" title="KV cache là lý do model nhỏ vẫn OOM">
+Một model INT4 có thể load rất nhẹ, nhưng khi bạn cho phép context 32K và concurrency lớn, KV cache có thể trở thành phần chiếm VRAM chính.
+</Callout>
+
+---
+
+## 5. Static Batching vs Continuous Batching
+
+Batching gom nhiều request để GPU xử lý hiệu quả hơn. Nhưng LLM serving khác classification truyền thống vì mỗi request có độ dài prompt và output khác nhau.
+
+### Static batching
+
+```text
+Batch A: [request 1, request 2, request 3, request 4]
+Wait until all finish
+Then start Batch B
+```
+
+Vấn đề: request ngắn phải chờ request dài. GPU có thể nhàn rỗi từng phần khi một số sequence đã xong.
+
+### Continuous batching
+
+```text
+Iteration 1: process requests A, B, C
+Iteration 2: A finished, insert D immediately
+Iteration 3: B finished, insert E immediately
+...
+```
+
+Continuous batching cho phép inference engine thêm request mới vào batch ở từng decode step. Đây là lý do vLLM/TGI thường vượt xa naive `transformers.generate()` khi traffic đồng thời cao.
+
+| Cách batch | Ưu điểm | Nhược điểm |
+|---|---|---|
+| No batching | Đơn giản, latency đơn request dễ hiểu | GPU utilization thấp |
+| Static batching | Tăng throughput so với no batching | Head-of-line blocking |
+| Continuous batching | Throughput cao, tận dụng GPU tốt | Scheduler phức tạp, cần engine chuyên dụng |
+
+---
+
+## 6. Speculative Decoding
+
+Speculative decoding dùng một model nhỏ (draft model) để đoán trước nhiều token, sau đó model lớn (target model) xác nhận hoặc sửa.
+
+```text
+[ Draft Model nhỏ ]  -> đề xuất 4 token tiếp theo
+           │
+           ▼
+[ Target Model lớn ] -> verify các token đó trong một lượt
+           │
+           ├── accept token đúng
+           └── reject và sinh lại khi cần
+```
+
+Khi draft model đoán đúng nhiều, target model có thể xác nhận nhiều token cùng lúc, giảm số vòng decode.
+
+Speculative decoding hữu ích khi:
+
+- Target model lớn/chậm.
+- Draft model nhỏ nhưng cùng distribution tương đối gần.
+- Output không quá khó để draft model đoán.
+- Runtime hỗ trợ efficient verification.
+
+Không hữu ích khi:
+
+- Draft model đoán sai quá nhiều.
+- Overhead chạy hai model lớn hơn lợi ích.
+- Workload chủ yếu bị bottleneck ở prefill, không phải decode.
+
+<Callout type="tip" title="Speculative decoding không thay thế evaluation">
+Nếu draft model làm target model accept ít token, tốc độ không tăng. Hãy đo acceptance rate, TPOT và end-to-end latency thay vì chỉ bật cờ speculative rồi tin rằng hệ thống nhanh hơn.
+</Callout>
+
+---
+
+## 7. Flash Attention v2
+
+Attention truyền thống tốn memory bandwidth vì phải materialize attention matrix lớn. Flash Attention tối ưu cách đọc/ghi dữ liệu giữa GPU SRAM/HBM để giảm memory movement.
+
+```text
+Classic attention:
+  QK^T matrix lớn -> lưu/đọc nhiều lần -> memory bottleneck
+
+Flash Attention:
+  tính theo block -> giữ nhiều hơn trong SRAM -> giảm IO với HBM
+```
+
+Với AI engineer, điều quan trọng không phải tự implement Flash Attention, mà là biết runtime/model/server của bạn có dùng kernel tối ưu hay không.
+
+Kiểm tra thực dụng:
+
+- GPU architecture có hỗ trợ không?
+- Phiên bản PyTorch/CUDA/driver có tương thích không?
+- Model architecture có được kernel hỗ trợ không?
+- Serving backend có bật mặc định hay cần flag?
+
+Nếu Flash Attention không được dùng vì fallback silently, latency và memory có thể xấu hơn kỳ vọng.
+
+---
+
+## 8. Tensor Parallelism vs Pipeline Parallelism
+
+Khi model không vừa một GPU hoặc cần throughput cao hơn, bạn có thể chia model qua nhiều GPU.
+
+### Tensor Parallelism
+
+Tensor parallelism chia một layer/model operation qua nhiều GPU.
+
+```text
+Layer weights split across GPU0, GPU1, GPU2, GPU3
+Each forward step cần communication giữa GPU
+```
+
+Phù hợp khi:
+
+- GPU cùng node, có NVLink/NVSwitch nhanh.
+- Model cần được shard vì không vừa một GPU.
+- Communication bandwidth đủ cao.
+
+### Pipeline Parallelism
+
+Pipeline parallelism chia các layer liên tiếp qua nhiều GPU.
+
+```text
+GPU0: layers 1-10
+GPU1: layers 11-20
+GPU2: layers 21-30
+GPU3: layers 31-40
+```
+
+Phù hợp khi:
+
+- Tensor parallel communication quá đắt.
+- Model rất lớn.
+- Bạn chấp nhận pipeline bubble và scheduler phức tạp.
+
+| Parallelism | Khi dùng | Rủi ro |
+|---|---|---|
+| Tensor parallel | Multi-GPU cùng node, interconnect nhanh | Chậm nếu chỉ có PCIe yếu |
+| Pipeline parallel | Model rất lớn, chia layer | Bubble/latency, khó tối ưu |
+| Data parallel replicas | Nhiều bản model độc lập | Cần đủ VRAM cho mỗi replica |
+
+---
+
+## 9. Implementation Playbook (Thực thi)
+
+Đây là skeleton benchmark phân tách TTFT và streaming latency khi gọi một OpenAI-compatible inference server như vLLM.
+
+```python
+import time
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="local-secret",
+    base_url="http://localhost:8000/v1",
+)
+
+PROMPTS = [
+    "Tóm tắt nguyên tắc KV cache trong 5 gạch đầu dòng.",
+    "Giải thích vì sao RAG prompt dài làm TTFT tăng. " * 80,
+]
+
+
+def benchmark_stream(prompt: str):
+    start = time.perf_counter()
+    first_token_at = None
+    output_tokens_est = 0
+
+    stream = client.chat.completions.create(
+        model="meta-llama/Meta-Llama-3-8B-Instruct",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+        max_tokens=256,
+        stream=True,
+    )
+
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            if first_token_at is None:
+                first_token_at = time.perf_counter()
+            output_tokens_est += max(1, len(delta.split()))
+
+    end = time.perf_counter()
+
+    ttft = (first_token_at - start) if first_token_at else None
+    total = end - start
+    decode_time = (end - first_token_at) if first_token_at else None
+
+    return {
+        "prompt_chars": len(prompt),
+        "ttft_sec": round(ttft, 3) if ttft else None,
+        "total_sec": round(total, 3),
+        "decode_sec": round(decode_time, 3) if decode_time else None,
+        "rough_output_tokens": output_tokens_est,
+    }
+
+
+for prompt in PROMPTS:
+    print(benchmark_stream(prompt))
+```
+
+Kết quả nên được ghi thành bảng:
+
+| Prompt type | TTFT | TPOT/tokens-sec | Total latency | Notes |
+|---|---:|---:|---:|---|
+| Short prompt | thấp | đo lại | thấp | Decode dominated |
+| Long RAG prompt | cao | có thể tương tự | cao | Prefill dominated |
+| Concurrent 50 users | queue tăng | đo lại | p95 tăng | Scheduler/batching dominated |
+
+Nếu bạn chỉ benchmark một request đơn lẻ, bạn chưa đo production serving.
+
+---
+
+## 10. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Chỉ đo tokens/sec trung bình">
+**Triệu chứng:** Benchmark báo throughput cao nhưng user vẫn thấy app chậm.
+
+**Nguyên nhân:** Tokens/sec trung bình che giấu TTFT và queue time. Người dùng cảm nhận rất rõ thời gian chờ token đầu tiên.
+
+**Cách khắc phục:** Theo dõi TTFT, TPOT, queue time, total latency và p95/p99 riêng biệt. Tối ưu theo bottleneck thật.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: KV cache OOM khi tăng context window">
+**Triệu chứng:** Server chạy ổn ở context 4K nhưng OOM ở 16K dù weights không đổi.
+
+**Nguyên nhân:** KV cache tăng theo sequence length và concurrency. Context window lớn không miễn phí.
+
+**Cách khắc phục:** Đặt `max_model_len` thực tế, dùng context compression/RAG reranking, giới hạn concurrency, và chọn engine quản lý KV cache tốt như vLLM.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Batching làm tail latency xấu đi">
+**Triệu chứng:** Throughput tăng nhưng p99 latency vượt SLA.
+
+**Nguyên nhân:** Scheduler ưu tiên nhồi batch để tối đa tokens/sec, khiến request nhỏ bị xếp sau request dài hoặc batch quá lớn.
+
+**Cách khắc phục:** Tách pool theo workload, giới hạn max batch tokens, dùng priority queue cho interactive traffic và đo p95/p99 chứ không chỉ average.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Tensor parallelism sai hạ tầng">
+**Triệu chứng:** Thêm GPU nhưng tokens/sec không tăng hoặc giảm.
+
+**Nguyên nhân:** Communication giữa GPU qua PCIe chậm, không có NVLink/NVSwitch, hoặc model size chưa đủ lớn để bù overhead.
+
+**Cách khắc phục:** Benchmark single GPU vs multi-GPU. Dùng tensor parallelism khi interconnect đủ nhanh; nếu không, chạy nhiều replica độc lập có thể tốt hơn.
+</Callout>
+
+---
+
+## 11. Cost & Performance Unit Economics
+
+| Bottleneck | Dấu hiệu | Đòn bẩy tối ưu | Tác động kinh tế |
+|---|---|---|---|
+| Prefill chậm | TTFT cao với prompt dài | Context compression, prefix caching, Flash Attention | User thấy phản hồi nhanh hơn |
+| Decode chậm | TPOT cao, streaming giật | Quantization, optimized kernels, speculative decoding | Tăng tokens/sec/GPU |
+| GPU underutilized | Utilization thấp, queue rỗng | Continuous batching, concurrency tuning | Giảm cost/token |
+| KV cache OOM | Reject request khi context dài | PagedAttention, max context policy | Tăng concurrency an toàn |
+| Tail latency cao | p99 xấu dù average ổn | Workload isolation, priority scheduling | Bảo vệ SLA enterprise |
+
+Công thức đơn giản:
+
+```text
+Cost per 1M output tokens = GPU cost per hour / output tokens generated per hour × 1,000,000
+```
+
+Inference optimization chủ yếu tăng “output tokens generated per hour” mà không phải mua thêm GPU. Nhưng nếu tối ưu throughput làm trải nghiệm interactive tệ hơn, bạn đang đổi chi phí hạ tầng lấy chi phí churn.
+
+---
+
+## Practice exercises
+
+1. Viết công thức tính KV cache size (bytes) cho một LLM 7B, head_dim=128, num_heads=32, layers=32, context length=2048, batch=4, dtype=FP16. Giải thích vì sao con số này tăng theo batch.
+2. Mô tả kịch bản khi continuous batching (vLLM) có thể tăng throughput 3-5 lần so với static batching. Nêu 2 điều kiện cần để đạt được.
+3. Viết pseudo-code Python (vLLM) để khởi tạo server với `--max-model-len=8192` và `--gpu-memory-utilization=0.9`, và giải thích vì sao 2 thông số này ảnh hưởng throughput và TTFT.
+4. Giải thích vì sao speculative decoding có thể giảm latency cho chatbot nhưng không phải lúc nào cũng có lợi (khi acceptance rate thấp). Nêu 1 metric để đo.
+5. Thiết kế một benchmark plan so sánh Flash Attention v2 vs vanilla attention cho 3 độ dài prompt (1k, 4k, 16k). Nêu 3 metric cần đo và 1 điểm cần chú ý.
+
+---
+
+## Knowledge check
+
+1. Vì sao prefill và decode có bottleneck khác nhau, và metric nào đo mỗi giai đoạn?
+2. KV cache là gì, và vì sao nó phình to theo context length và concurrency?
+3. Continuous batching giải quyết vấn đề gì của static batching?
+4. Speculative decoding phụ thuộc vào yếu tố nào để có lợi?
+5. Khi nào tensor parallelism cần thiết, và khi nào pipeline parallelism phù hợp hơn?
+
+---
+
+## Answer key
+
+1. Prefill là compute-bound (xử lý toàn prompt), TTFT là metric; decode là memory-bound (sinh token), TPOT là metric.
+2. KV cache lưu key/value của mỗi token để tránh recomputation; nó tăng theo batch × context × layers × head_dim × dtype, nên phình to theo context và concurrency.
+3. Static batching chờ cả batch xong, lãng phí GPU khi request ngắn; continuous batching ghép request mới vào slot khi có request xong, giữ GPU bận.
+4. Speculative decoding phụ thuộc vào acceptance rate (độ khớp của draft model); nếu thấp, chi phí draft lớn hơn lợi ích.
+5. Tensor parallelism cần thiết khi model không vừa một GPU và cần chia weights; pipeline parallelism phù hợp khi nhiều GPU và cần chia layer theo stage.
+
+---
+
+## Điểm cần nhớ
+
+- Inference LLM gồm queue, prefill, decode và streaming; mỗi giai đoạn có bottleneck khác nhau.
+- TTFT phản ánh thời gian tới token đầu tiên; TPOT phản ánh tốc độ sinh token tiếp theo.
+- KV cache giảm recomputation nhưng tiêu tốn VRAM theo context length và concurrency.
+- Continuous batching là chìa khóa để tăng throughput khi nhiều request có độ dài khác nhau.
+- Speculative decoding, Flash Attention và parallelism chỉ có giá trị khi được benchmark trên workload thật.
+
+## Next chapter bridge
+
+Bạn đã biết cách làm một model chạy hiệu quả hơn ở runtime. Nhưng đôi khi tối ưu tốt nhất không phải là phục vụ model lớn nhanh hơn, mà là chọn một model nhỏ hơn ngay từ đầu. Chương tiếp theo: **Small Language Models (SLMs)** — nơi chúng ta học khi nào Phi, Gemma, Qwen, Mistral hay SmolLM có thể thắng frontier LLM về latency, privacy và unit economics.

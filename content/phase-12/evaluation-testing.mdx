@@ -1,162 +1,344 @@
-Ngay cả khi biểu đồ Loss của bạn trông rất mượt mà trong quá trình huấn luyện, mô hình sinh ra vẫn có thể hoàn toàn vô dụng ở môi trường sản xuất. Kỹ sư MLOps không đánh giá mô hình bằng cảm tính ("Tôi đã chat thử 5 câu và thấy nó trả lời ổn"). Họ thiết lập một hệ thống **Đánh giá tự động đa tầng (Automated Multi-tier Evaluation)** để chứng minh bằng toán học rằng bản phát hành mới (v2.0) không phá hỏng những tính năng đã chạy tốt của bản cũ (v1.0).
+Bạn đã chạy training job ổn định và có checkpoint mới. Nhưng trong AI production, câu hỏi quan trọng không phải là “loss có giảm không?” mà là “model mới có thật sự tốt hơn cho người dùng, không phá use case cũ, không tăng cost quá mức và không vi phạm safety không?”.
+
+**Model Evaluation & Testing** biến cảm tính thành release gate. Một AI Engineer chuyên nghiệp không deploy model sau khi chat thử vài câu; họ xây bộ eval nhiều tầng: offline benchmark, golden dataset, regression tests, LLM-as-a-judge, red teaming, shadow traffic và A/B testing.
 
 ---
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: Rò rỉ Data và Điểm số Ảo ảnh">
-**Bối cảnh:** Nhóm AI phát hành mô hình dịch vụ khách hàng (Customer Support LLM) nội bộ v2.0. Trên bảng benchmark nội bộ, độ chính xác (Accuracy) tăng vọt từ 85% lên 99%. Tech Lead rất tự hào và cho phép bấm nút "Deploy to Production".
+<Callout type="danger" title="Báo cáo sự cố: Accuracy 99% nhưng production trả lời sai hàng loạt">
+**Bối cảnh:** Team customer support fine-tune model v2.0. Báo cáo nội bộ cho thấy accuracy tăng từ 85% lên 99%. Pipeline CI xanh, model được deploy.
 
-**Sự cố:** Khách hàng bắt đầu phản ánh mô hình trả lời hoàn toàn vô nghĩa đối với các câu hỏi mới nhất về chính sách đổi trả. Sau khi điều tra (Post-mortem), nhóm kỹ sư phát hiện ra: Kỹ sư Data đã vô tình gộp nhầm file `test_set.csv` vào trong tệp `training_dataset.jsonl`. 
+**Sự cố:** Người dùng bắt đầu phàn nàn model trả lời sai về chính sách đổi trả mới. Điều tra cho thấy file `test_set.csv` đã vô tình bị đưa vào training dataset. Model không học hiểu; nó học thuộc bài kiểm tra. Đồng thời bộ eval không có case chính sách mới, không có regression suite cho câu hỏi nhạy cảm và không kiểm tra format JSON.
 
-**Hậu quả:** Mô hình đã học thuộc lòng (memorize) chính xác câu trả lời của bài kiểm tra. Khi ra ngoài đời thực gặp dữ liệu chưa từng thấy (unseen data), nó lập tức sụp đổ. Điểm số 99% kia chỉ là một sự ảo giác của hệ thống kiểm thử bị ô nhiễm (Test Contamination).
+1. Test set contamination làm score ảo.
+2. Không có hold-out golden dataset được bảo vệ.
+3. Eval chỉ đo accuracy, không đo groundedness, safety, format validity hoặc latency.
+4. Không có shadow/canary trước khi bật 100% traffic.
+
+**Hậu quả:** Model bị rollback, đội hỗ trợ phải xử lý thủ công hàng nghìn ticket và toàn bộ quy trình release model bị đóng băng để audit.
 </Callout>
 
-Bài học rút ra: Đánh giá mô hình phải được coi là một hàng rào bảo mật (Security Gate). Bạn phải có một tập dữ liệu "cách ly" hoàn toàn (Hold-out Set) và một hệ thống giám khảo khách quan (Judge) không thể bị thao túng.
+Bài học rút ra: eval không phải báo cáo trang trí. Eval là **hàng rào deploy**. Nếu eval bị ô nhiễm hoặc đo sai mục tiêu, production sẽ là nơi phát hiện lỗi đắt nhất.
 
 ---
 
-## 2. Architecture Blueprint (Kiến trúc giải pháp)
+## 2. Architecture Blueprint (Multi-Tier AI Evaluation Gate)
 
-Trong môi trường MLOps, quy trình Đánh giá (Evaluation) không diễn ra một lần mà chia thành hai giai đoạn rõ rệt: **Offline Eval** (Trước khi phát hành) và **Online Eval** (Sau khi phát hành).
+Một hệ thống evaluation production nên tách rõ offline và online.
 
 ```text
-[ Checkpoint Mô Hình (v2.0) ]
+[ Candidate model / prompt / RAG config ]
         │
         ▼
-============================ [ 1. OFFLINE EVALUATION (CI/CD) ] ============================
-  ├── 1. Định dạng (Schema Eval): Trả về JSON đúng chuẩn 100% không?
-  ├── 2. Benchmark học thuật (MMLU, HumanEval): Đảm bảo không bị Catastrophic Forgetting.
-  ├── 3. Kiểm thử Hồi quy (Regression Test): 100 câu hỏi khách hàng thực tế (Hold-out).
-  └── 4. Giám khảo AI (LLM-as-a-judge): Dùng GPT-4o chấm điểm (1-5) về độ an toàn & ngữ nghĩa.
-        │
-   [ Quyết định tự động: PASS / FAIL ] ---> Nếu FAIL: Chặn Deploy!
+[ Offline evaluation ]
+  - schema / format tests
+  - golden dataset regression
+  - task metrics
+  - LLM-as-a-judge rubric
+  - safety and jailbreak suite
+  - cost / latency simulation
         │
         ▼
-============================ [ 2. ONLINE EVALUATION (Production) ] =========================
-  ├── 1. Shadow Mode: Mô hình v2.0 chạy ngầm, nhận luồng request thật nhưng không trả kết quả cho User.
-  ├── 2. A/B Testing: 10% User dùng v2.0, 90% dùng v1.0. Đo lường tỷ lệ Retention, Bounce rate.
-  └── 3. User Feedback: Số lượng nút Thumbs-up/Thumbs-down, tỷ lệ copy/paste kết quả.
+[ Release decision ]
+  - pass / fail gates
+  - signed eval report
+  - registry promotion
+        │
+        ▼
+[ Online evaluation ]
+  - shadow mode
+  - canary release
+  - A/B test
+  - user feedback
+  - monitoring and rollback
 ```
+
+Mục tiêu: không có model/prompt/index nào đi vào production nếu không có bằng chứng chất lượng và đường rollback.
 
 ---
 
-## 3. Tooling Landscape (Ma trận công cụ)
+## 3. Offline Eval vs Online Eval
 
-| Loại đánh giá | Công cụ phổ biến | Chức năng (SRE Use-case) |
+| Loại eval | Chạy khi nào | Đo gì | Rủi ro |
+|---|---|---|---|
+| Offline golden set | trước deploy | quality trên case đã biết | có thể không đại diện production |
+| Regression tests | mỗi PR/release | use case cũ còn hoạt động không | bộ test thiếu case mới |
+| LLM-as-a-judge | trước deploy hoặc async | semantic correctness, groundedness | judge bias, cost |
+| Red teaming | định kỳ | jailbreak, unsafe output | không bao phủ hết attack mới |
+| Shadow mode | production ngầm | output trên traffic thật | không có user feedback trực tiếp |
+| A/B testing | rollout một phần | business metric và UX | cần đủ sample, rủi ro user impact |
+
+Offline eval giúp chặn lỗi rõ ràng. Online eval giúp phát hiện behavior thật trong môi trường thật. Bạn cần cả hai.
+
+---
+
+## 4. Golden Dataset và Regression Suite
+
+Golden dataset là bộ case nội bộ có chất lượng cao, được bảo vệ khỏi leakage.
+
+Một case tốt nên có:
+
+```json
+{
+  "id": "refund-policy-017",
+  "input": "Tôi mua gói Pro hôm qua, có hoàn tiền được không?",
+  "context": "Chính sách 2026: Gói Pro hoàn tiền 100% trong 7 ngày đầu nếu chưa dùng quá 100 credits.",
+  "expected_behavior": "Nêu điều kiện 7 ngày và 100 credits; không hứa hoàn tiền nếu thiếu thông tin.",
+  "risk_level": "medium",
+  "tags": ["billing", "refund", "policy-2026"]
+}
+```
+
+Regression suite nên bao gồm:
+
+- câu hỏi thường gặp,
+- case từng gây incident,
+- case high-risk: y tế, tài chính, pháp lý,
+- prompt injection examples,
+- format/JSON schema edge cases,
+- multilingual/user typo cases,
+- long context và missing context.
+
+<Callout type="warning" title="Golden dataset phải được version và khóa quyền sửa">
+Nếu ai cũng có thể chỉnh expected answer sau khi model fail, eval sẽ mất ý nghĩa. Golden set cần owner, review process, version hash và audit log.
+</Callout>
+
+---
+
+## 5. LLM-as-a-Judge: Useful but Dangerous
+
+LLM-as-a-judge dùng một model mạnh hơn để chấm output theo rubric. Đây là cách thực dụng cho tác vụ mở như chatbot/RAG.
+
+Rubric tốt cần:
+
+- tiêu chí rõ ràng,
+- thang điểm cụ thể,
+- yêu cầu trả JSON,
+- context và expected behavior,
+- hướng dẫn phạt hallucination,
+- calibration với human labels.
+
+Ví dụ rubric ngắn:
+
+```text
+Score 5: Answer is correct, grounded in context, complete, safe, and follows format.
+Score 3: Mostly correct but incomplete or slightly vague.
+Score 1: Incorrect, hallucinated, unsafe, or ignores the user's request.
+Return JSON only: {"score": number, "reason": string, "failure_type": string | null}
+```
+
+Các bias cần xử lý:
+
+| Bias | Mô tả | Cách giảm |
 |---|---|---|
-| **Benchmarks Học thuật** | LM Eval Harness (EleutherAI), HELM | Chạy hàng ngàn bài test chuẩn (MMLU, GSM8K) tự động. Rất nặng, tốn nhiều giờ để chạy xong. |
-| **RAG & Context Eval** | RAGAS, TruLens, DeepEval | Chuyên đánh giá hệ thống RAG: Context Precision (tài liệu lấy ra có đúng không?), Faithfulness (câu trả lời có bịa đặt ngoài tài liệu không?). |
-| **LLM-as-a-Judge** | Promptfoo, LangChain Evaluators | Sử dụng một LLM mạnh hơn (như Claude 3.5 Sonnet) có cung cấp Prompt Rubric để tự động chấm điểm cho mô hình nhỏ. |
-| **Online A/B Testing** | LaunchDarkly, PostHog, Amplitude | Triển khai Feature Flag (Cờ tính năng) để mở/tắt mô hình v2.0 cho một nhóm người dùng cụ thể và theo dõi Product Analytics. |
+| Position bias | judge ưu tiên answer A hơn B | swap order A/B |
+| Verbosity bias | câu dài được đánh giá cao hơn | rubric phạt dài dòng |
+| Self-preference | model cùng family thiên vị nhau | dùng judge khác provider |
+| Prompt sensitivity | rubric wording đổi score | freeze prompt version |
+| Non-determinism | chấm lúc cao lúc thấp | temperature 0, majority vote cho case critical |
 
 ---
 
-## 4. Implementation Playbook (Thực thi)
+## Implementation Playbook: LLM-as-Judge Eval Gate
 
-Dưới đây là kịch bản (Playbook) xây dựng một quy trình **LLM-as-a-Judge** chuẩn công nghiệp trong hệ thống CI/CD (ví dụ sử dụng GitHub Actions). Kịch bản này sẽ chặn việc merge code/model nếu điểm trung bình nhỏ hơn 4.0/5.0.
+### Bước 1: Viết eval dataset
 
-### Bước 1: Chuẩn bị Rubric Chấm Điểm
-Máy móc chấm điểm theo "Cảm tính" sẽ rất nguy hiểm. Bạn phải định nghĩa rõ ràng các mức điểm (Rubric).
-
-```text
-[System Prompt for Judge]
-Bạn là một kiểm toán viên chất lượng AI khắt khe. Hãy chấm điểm phản hồi của mô hình dựa trên câu hỏi của người dùng và tài liệu (Context) được cung cấp.
-Tiêu chí (Rubric):
-5 điểm: Câu trả lời hoàn toàn chính xác, đúng trọng tâm, và 100% không chứa thông tin bịa đặt ngoài Context.
-3 điểm: Trả lời được ý chính nhưng có thêm bớt câu chữ thừa hoặc sai lệch nhẹ không ảnh hưởng nghiệm trọng.
-1 điểm: Ảo giác (Hallucination), sai sự thật, hoặc không trả lời câu hỏi.
-Trả về định dạng JSON: {"score": 5, "reason": "Lý do chi tiết"}
+```json
+[
+  {
+    "id": "billing-001",
+    "query": "Tôi muốn hủy gói Pro thì có được hoàn tiền không?",
+    "context": "Hoàn tiền trong 7 ngày đầu nếu chưa dùng quá 100 credits.",
+    "expected_behavior": "Trả lời có điều kiện, hỏi thêm ngày mua và credits đã dùng."
+  }
+]
 ```
 
-### Bước 2: Viết script tự động đánh giá bằng Python (Sử dụng OpenAI API làm Judge)
+### Bước 2: Tạo judge prompt có rubric
+
+```python
+JUDGE_SYSTEM = """
+You are a strict AI quality evaluator.
+Grade the model answer using the provided query, context, and expected behavior.
+Return JSON only with keys: score, reason, failure_type.
+Score 5 means fully correct and grounded.
+Score 3 means partially correct.
+Score 1 means wrong, hallucinated, unsafe, or not grounded.
+"""
+```
+
+### Bước 3: Chạy eval và fail pipeline nếu dưới ngưỡng
 
 ```python
 import json
-import os
-from openai import OpenAI
 import statistics
+from openai import OpenAI
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+client = OpenAI()
 
-# Giả lập tập Hold-out test đã được load từ DVC/S3
-eval_data = [
-    {"query": "Phí trễ hạn thẻ tín dụng là bao nhiêu?", 
-     "context": "Chính sách 2026: Phí trễ hạn thẻ Platinum là 5%, thẻ Standard là 3%.",
-     "model_answer": "Phí trễ hạn là 5% cho thẻ Platinum."},
-     # Thêm hàng chục/trăm case khác...
-]
-
+cases = json.load(open("eval/golden_set.json", encoding="utf-8"))
 scores = []
+failures = []
 
-for item in eval_data:
-    prompt = f"Query: {item['query']}\nContext: {item['context']}\nModel Answer: {item['model_answer']}\nChấm điểm theo Rubric."
-    
+for case in cases:
+    model_answer = generate_answer(case["query"], case["context"])
+    judge_input = {
+        "query": case["query"],
+        "context": case["context"],
+        "expected_behavior": case["expected_behavior"],
+        "model_answer": model_answer,
+    }
+
     response = client.chat.completions.create(
-        model="gpt-4o", # Phải dùng mô hình cực mạnh làm Judge
-        messages=[{"role": "system", "content": "You are the strict AI Judge..."},
-                  {"role": "user", "content": prompt}],
-        response_format={ "type": "json_object" }
+        model="gpt-4o",
+        temperature=0,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": JUDGE_SYSTEM},
+            {"role": "user", "content": json.dumps(judge_input, ensure_ascii=False)},
+        ],
     )
-    
+
     result = json.loads(response.choices[0].message.content)
     scores.append(result["score"])
-    print(f"Score: {result['score']}, Reason: {result['reason']}")
+    if result["score"] < 4:
+        failures.append({"case_id": case["id"], **result})
 
-avg_score = statistics.mean(scores)
-print(f"Average Score: {avg_score}")
+avg = statistics.mean(scores)
+report = {"average_score": avg, "failures": failures}
+json.dump(report, open("eval_report.json", "w", encoding="utf-8"), indent=2, ensure_ascii=False)
 
-# Pipeline sẽ FAIL (Exit code 1) nếu điểm trung bình dưới ngưỡng Production (ví dụ 4.0)
-if avg_score < 4.0:
-    print("❌ MODEL EVALUATION FAILED! Chặn quá trình Deploy.")
-    exit(1)
-else:
-    print("✅ MODEL PASSED EVALUATION. Sẵn sàng lên Production.")
-    exit(0)
+if avg < 4.2 or failures:
+    raise SystemExit("Evaluation failed: quality gate not met")
+```
+
+### Bước 4: Lưu eval report vào artifact/registry
+
+Eval report cần được lưu cùng model version:
+
+```text
+model: customer-support-v12
+artifact: s3://models/customer-support/v12
+code_commit: 7c9f2ab
+dataset_hash: sha256:...
+eval_report: s3://reports/customer-support/v12/eval_report.json
+status: staging
 ```
 
 ---
 
-## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## 6. RAG Evaluation Metrics
 
-<Callout type="warning" title="Pitfall 1: Judge bị thiên vị vị trí (Position Bias)">
-**Triệu chứng:** Khi chạy A/B comparison (Đưa 2 câu trả lời A và B vào prompt và bắt Judge chọn câu nào hay hơn), Judge luôn có xu hướng chọn câu trả lời A (bất kể nội dung).
-**Nguyên nhân:** Các mô hình LLM có một lỗ hổng nhận thức gọi là Position Bias (Ưu tiên những thứ đọc được đầu tiên).
-**Cách khắc phục (Fix):** Kỹ sư Evaluation phải thực hiện hoán đổi vị trí (Swap). Gọi API 2 lần: Lần 1 hỏi "A hay B tốt hơn?". Lần 2 hỏi "B hay A tốt hơn?". Nếu 2 lần mô hình cùng chọn một nội dung, kết quả mới được công nhận là hợp lệ.
+Nếu hệ thống là RAG, đánh giá final answer thôi chưa đủ. Cần tách retrieval và generation.
+
+| Metric | Câu hỏi |
+|---|---|
+| Context precision | retrieved chunks có liên quan không? |
+| Context recall | có lấy đủ tài liệu cần thiết không? |
+| Faithfulness | answer có bịa ngoài context không? |
+| Answer relevance | answer có trả lời đúng query không? |
+| Citation accuracy | citation có trỏ đúng nguồn không? |
+| Refusal correctness | khi không có context, model có biết từ chối không? |
+
+Một lỗi RAG có thể đến từ retriever, reranker, chunking, prompt, hoặc model. Eval phải giúp bạn biết lỗi nằm ở đâu.
+
+---
+
+## 7. Release Gates and Rollback
+
+Một release gate thực dụng:
+
+```text
+Gate 1: Unit tests pass
+Gate 2: Prompt/schema tests pass
+Gate 3: Golden eval average >= 4.2
+Gate 4: No critical safety failures
+Gate 5: p95 latency increase <= 15%
+Gate 6: cost/request increase <= 20%
+Gate 7: canary 5% traffic for 30 minutes without alert
+```
+
+Nếu model fail Gate 5 hoặc Gate 6, có thể nó “thông minh hơn” nhưng không phù hợp sản phẩm. Production AI là tối ưu đa mục tiêu, không chỉ quality.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Judge chọn câu trả lời dài hơn dù không đúng hơn">
+**Triệu chứng:** Model verbose thắng mọi comparison.
+
+**Fix:** Rubric phải phạt thông tin thừa, yêu cầu groundedness và có giới hạn độ dài nếu sản phẩm cần ngắn gọn.
 </Callout>
 
-<Callout type="warning" title="Pitfall 2: 'Giám khảo' yếu hơn 'Thí sinh'">
-**Triệu chứng:** Bạn dùng một mô hình mã nguồn mở 8B tham số (tự host cho rẻ) để chấm điểm câu trả lời của mô hình LLaMA-70B. Điểm số trả về liên tục là 5/5 nhưng người dùng chê dở.
-**Nguyên nhân:** Một mô hình không thể đánh giá chính xác một mô hình khác thông minh hơn nó. Giám khảo sẽ không nhận ra các lỗi tinh vi về tư duy logic.
-**Cách khắc phục (Fix):** Quá trình Offline Eval là nơi bạn **KHÔNG ĐƯỢC TIẾT KIỆM TIỀN**. Luôn dùng mô hình mạnh nhất thế giới tại thời điểm đó (như GPT-4o, Claude 3.5 Sonnet) làm LLM-as-a-judge dù chi phí API có đắt đỏ.
+<Callout type="warning" title="Pitfall 2: Eval flaky làm CI lúc đỏ lúc xanh">
+**Triệu chứng:** Không đổi code nhưng rerun CI cho kết quả khác.
+
+**Fix:** Đặt temperature 0, freeze judge prompt/model version, dùng threshold có margin và rerun/majority vote cho case quan trọng.
 </Callout>
 
-<Callout type="danger" title="Pitfall 3: Benchmark Contamination (Ô nhiễm dữ liệu thi)">
-**Triệu chứng:** Bạn tự hào báo cáo mô hình của công ty đạt 95% điểm trên benchmark MMLU. Cả công ty vui mừng cho đến khi chạy trên dữ liệu khách hàng thực tế và chỉ đạt 40%.
-**Nguyên nhân:** Nhà cung cấp mô hình nguồn mở đã vô tình (hoặc cố ý) thu thập bộ câu hỏi của MMLU và đưa vào tập dữ liệu huấn luyện gốc (Pretraining). Mô hình của bạn đơn giản là đã "học thuộc lòng đề thi".
-**Cách khắc phục (Fix):** Đừng quá tin vào các Benchmark công cộng. Giá trị của đội ngũ MLOps nằm ở việc xây dựng và bảo vệ một **Tập Kiểm Thử Nội Bộ (Proprietary Golden Dataset)** mà không có bất kỳ công ty nào khác sở hữu.
+<Callout type="danger" title="Pitfall 3: Golden set bị học thuộc hoặc bị chỉnh để model pass">
+**Triệu chứng:** Score tăng đều nhưng production không cải thiện.
+
+**Fix:** Tách hidden hold-out set, giới hạn quyền sửa, version eval data và audit mọi thay đổi expected behavior.
 </Callout>
 
 ---
 
-## 6. Cost & Performance Unit Economics
+## Cost / Quality / Risk Unit Economics
 
-Đánh giá tự động không miễn phí, bạn cần phải tính toán chi phí (Unit Economics) cho mỗi lần chạy CI/CD Pipeline.
-
-| Hoạt động Evaluation | Phân tích SRE (Ý nghĩa kinh tế) | Tối ưu hóa (Optimization) |
+| Hoạt động | Chi phí | Tối ưu |
 |---|---|---|
-| **Chạy LLM-as-a-Judge (Dùng API)** | Tập test có 5,000 cases. Dùng GPT-4o để chấm (mỗi prompt tốn 500 tokens). Mỗi lần chạy Eval Pipeline sẽ ngốn khoảng $12. | **Dùng Batch API:** Nếu chạy Offline Eval không cần thời gian thực (đợi 12-24h cũng được), hãy sử dụng OpenAI Batch API để giảm 50% giá tiền (chỉ còn $6/lần). |
-| **Chạy Benchmarks nội bộ (Self-hosted GPU)** | Chạy tập LM Eval Harness gồm 20,000 câu hỏi trên GPU A100 có thể mất 3-4 giờ. | **Tối ưu VRAM:** Kích hoạt vLLM với Batch Size siêu lớn (PagedAttention) để đẩy max thông lượng (throughput), có thể giảm thời gian eval từ 4 tiếng xuống còn 30 phút. |
-| **A/B Testing (Online)** | Duy trì 2 cụm GPU đồng thời chạy Model v1.0 và Model v2.0 trên Production sẽ nhân đôi chi phí Server ($$$$). | Áp dụng kỹ thuật **Canary Release** kết hợp Auto-scaling. Chỉ cấp phát phần cứng cho Model v2.0 tương ứng với 5% traffic. Tự động scale down v1.0 khi tăng dần traffic cho v2.0. |
+| Judge GPT-4o trên 10,000 cases | API cost và thời gian cao | chạy sanity set trên PR, full eval nightly bằng Batch API |
+| Human eval | đắt nhưng chất lượng cao | dùng cho calibration và high-risk cases |
+| Shadow traffic | chạy hai model song song | chỉ shadow subset có giá trị, sample theo risk |
+| A/B testing | tác động user thật | canary nhỏ, rollback nhanh, guardrail metrics |
+| Red teaming | cần chuyên môn | ưu tiên attack từng gây incident, cập nhật suite định kỳ |
+
+Eval rẻ nhất là eval không chạy; nhưng incident production thường đắt hơn nhiều.
+
+---
+
+## Practice exercises
+
+1. Thiết kế 10 golden cases cho một chatbot ngân hàng, gồm ít nhất 2 case prompt injection.
+2. Viết rubric LLM-as-a-judge để chấm groundedness cho RAG.
+3. Đề xuất release gate cho prompt mới có nguy cơ tăng cost.
+4. Mô tả cách tách lỗi RAG thành retrieval failure và generation failure.
+5. Lập kế hoạch A/B test an toàn cho model v2.
+
+---
+
+## Knowledge check
+
+1. Vì sao eval loss thấp chưa đủ để deploy LLM?
+2. Golden dataset khác gì với training dataset?
+3. LLM-as-a-judge có những bias nào phổ biến?
+4. Vì sao RAG eval phải đo cả context precision/recall?
+5. Canary release giúp giảm rủi ro như thế nào?
+
+---
+
+## Answer key
+
+1. Nó không đo format, safety, latency, cost, user relevance hoặc regression trên use case thật.
+2. Golden dataset là bộ test được bảo vệ để đánh giá, không được dùng train.
+3. Position bias, verbosity bias, self-preference, prompt sensitivity và non-determinism.
+4. Vì answer sai có thể do không retrieve đúng tài liệu, không chỉ do model generation.
+5. Chỉ đưa model mới cho một phần nhỏ traffic, theo dõi metrics và rollback nhanh nếu lỗi.
 
 ---
 
 ## Điểm cần nhớ
 
-- Việc huấn luyện (Training) là vô nghĩa nếu bạn không thể chứng minh sự cải thiện thông qua quy trình Đánh giá (Evaluation) tự động hóa.
-- LLM-as-a-judge là một công cụ mạnh mẽ, nhưng phải đi kèm với Rubric rõ ràng và cơ chế khử thiên kiến (Position Bias Swap).
-- Mọi mô hình đều có rủi ro suy giảm năng lực cũ (Catastrophic Forgetting) khi học kỹ năng mới. Hãy luôn chạy bộ kiểm thử hồi quy (Regression test) trước khi cấp quyền Release.
+- Evaluation là release gate, không phải báo cáo sau cùng.
+- Golden dataset phải được version, bảo vệ và audit.
+- LLM-as-a-judge hữu ích nhưng cần rubric, calibration và bias mitigation.
+- RAG eval phải tách retrieval quality khỏi answer quality.
+- Deploy model mới cần kiểm soát quality, safety, latency, cost và rollback.
+
+---
 
 ## Next chapter bridge
 
-Mô hình đã được tinh chỉnh, kiểm thử và đạt điểm số xuất sắc trên hệ thống CI/CD. Đã đến lúc đưa "bộ não" nặng hàng chục Gigabyte này ra đối mặt với hàng triệu request từ người dùng. Tuy nhiên, việc đóng gói một mạng Neural vào API không đơn giản như lập trình Web thông thường. Chương tiếp theo: **Model Deployment & Serving** — nơi chúng ta chuyển từ tư duy của Data Scientist sang tư duy của một Backend/SRE Engineer, xử lý bài toán tối ưu hóa băng thông bộ nhớ (PagedAttention, Continuous Batching) với siêu công cụ vLLM và TGI.
+Model đã vượt qua eval gates và đủ điều kiện release. Bây giờ nó phải phục vụ request thật với latency thấp, throughput cao và cost/token hợp lý. Chương tiếp theo: **Model Deployment & Serving** — nơi chúng ta chuyển từ checkpoint sang inference engine, OpenAI-compatible API, vLLM, TGI, KV cache, batching và production latency metrics.

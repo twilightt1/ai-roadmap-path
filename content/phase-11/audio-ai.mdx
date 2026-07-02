@@ -1,234 +1,469 @@
-Thế giới vật lý được định hình bởi âm thanh. AI Audio không chỉ dừng lại ở việc chuyển giọng nói thành văn bản hay văn bản thành giọng nói; nó đang tiến đến khả năng hiểu cảm xúc, ngữ điệu, âm nhạc, và khả năng tương tác đàm thoại thời gian thực (Real-time Conversational AI). Việc nắm vững Speech-to-Text (STT) và Text-to-Speech (TTS) là điều kiện kiên quyết để thiết kế những Trợ lý AI thế hệ mới (Voice Assistants).
+Ở bài trước, bạn đã xử lý hình ảnh và tài liệu bằng VLM. Audio AI đưa hệ thống sang một dạng tương tác khó hơn: người dùng nói theo thời gian thực, mong phản hồi gần như tức thì, có thể ngắt lời, đổi ngôn ngữ, nói trong môi trường ồn và kỳ vọng giọng nói tự nhiên.
 
-## Why this matters
+Audio AI production không chỉ là STT rồi TTS. Một voice assistant tốt là pipeline streaming: microphone chunks, VAD, partial transcripts, LLM streaming, TTS streaming, playback, barge-in, consent, anti-deepfake policy và latency budget dưới vài trăm mili-giây cho cảm giác tự nhiên.
 
-Trong thế giới sản xuất AI:
+---
 
-- **Độ trễ truyền phát (Streaming Latency):** Không ai thích nói chuyện với một trợ lý mất 5 giây mới phản hồi. Xây dựng một Voice Agent yêu cầu kỹ thuật xử lý luồng dữ liệu (Stream processing) kết hợp Voice Activity Detection (VAD) để cắt ghép âm thanh thành từng đoạn nhỏ.
-- **Ngữ cảnh âm thanh:** Con người giao tiếp qua ngữ điệu. Những mô hình Audio-to-Audio Native (như GPT-4o) không cần bước trung gian chuyển thành văn bản, giữ lại được cảm xúc, tiếng thở dài, tiếng cười - một lĩnh vực hái ra tiền trong mảng tổng đài viên AI (Customer Support).
-- **Voice Cloning (Nhân bản giọng nói):** Việc tạo ra một giọng nói chỉ từ 10 giây mẫu âm (Zero-shot Voice Cloning) đang định hình lại ngành công nghiệp sách nói (Audiobooks), Lồng tiếng phim (Dubbing) và cả những rủi ro bảo mật sâu sắc về mạo danh.
+## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Không bao giờ xử lý âm thanh dưới dạng File tải lên cho Đàm thoại">
-Cách người mới làm Voice AI: Ghi âm -> Lưu file MP3 -> Gửi API STT -> Xử lý LLM -> Gửi API TTS -> Tải file MP3 -> Phát ra loa.
-Hậu quả: Độ trễ lên tới 5-10 giây.
-Cách kỹ sư thực thụ làm: Truyền trực tiếp các Chunk âm thanh (bytes) qua WebSockets bằng công thức: Chunking Audio -> Streaming STT -> Streaming LLM -> Streaming TTS. Độ trễ giảm xuống dưới 1 giây.
+<Callout type="danger" title="Báo cáo sự cố: Voice assistant demo tốt nhưng production trễ 8 giây">
+**Bối cảnh:** Một team xây voice assistant cho customer support. Demo dùng flow đơn giản: ghi âm file, upload lên STT, đợi transcript, gọi LLM, đợi full answer, gọi TTS, tải file audio rồi phát.
+
+**Sự cố:** Trong production, người dùng phải chờ 6-8 giây sau mỗi câu. Hệ thống hay ngắt lời khi user ngập ngừng, không hỗ trợ barge-in và một số transcript hallucinate khi audio im lặng. Ngoài ra, team chưa có policy consent cho voice cloning.
+
+1. Pipeline xử lý theo batch thay vì streaming.
+2. VAD silence threshold quá thấp, cắt câu sai.
+3. Không dùng partial STT/LLM/TTS để overlap latency.
+4. Không có audit về voice samples, consent và retention.
+
+**Hậu quả:** Call abandonment tăng, support team tắt voice mode và chỉ giữ text chat cho đến khi pipeline streaming được thiết kế lại.
 </Callout>
 
-## Learning objectives
-
-Sau chương này, bạn sẽ có thể:
-
-1. Trình bày kiến trúc Encoder-Decoder của mô hình Whisper (Speech-to-Text).
-2. Hiểu cơ chế hoạt động của công nghệ Text-to-Speech (TTS) và Voice Cloning.
-3. Thiết lập hệ thống Voice Activity Detection (VAD) phân chia âm thanh theo độ tĩnh lặng.
-4. Triển khai kiến trúc đàm thoại thời gian thực sử dụng Streaming và WebSockets.
-5. Hiểu về các mô hình âm nhạc (Music Generation) sử dụng phổ âm thanh (spectrogram).
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Biểu diễn sóng âm thanh cơ bản (Waveforms, Sampling Rate).
-- Kỹ thuật Streaming và WebSockets ở Backend (FastAPI).
-- Kiến trúc Transformer Encoder-Decoder (Phase 5).
+Bài học rút ra: voice UX được quyết định bởi latency và turn-taking. Audio AI production cần streaming, VAD tốt, barge-in và governance cho dữ liệu giọng nói.
 
 ---
 
-## Mảng 1: Speech-to-Text (STT) và Sự thống trị của Whisper
+## 2. Architecture Blueprint (Real-Time Voice Agent)
 
-Whisper (OpenAI) là mô hình STT định hình chuẩn mực của ngành công nghiệp hiện tại. Thay vì phải tự ghép nối các mô hình âm học phức tạp như thời kỳ trước (HMM/GMM), Whisper sử dụng một cấu trúc Transformer tiêu chuẩn cực kỳ thanh lịch.
+Một voice agent production là pipeline nhiều stage chạy song song:
 
-### Kiến trúc hoạt động của Whisper:
-1. **Tiền xử lý (Log-Mel Spectrogram):** Đoạn âm thanh (ví dụ dài 30 giây) được chuyển từ dạng sóng (waveform) 1D sang biểu diễn hình ảnh phổ âm thanh (Spectrogram) 2D, tương tự như cách ta chuẩn bị dữ liệu hình ảnh.
-2. **Encoder:** Một Transformer Encoder "đọc" phổ âm thanh này và xuất ra các vector biểu diễn đặc trưng (Audio Features).
-3. **Decoder:** Transformer Decoder lấy các vector này kết hợp với các Token văn bản đã sinh ra trước đó để **tự hồi quy (autoregressively)** dự đoán từ tiếp theo.
-
-### Tính đa nhiệm (Multitask Learning):
-Whisper được đào tạo trên một tập dữ liệu khổng lồ (680.000 giờ âm thanh). Bằng cách chèn các Token điều khiển (Control Tokens) vào đầu câu, Whisper có thể thực hiện nhiều nhiệm vụ:
-- Nhận diện ngôn ngữ (`<|vi|>`).
-- Quyết định phiên âm (`<|transcribe|>`) hoặc dịch thuật thẳng sang tiếng Anh (`<|translate|>`).
-- Đánh dấu mốc thời gian (Timestamps) cực kỳ chính xác phục vụ làm phụ đề video.
-
----
-
-## Mảng 2: Text-to-Speech (TTS) và Voice Cloning
-
-Text-to-Speech truyền thống nghe rất giống robot (như chị Google) vì chúng sử dụng kỹ thuật ghép nối các âm vị thu âm sẵn (Concatenative TTS). Các mô hình sinh giọng nói hiện đại (như ElevenLabs, VALL-E, Coqui) sử dụng kiến trúc AI sinh thành.
-
-### Cơ chế sinh giọng nói (Generative TTS):
-Thay vì sinh ra ảnh, mô hình có thể sinh ra tín hiệu âm thanh (Audio waveform) hoặc phổ âm thanh (Spectrogram).
-- **Acoustic Model:** Chuyển văn bản thành phổ âm thanh (thường dùng Transformer hoặc VAE).
-- **Vocoder (Bộ tạo âm):** Chuyển phổ âm thanh (ảnh 2D) ngược trở lại thành dải sóng âm thanh 1D có thể phát ra loa (ví dụ: mô hình HiFi-GAN).
-
-### Zero-Shot Voice Cloning
-Kỹ thuật này cho phép sao chép giọng nói của một người chưa từng xuất hiện trong tập dữ liệu huấn luyện, chỉ thông qua một đoạn mẫu (prompt audio) dài từ 3 đến 10 giây.
-- Mô hình nhúng đoạn mẫu giọng nói này thành một **Speaker Embedding Vector** (Đại diện cho phong cách, cao độ, ngữ điệu của người đó).
-- Khi sinh giọng nói cho câu văn mới, mô hình lấy Speaker Embedding này làm biến điều kiện (Condition) hướng dẫn quá trình sinh âm thanh.
-
----
-
-## Mảng 3: Âm nhạc nhân tạo (Music Generation)
-
-Các nền tảng như Suno hoặc Udio đã chứng minh AI có thể sáng tác cả một bài hát (nhạc cụ + giọng hát) từ một đoạn Text Prompt. 
-
-Về bản chất, âm thanh được nén dưới dạng mã hóa lượng hóa (Audio Encodec) thành các "Token âm thanh". Mô hình (thường là Transformer hoặc Diffusion Models) sẽ sinh ra một chuỗi "Token âm nhạc", sau đó được giải nén để thành một bài hát chất lượng cao. Khó khăn lớn nhất của Music AI là làm sao duy trì nhịp độ (Tempo) và cấu trúc bài hát (Structure: Verse - Chorus - Bridge) xuyên suốt một đoạn âm thanh dài 3 phút.
-
----
-
-## System Architecture: Đàm thoại thời gian thực (Real-time Voice Agent)
-
-Để xây dựng một trợ lý AI như phim viễn tưởng (ví dụ: tính năng Live Voice của ChatGPT), bạn không thể xử lý theo lô (batch processing). Bạn phải dùng kỹ thuật **Pipelined Streaming**.
-
-### The Latency Bottleneck:
-Nếu bạn làm theo cách cổ điển:
-`User nói xong (đợi 5s) -> Whisper xử lý (2s) -> LLM sinh câu trả lời (3s) -> TTS đọc thành file (3s) -> Phát ra loa.`
-=> Độ trễ = 13 giây. Trải nghiệm người dùng sụp đổ.
-
-### The Streaming Solution:
-Sử dụng 4 thành phần liên kết với nhau qua các hàng đợi (Queues) và chạy đồng thời (Concurrency):
-
-1. **VAD (Voice Activity Detection):** Lắng nghe luồng Microphone. Ngay khi người dùng dừng nói khoảng 0.5 giây (Silence Threshold), cắt đoạn âm thanh đó gửi đi ngay lập tức.
-2. **Streaming STT:** Mô hình STT liên tục trả về văn bản dạng luồng (từng từ xuất hiện).
-3. **Streaming LLM:** Nhận văn bản, bắt đầu suy luận ngay. Khi LLM nhả ra dấu câu kết thúc đầu tiên (ví dụ dấu phẩy hoặc chấm: "Vâng,"), đoạn đó được gửi ngay lập tức sang TTS.
-4. **Streaming TTS:** TTS nhận câu ngắn "Vâng,", sinh âm thanh trong 0.1 giây và phát ra loa cho người dùng nghe. Cùng lúc đó, LLM vẫn đang suy nghĩ và nhả tiếp đoạn văn thứ 2, thứ 3 ở chế độ ngầm.
-
-=> Độ trễ giảm xuống chỉ còn 0.5 - 1 giây.
-
----
-
-## Implementation lab: VAD và Gọi API Whisper
-
-**Nhiệm vụ:** Viết mã Python để chia nhỏ một tệp âm thanh hoặc luồng mic sử dụng WebRTC VAD (Voice Activity Detection) nhằm chỉ gọi API STT cho các đoạn có tiếng người.
-
-```python
-import webrtcvad
-import collections
-
-# Lớp giả lập quản lý Frame âm thanh
-class AudioFrame:
-    def __init__(self, bytes, timestamp, duration):
-        self.bytes = bytes
-        self.timestamp = timestamp
-        self.duration = duration
-
-def vad_collector(sample_rate, frame_duration_ms, padding_duration_ms, vad, frames):
-    """
-    Thu thập các frames âm thanh chứa giọng nói.
-    """
-    num_padding_frames = int(padding_duration_ms / frame_duration_ms)
-    # Hàng đợi ring buffer lưu trữ các frames trước/sau đoạn hội thoại
-    ring_buffer = collections.deque(maxlen=num_padding_frames)
-    
-    triggered = False
-    voiced_frames = []
-
-    for frame in frames:
-        # VAD trả về True nếu phát hiện giọng nói
-        is_speech = vad.is_speech(frame.bytes, sample_rate)
-
-        if not triggered:
-            ring_buffer.append((frame, is_speech))
-            # Nếu số lượng frame có giọng nói vượt ngưỡng 90% trong buffer
-            num_voiced = len([f for f, speech in ring_buffer if speech])
-            if num_voiced > 0.9 * ring_buffer.maxlen:
-                triggered = True
-                for f, s in ring_buffer:
-                    voiced_frames.append(f)
-                ring_buffer.clear()
-        else:
-            voiced_frames.append(frame)
-            ring_buffer.append((frame, is_speech))
-            # Nếu phát hiện đoạn im lặng kéo dài (90% buffer không có giọng nói) -> Dừng cắt
-            num_unvoiced = len([f for f, speech in ring_buffer if not speech])
-            if num_unvoiced > 0.9 * ring_buffer.maxlen:
-                triggered = False
-                yield b''.join([f.bytes for f in voiced_frames])
-                ring_buffer.clear()
-                voiced_frames = []
-
-# Khởi tạo VAD với độ nhạy mức 3 (Bắt giọng nói cực khắt khe)
-vad = webrtcvad.Vad(3)
-sample_rate = 16000 # 16kHz chuẩn cho STT
-frame_duration_ms = 30 # 30ms mỗi frame
-padding_duration_ms = 300 # 300ms im lặng thì ngắt câu
-
-# Giả lập: frames = read_audio_source()
-# for segment_bytes in vad_collector(sample_rate, frame_duration_ms, padding_duration_ms, vad, frames):
-#     # Gọi API Whisper cho đoạn segment_bytes này ngay lập tức!
-#     transcript = call_whisper_api(segment_bytes)
-#     print("User:", transcript)
+```text
+[ Microphone / audio stream ]
+        │
+        ▼
+[ Audio gateway ]
+  - sample rate normalization
+  - mono/int16 conversion
+  - noise suppression optional
+        │
+        ▼
+[ VAD + turn detection ]
+  - speech start/end
+  - silence threshold
+  - barge-in detection
+        │
+        ▼
+[ Streaming STT ]
+  - partial transcript
+  - timestamps
+  - language detection
+        │
+        ▼
+[ LLM / dialog policy ]
+  - streaming tokens
+  - tool calls if needed
+  - safety policy
+        │
+        ▼
+[ Streaming TTS ]
+  - sentence chunks
+  - voice settings
+  - playback buffer
+        │
+        ▼
+[ Monitoring + audit ]
+  - latency per stage
+  - transcript confidence
+  - consent/retention
+  - user interruption rate
 ```
 
+Mục tiêu: không đợi từng stage hoàn tất. Hãy overlap STT, LLM và TTS để user nghe phản hồi đầu tiên càng sớm càng tốt.
+
 ---
 
-## Common mistakes & debugging checklist
+## 3. Speech-to-Text: Whisper, Streaming STT và Diarization
 
-<Callout type="warning" title="Mistake 1: Quên thiết lập Silence Threshold phù hợp">
-Nếu bạn đặt thời gian ngắt im lặng (Silence Threshold) quá thấp (0.1 giây), khi người dùng đang ngập ngừng suy nghĩ "À... ừm...", hệ thống sẽ ngắt lời họ và bắt đầu trả lời. Hãy đặt ngưỡng từ 0.5 - 1.0 giây tùy thuộc vào nhịp độ đàm thoại.
+STT biến waveform thành text.
+
+### Whisper-style pipeline
+
+```text
+waveform -> log-mel spectrogram -> encoder -> decoder -> text tokens
+```
+
+| Thành phần | Vai trò |
+|---|---|
+| Resampling | Chuẩn hóa audio về sample rate model yêu cầu |
+| Log-mel spectrogram | Biểu diễn audio thành dạng 2D dễ học |
+| Encoder | Trích xuất audio features |
+| Decoder | Sinh transcript token-by-token |
+| Timestamps | Map text về thời gian audio |
+
+### Streaming STT
+
+Batch STT đợi user nói xong. Streaming STT trả partial transcript:
+
+```text
+User says: "I want to reset my password"
+Partial: "I want..."
+Partial: "I want to reset..."
+Final:   "I want to reset my password."
+```
+
+Streaming giúp LLM bắt đầu chuẩn bị phản hồi sớm hơn, nhưng cần xử lý partial text thay đổi.
+
+### Diarization
+
+Diarization trả lời câu hỏi “ai đang nói?”. Cần cho meeting, call center, interviews.
+
+```text
+[00:01] Speaker A: Xin chào
+[00:04] Speaker B: Tôi cần hỗ trợ đơn hàng
+```
+
+Production concerns:
+
+- Accent/language mix.
+- Background noise.
+- Silence hallucination.
+- Domain terms/names.
+- PII trong transcript.
+
+---
+
+## 4. Text-to-Speech, Voice Cloning và Music Generation
+
+### TTS
+
+TTS chuyển text thành giọng nói.
+
+```text
+text -> linguistic features -> acoustic model -> spectrogram/audio tokens -> vocoder -> waveform
+```
+
+| Quality dimension | Ý nghĩa |
+|---|---|
+| Naturalness | Có giống người thật không |
+| Latency | Time to first audio |
+| Prosody | Nhấn nhá, cảm xúc, tốc độ |
+| Stability | Có đọc sai, lặp, đổi giọng không |
+| Controllability | Voice, speed, style, emotion |
+
+### Voice cloning
+
+Voice cloning dùng speaker embedding từ mẫu giọng để condition TTS.
+
+Rủi ro:
+
+- Mạo danh người thật.
+- Lừa đảo qua điện thoại.
+- Dùng voice sample không consent.
+- Không có watermark/provenance.
+
+### Music generation
+
+Music models thường sinh audio tokens hoặc spectrogram theo prompt. Khó hơn speech vì cần duy trì structure dài: verse, chorus, tempo, harmony, vocal/instrument balance.
+
+<Callout type="danger" title="Voice samples là dữ liệu sinh trắc học">
+Giọng nói có thể dùng để nhận dạng hoặc mạo danh con người. Hãy xử lý voice samples như biometric data: consent rõ, retention ngắn, audit access và policy chống impersonation.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: Gửi File lớn hơn 25MB cho API Whisper">
-Các nhà cung cấp (như OpenAI) giới hạn dung lượng tệp tin (thường là 25MB). Nếu bạn có một tệp ghi âm Podcast dài 2 tiếng, bạn không thể gọi API trực tiếp. Hãy sử dụng thư viện `pydub` hoặc `ffmpeg` để cắt tệp thành các đoạn nhỏ 10 phút trước khi gửi đi và nối kết quả văn bản lại.
+---
+
+## 5. Latency Budget cho Voice UX
+
+Voice UX tự nhiên cần time-to-first-audio thấp.
+
+```text
+Target perceived latency: 500ms - 1500ms
+```
+
+Breakdown ví dụ:
+
+| Stage | Target |
+|---|---:|
+| VAD detects end of turn | 200-700ms |
+| STT final/partial transcript | 100-500ms |
+| LLM first tokens | 100-800ms |
+| TTS first audio chunk | 100-500ms |
+| Playback buffering | 50-200ms |
+
+### Barge-in
+
+Barge-in là khả năng user ngắt lời assistant khi assistant đang nói.
+
+Pipeline cần:
+
+1. Phát hiện user speech trong lúc TTS playback.
+2. Dừng playback hiện tại.
+3. Cancel hoặc pause LLM/TTS generation.
+4. Gửi user utterance mới vào dialog state.
+
+Không có barge-in, voice assistant sẽ cảm giác như IVR cũ, không phải hội thoại tự nhiên.
+
+---
+
+## 6. Wake Word, Multilingual và Noise Handling
+
+### Wake word
+
+Wake word giúp không stream mọi audio lên server liên tục.
+
+```text
+Local wake word detector -> activate cloud STT -> process conversation -> sleep
+```
+
+Trade-off:
+
+- Local detection tăng privacy.
+- False wake gây khó chịu và tốn cost.
+- Missed wake làm UX tệ.
+
+### Multilingual
+
+Voice assistants thường gặp code-switching:
+
+```text
+"Cho tôi check order status của đơn này"
+```
+
+Cần STT hỗ trợ language detection hoặc explicit language mode.
+
+### Noise handling
+
+Noise suppression và VAD phải cân bằng:
+
+- Quá nhạy: nhận tiếng quạt/nhạc nền là speech.
+- Quá khắt khe: cắt mất giọng nhỏ hoặc người nói xa mic.
+
+---
+
+## 7. Implementation Playbook: VAD + Streaming Pipeline Skeleton
+
+Skeleton dưới đây minh họa cách tách audio frames bằng VAD và nối vào pipeline.
+
+```python
+import asyncio
+import collections
+from dataclasses import dataclass
+
+
+@dataclass
+class AudioFrame:
+    pcm_bytes: bytes
+    timestamp_ms: int
+    duration_ms: int
+
+
+class SimpleVAD:
+    def is_speech(self, frame: AudioFrame, sample_rate: int) -> bool:
+        # Replace with webrtcvad or neural VAD.
+        return max(frame.pcm_bytes, default=0) > 0
+
+
+async def vad_segments(frames, vad, sample_rate=16000, silence_ms=600):
+    buffer = []
+    silence = 0
+    in_speech = False
+
+    async for frame in frames:
+        speech = vad.is_speech(frame, sample_rate)
+
+        if speech:
+            in_speech = True
+            silence = 0
+            buffer.append(frame)
+        elif in_speech:
+            silence += frame.duration_ms
+            buffer.append(frame)
+            if silence >= silence_ms:
+                yield b"".join(f.pcm_bytes for f in buffer)
+                buffer = []
+                silence = 0
+                in_speech = False
+
+
+async def streaming_voice_agent(audio_frames):
+    vad = SimpleVAD()
+
+    async for utterance_pcm in vad_segments(audio_frames, vad):
+        # 1. Send utterance to STT, ideally streaming/partial.
+        transcript = await call_stt(utterance_pcm)
+
+        # 2. Stream LLM output sentence chunks.
+        async for text_chunk in call_llm_stream(transcript):
+            # 3. Stream TTS for each chunk and play/send audio.
+            async for audio_chunk in call_tts_stream(text_chunk):
+                await send_audio_to_client(audio_chunk)
+
+
+async def call_stt(pcm_bytes: bytes) -> str:
+    return "I need help with my order."
+
+
+async def call_llm_stream(transcript: str):
+    for chunk in ["Sure, ", "I can help with that. "]:
+        yield chunk
+
+
+async def call_tts_stream(text: str):
+    yield b"audio-bytes"
+
+
+async def send_audio_to_client(audio_chunk: bytes):
+    pass
+```
+
+Production cần thêm:
+
+- WebSocket backpressure.
+- Cancellation khi barge-in.
+- Audio resampling `44.1kHz -> 16kHz mono int16`.
+- Stage-level latency metrics.
+- Transcript confidence và fallback clarification.
+- Consent/retention controls cho audio.
+
+---
+
+## 8. Project Guide: Voice AI Assistant Full Pipeline (Phase 11 Hard)
+
+Official project Phase 11 hard:
+
+```text
+Voice AI Assistant Full Pipeline
+- Voice -> Whisper STT -> LLM -> TTS output
+- Add streaming audio and multilingual support
+- Include wake word or push-to-talk UX
+- Stack: Whisper, GPT-4, ElevenLabs TTS, FastAPI, React Native
+```
+
+MVP deliverables:
+
+1. Audio capture client:
+   - push-to-talk or wake word placeholder,
+   - stream PCM chunks to backend.
+2. Backend voice pipeline:
+   - VAD/turn detection,
+   - STT transcription,
+   - LLM response,
+   - TTS playback stream or generated audio URL.
+3. Latency report:
+   - VAD latency,
+   - STT time,
+   - LLM time-to-first-token,
+   - TTS time-to-first-audio,
+   - end-to-end p50/p95.
+4. Multilingual support:
+   - language detection or user-selected language,
+   - Vietnamese + English test cases.
+5. Safety/governance:
+   - consent notice,
+   - no voice cloning without explicit permission,
+   - transcript retention policy.
+
+Stretch goals:
+
+- Barge-in cancellation.
+- Speaker diarization for two-person conversation.
+- Streaming partial STT.
+- Tool calling for real customer support workflow.
+- Voice quality A/B tests.
+
+---
+
+## 9. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: VAD cắt câu quá sớm">
+**Triệu chứng:** Assistant trả lời khi user mới ngập ngừng hoặc chưa nói xong.
+
+**Nguyên nhân:** Silence threshold quá thấp hoặc VAD quá nhạy với pause tự nhiên.
+
+**Cách khắc phục:** Tăng silence threshold, dùng end-of-turn model, cho phép user barge-in và tune theo language/accent.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: Không xử lý âm thanh định dạng Raw PCM">
-Khi ghi âm từ trình duyệt web (Microphone) gửi qua WebSocket, âm thanh thường ở dạng thô (Raw PCM, Float32, 44.1kHz). Các mô hình AI đa số chỉ nhận `16kHz, Mono channel, Int16`. Quên chuyển đổi (Resampling & Downmixing) tại server sẽ khiến mô hình STT trả về một chuỗi ảo giác vô nghĩa.
+<Callout type="warning" title="Pitfall 2: STT hallucinate trên im lặng">
+**Triệu chứng:** Transcript xuất hiện câu không có trong audio.
+
+**Nguyên nhân:** Gửi segment im lặng/noise vào STT hoặc không kiểm speech probability.
+
+**Cách khắc phục:** VAD chặt hơn, energy threshold, no-speech probability check và bỏ segment quá ngắn.
 </Callout>
 
-### Checklist hệ thống Voice:
-- [ ] Tín hiệu âm thanh đầu vào đã được chuyển về chuẩn `16kHz, Mono` chưa?
-- [ ] VAD có được cấu hình để loại bỏ tiếng ồn nền (Background noise) thay vì nhận diện nhầm là giọng nói không?
-- [ ] Luồng Streaming LLM có được cấu hình sử dụng `yield` hoặc Server-Sent Events (SSE) để kết nối đồng bộ với khâu sinh âm thanh TTS chưa?
+<Callout type="warning" title="Pitfall 3: TTS làm UX chậm">
+**Triệu chứng:** LLM đã có text nhưng user vẫn chờ lâu mới nghe audio.
+
+**Nguyên nhân:** Đợi full answer rồi mới gọi TTS hoặc TTS không streaming.
+
+**Cách khắc phục:** Chunk theo câu/ngữ đoạn, streaming TTS, playback buffer nhỏ và parallelize generation.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Voice cloning abuse">
+**Triệu chứng:** User upload giọng người khác để tạo audio mạo danh.
+
+**Nguyên nhân:** Không có consent, identity verification, watermark hoặc policy restriction.
+
+**Cách khắc phục:** Cấm impersonation, yêu cầu consent, watermark/provenance, audit logs và human review cho cloning.
+</Callout>
+
+---
+
+## 10. Cost & Latency Unit Economics
+
+Voice cost phụ thuộc thời lượng và concurrency.
+
+| Cost driver | Ví dụ | Control |
+|---|---|---|
+| STT minutes | audio input duration | VAD bỏ silence, wake word |
+| LLM tokens | transcript + response | concise policy, caching context |
+| TTS characters/seconds | output length | response length control |
+| Streaming infra | WebSocket concurrency | autoscaling, backpressure |
+| Storage | audio recordings/transcripts | retention policy |
+| Human review | flagged calls | risk tiering |
+
+Latency formula intuition:
+
+```text
+perceived_latency = turn_detection_delay
+                  + time_to_partial_transcript
+                  + LLM_time_to_first_token
+                  + TTS_time_to_first_audio
+                  + playback_buffer
+```
+
+Production takeaway: VAD không chỉ tăng accuracy; nó giảm STT cost bằng cách không gửi silence và giảm latency bằng cách xác định turn boundary tốt hơn.
 
 ---
 
 ## Practice exercises
 
-1. **Phân tích Kiến trúc Whisper:** Giải thích tại sao Whisper lại cần một cơ chế Tokenizer riêng biệt thay vì dùng Tokenizer chung của mô hình GPT.
-2. **Kỹ thuật Streaming:** Viết một lược đồ trình tự (Sequence Diagram) mô tả luồng giao tiếp WebSocket giữa Frontend (React/JS), Backend (FastAPI) và 2 dịch vụ AI (Whisper STT, ElevenLabs TTS) cho bài toán Voice Chat.
-3. **Bài toán Tối ưu hóa:** Mô hình Whisper thường gặp hiện tượng "ảo giác im lặng" (Hallucinating on silence) — tự động sinh ra những câu phụ đề không có thật khi âm thanh đầu vào hoàn toàn im lặng. Hãy đề xuất một giải pháp ngăn chặn lỗi này dựa trên kiến thức về VAD.
+1. Thiết kế latency budget p50/p95 cho một voice assistant hỗ trợ khách hàng.
+2. Viết sequence diagram cho WebSocket audio stream từ mobile app đến backend và TTS stream quay lại.
+3. Đề xuất policy consent cho voice cloning trong app học ngoại ngữ.
+4. So sánh batch STT và streaming STT theo latency, cost và complexity.
+5. Thiết kế test set audio gồm noise, accent, silence, code-switching và barge-in cases.
 
 ---
 
 ## Knowledge check
 
-1. Vai trò của Spectrogram trong mô hình Whisper là gì?
-2. Kỹ thuật Voice Cloning (nhân bản giọng nói) hoạt động dựa trên vector nào?
-3. Kiến trúc nào giúp các nền tảng đàm thoại giọng nói đạt được độ trễ dưới 1 giây?
-4. Vocoder trong quy trình Text-to-Speech (TTS) làm nhiệm vụ gì?
-5. Nếu một hệ thống Voice AI liên tục ngắt lời người dùng khi họ đang suy nghĩ, bạn cần tinh chỉnh thông số kỹ thuật nào?
+1. VAD có vai trò gì trong voice assistant?
+2. Vì sao batch file upload không phù hợp cho real-time conversation?
+3. Barge-in là gì?
+4. Voice cloning dựa trên loại representation nào?
+5. Những cost bucket chính của voice AI là gì?
 
 ---
 
 ## Answer key
 
-1. Nó là hình thức chuyển đổi dữ liệu dạng sóng âm (1D waveform) thành dạng hình ảnh hai chiều (2D image), cho phép mô hình Transformer Encoder xử lý âm thanh giống như cách nó phân tích bức ảnh.
-2. Dựa trên Speaker Embedding Vector (Vector đặc trưng người nói), nó nén các thông tin về âm sắc, ngữ điệu và phong cách của giọng mẫu để làm điều kiện hướng dẫn mô hình sinh ra các từ mới theo cùng chất giọng.
-3. Kỹ thuật Pipelined Streaming kết hợp với WebSockets. Dữ liệu được băm nhỏ thành các chunk và các hệ thống STT -> LLM -> TTS chạy gối đầu lên nhau thay vì chờ từng tiến trình kết thúc hoàn toàn.
-4. Vocoder dịch ngược phổ âm thanh (Mel-Spectrogram - dạng ảnh 2D) được tạo ra bởi Acoustic Model thành các dải tín hiệu sóng âm (1D waveform) mà loa máy tính có thể đọc và phát ra thành tiếng người.
-5. Cần tinh chỉnh bộ dò hoạt động giọng nói (Voice Activity Detection - VAD), cụ thể là tăng thời gian Silence Threshold (ví dụ từ 0.3 giây lên 1.0 giây) để hệ thống chờ đợi lâu hơn trước khi cắt câu.
-
----
-
-## Mini-project: Voice Activity Router
-
-**Nhiệm vụ:** Thiết lập một tập lệnh Python để xử lý một file âm thanh hội thoại dài 5 phút chứa nhiều đoạn im lặng.
-
-**Yêu cầu đầu ra:**
-- Dùng thư viện `webrtcvad` để cắt file âm thanh thành các đoạn nhỏ chỉ chứa giọng nói người (bỏ qua đoạn im lặng).
-- Tự động gọi API OpenAI Whisper để phiên âm (transcribe) từng đoạn một.
-- Xuất ra một file `transcript.txt` chứa nội dung phiên âm hoàn chỉnh với cấu trúc thời gian mô phỏng.
+1. VAD phát hiện đoạn có giọng nói và ranh giới lượt nói, giúp giảm silence, giảm STT cost và cải thiện turn-taking.
+2. Vì phải đợi ghi âm xong, STT xong, LLM xong, TTS xong rồi mới phát, tạo latency nhiều giây.
+3. Là khả năng user ngắt lời assistant đang nói, khiến hệ thống dừng playback/generation hiện tại và xử lý lượt nói mới.
+4. Thường dựa trên speaker embedding hoặc voice embedding nén đặc trưng âm sắc/ngữ điệu của người nói.
+5. STT minutes, LLM tokens, TTS characters/audio seconds, streaming infrastructure, storage/retention và human review/safety operations.
 
 ---
 
 ## Điểm cần nhớ
 
-- Xử lý âm thanh trong AI thường bắt đầu bằng bước chuyển đổi phổ (Spectrogram) để đưa về bài toán thị giác máy tính hoặc chuỗi Sequence.
-- Đàm thoại AI thời gian thực là nghệ thuật của Pipeline Streaming. Càng chia nhỏ tác vụ và chạy đồng thời, độ trễ trải nghiệm càng tiệm cận con người.
-- Voice Cloning mang lại quyền năng lớn cho truyền thông đa phương tiện nhưng mở ra những thách thức khổng lồ về xác thực danh tính và Deepfake Audio.
-
----
+- Audio AI production là streaming pipeline, không phải chuỗi file upload theo batch.
+- VAD và end-of-turn detection quyết định cả latency, cost và UX.
+- STT cần xử lý noise, silence, timestamps, language và confidence.
+- TTS cần tối ưu time-to-first-audio, naturalness và stability.
+- Voice cloning là biometric/safety risk, cần consent, watermark/provenance và audit.
+- Đo latency theo từng stage để biết bottleneck thật nằm ở đâu.
 
 ## Next chapter bridge
 
-Cả âm thanh và hình ảnh tĩnh đều đã bị chinh phục. Cột mốc cuối cùng và cũng là thử thách tính toán tốn kém nhất của Generative AI chính là sự chuyển động: sự thay đổi hình ảnh liên tục theo trục thời gian. Chương tiếp theo và cũng là bài kết thúc Phase 11: **Video AI** — đi sâu vào các cỗ máy ma thuật như Sora, Runway Gen-3, và cuộc cách mạng của Diffusion Transformers (DiT).
+Bạn đã xử lý âm thanh theo thời gian. Bước cuối của Phase 11 là video: nơi hình ảnh, âm thanh và thời gian kết hợp thành workload đắt nhất. Chương tiếp theo: **Video AI** — spatiotemporal patches, DiT, video understanding, keyframe sampling, synthetic video safety và Phase 11 wrap-up.

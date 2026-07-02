@@ -1,0 +1,395 @@
+Capstone là nơi toàn bộ roadmap hội tụ. Bạn không còn xây một chatbot demo gọi thẳng OpenAI API, mà xây một **nền tảng AI production đa tenant** có thể phục vụ nhiều sản phẩm: PrinceSinghAI, PrinceSinghDev, AskAI, RoadmapAI, CodeLLM và các workflow AI tương lai.
+
+Mục tiêu của Capstone là chứng minh bạn có thể đi từ kỹ năng rời rạc đến một hệ thống hoàn chỉnh: gateway, routing, fallback, RAG, agents, MCP tools, observability, cost tracking, safety gateway, privacy controls, red-team regression, audit logs và deployment pipeline.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Chatbot demo viral và biến thành platform outage">
+**Bối cảnh:** Một developer xây chatbot nội bộ rất nhanh: React frontend gọi FastAPI, FastAPI gọi OpenAI, conversation lưu trong memory tạm. Demo thành công, team quyết định dùng luôn cho nhiều sản phẩm: support bot, code assistant, RAG docs, agent research.
+
+**Sự cố:** Khi traffic tăng, hệ thống bắt đầu vỡ theo nhiều hướng cùng lúc:
+
+1. Không có tenant isolation, user A vô tình thấy document của tenant B trong RAG.
+2. Không có router/fallback, khi OpenAI timeout toàn bộ sản phẩm ngừng hoạt động.
+3. Không có cost tracking, một tenant free-tier đốt 2,000 USD trong một ngày.
+4. Không có prompt/version registry, team không biết release nào làm hallucination tăng.
+5. Không có safety gateway, fallback model bypass output moderation.
+6. Không có trace/audit, incident không thể debug từ request đến model, prompt, chunks và tool calls.
+
+**Hậu quả:** Một chatbot demo trở thành liability production. Team phải dừng rollout và thiết kế lại từ đầu như một AI platform thật sự.
+</Callout>
+
+Bài học rút ra: Production AI platform không phải “chat endpoint + model API”. Nó là control plane quản lý identity, tenants, models, prompts, tools, data, cost, safety và observability.
+
+---
+
+## 2. Architecture Blueprint (Capstone Reference Architecture)
+
+Capstone platform có thể hình dung như sau:
+
+```text
+[ Product Surfaces ]
+  - PrinceSinghAI
+  - PrinceSinghDev
+  - AskAI
+  - RoadmapAI
+  - CodeLLM
+          │
+          ▼
+[ API Gateway ]
+  - auth / tenant context
+  - rate limits / quotas
+  - request validation
+  - streaming proxy
+  - idempotency keys
+          │
+          ▼
+[ Safety & Privacy Gateway ]
+  - PII masking
+  - prompt injection checks
+  - high-risk domain routing
+  - input moderation
+          │
+          ▼
+[ AI Control Plane ]
+  ├── Prompt Registry
+  ├── Model Registry
+  ├── Multi-LLM Router
+  ├── Fallback Manager
+  ├── Cost Tracker
+  ├── Cache Manager
+  ├── Experiment Manager
+  └── Tenant Policy Engine
+          │
+          ├─────────────┬──────────────┬──────────────┐
+          ▼             ▼              ▼              ▼
+[ LLM Providers ]   [ RAG Engine ]  [ Agent Graph ] [ MCP Tools ]
+ OpenAI/Claude       pgvector/      LangGraph        DB/API/Web/File
+ Gemini/Mistral      Qdrant/Chroma  state machine    tool servers
+          │             │              │              │
+          └─────────────┴──────────────┴──────────────┘
+                          ▼
+[ Output Safety / Validation / Audit ]
+  - output moderation
+  - schema validation
+  - citation/evidence checks
+  - tool action review
+  - audit events
+                          │
+                          ▼
+[ Observability & Admin ]
+  - Langfuse traces
+  - Prometheus metrics
+  - Grafana dashboards
+  - cost analytics
+  - safety incidents
+  - admin controls
+```
+
+Kiến trúc này tách rõ **data plane** (request/response/model/tool execution) và **control plane** (policies, routing, cost, safety, observability). Đây là khác biệt giữa demo và platform.
+
+---
+
+## 3. Why this Capstone exists
+
+Capstone buộc bạn dùng lại gần như mọi kỹ năng đã học:
+
+| Phase | Kỹ năng được dùng trong Capstone |
+|---|---|
+| Phase 1 | Python sạch, async, error handling, API workflows |
+| Phase 6 | LLM APIs, streaming, secure provider integration |
+| Phase 7 | Multi-LLM routing, fallback, gateway, MCP thinking |
+| Phase 8 | RAG pipeline, chunking, embeddings, vector DBs |
+| Phase 9 | Agents, tool use, LangGraph-style orchestration |
+| Phase 10 | Prompt/version/fine-tuning awareness, eval datasets |
+| Phase 12 | MLOps, monitoring, CI/CD, deployment, security |
+| Phase 13 | System design, caching, async architecture, cost-aware design |
+| Phase 14 | PostgreSQL, pgvector, Redis, schema for AI apps |
+| Phase 15 | Inference efficiency, SLMs, serving cost economics |
+| Phase 16 | Reward/preference/alignment thinking |
+| Phase 17 | Safety, privacy, fairness, transparency, governance |
+
+<Callout type="info" title="Capstone là platform, không phải feature">
+Một feature AI trả lời một use case. Một platform AI cung cấp shared capabilities để nhiều sản phẩm dùng lại: auth, routing, RAG, tools, safety, cost, observability và deployment.
+</Callout>
+
+---
+
+## 4. Product Vision
+
+Platform này nên là nền tảng cho nhiều product surfaces:
+
+| Product surface | Use case | Platform capability cần dùng |
+|---|---|---|
+| PrinceSinghAI | General assistant, research, chat | Gateway, router, memory, safety |
+| PrinceSinghDev | Coding assistant | Code model routing, repo tools, evals |
+| AskAI | Agentic research assistant | RAG, agents, web tools, citations |
+| RoadmapAI | Learning assistant trên roadmap | RAG over curriculum, user progress memory |
+| CodeLLM | Code-specialized workflows | SLM/code model, sandboxed tools, CI test runner |
+| Internal Admin | Operations visibility | cost dashboard, traces, incidents, experiments |
+
+Điểm quan trọng: các sản phẩm này không nên tự implement provider calls, safety checks hoặc cost tracking riêng. Chúng gọi platform API chung.
+
+---
+
+## 5. System Scope
+
+### In scope cho Capstone
+
+- Multi-tenant user management.
+- API Gateway cho chat, RAG, agents và admin.
+- Streaming responses qua SSE.
+- Multi-LLM provider abstraction.
+- Intelligent model routing và fallback.
+- RAG ingestion/retrieval đa document types.
+- Conversation memory bằng Redis.
+- Prompt template/version registry.
+- Agent orchestration bằng LangGraph-style state machine.
+- MCP tool connectivity.
+- Cost tracking per tenant/user/feature/model.
+- Usage limits và budget controls.
+- Safety gateway: PII, prompt injection, moderation, output validation.
+- Red-team regression suite.
+- Audit logging và incident response artifacts.
+- Admin dashboard với observability.
+- Docker Compose local và Kubernetes deploy path.
+
+### Out of scope cho MVP
+
+- Training foundation model from scratch.
+- Full payment processor integration.
+- Complex marketplace/plugin ecosystem.
+- Large-scale GPU self-hosting nếu API providers đủ cho MVP.
+- Fully automated high-stakes decisions không có human review.
+
+<Callout type="tip" title="Capstone MVP nên nhỏ nhưng đúng boundary">
+Đừng cố build mọi tính năng hoàn hảo. Hãy build một vertical slice production-grade: tenant → chat/RAG → routing → safety → cost → trace → admin dashboard → deploy.
+</Callout>
+
+---
+
+## 6. Non-Functional Requirements
+
+Capstone được đánh giá mạnh ở non-functional requirements, vì đó là điểm demo thường thiếu.
+
+| Category | Requirement | Example acceptance criteria |
+|---|---|---|
+| Reliability | fallback, retries, circuit breakers | Provider outage không làm toàn bộ app sập |
+| Latency | streaming, async, cache | TTFT p95 dưới target cho chat thường |
+| Cost | routing, budgets, usage tracking | Mỗi request có cost estimate và actual usage log |
+| Security | auth, tenant isolation, key protection | User không thể đọc document tenant khác |
+| Privacy | PII masking, retention, erasure path | PII không vào provider/log nếu policy cấm |
+| Governance | audit logs, policy versions, incident workflow | Bad response truy vết được model/prompt/chunks/tool calls |
+| Observability | traces, metrics, dashboards | Có Langfuse trace và Grafana metrics cho request |
+| Maintainability | modular services, ADRs, typed contracts | Thêm provider mới không sửa toàn bộ app |
+| Safety | red-team regression, moderation | Critical jailbreak tests fail build nếu regression |
+
+---
+
+## 7. Milestone Plan
+
+Build Capstone theo milestone, không build random features.
+
+```text
+M0: Design & repo skeleton
+M1: API Gateway + auth + tenant context
+M2: Provider adapters + streaming chat
+M3: Model registry + router + fallback + cost tracking
+M4: RAG ingestion + retrieval + citations
+M5: Conversation memory + prompt registry
+M6: Agent orchestrator + MCP tool layer
+M7: Safety/privacy/audit layer
+M8: Admin dashboard + observability
+M9: CI/CD + Docker/K8s deployment
+M10: Portfolio demo + production readiness review
+```
+
+Mỗi milestone nên kết thúc bằng:
+
+- Working demo.
+- Tests.
+- Trace/log visibility.
+- README update.
+- Known limitations.
+- Next milestone issues.
+
+---
+
+## 8. Capstone Deliverables
+
+Final deliverables nên gồm:
+
+| Deliverable | Nội dung |
+|---|---|
+| Design doc | System goals, constraints, architecture, NFRs |
+| Architecture diagram | Component + data flow + trust boundaries |
+| ADRs | Vì sao chọn FastAPI, LiteLLM, pgvector, LangGraph... |
+| API contracts | Request/response schemas cho chat/RAG/agents/admin |
+| DB schema | Tenants, users, model calls, docs, chunks, prompts, audit logs |
+| Local dev | Docker Compose chạy backend/frontend/postgres/redis/vector store |
+| Deployment | Kubernetes manifests hoặc Helm chart cơ bản |
+| Observability | Langfuse traces, Prometheus metrics, Grafana dashboard |
+| Safety suite | Prompt injection, PII leak, output moderation regression tests |
+| Demo script | Step-by-step final presentation |
+| Runbooks | Incident response, rollback, provider outage, cost spike |
+| Portfolio README | Screenshots, diagrams, setup, architecture, lessons learned |
+
+---
+
+## 9. Implementation Playbook: Design Doc Skeleton
+
+Bắt đầu Capstone bằng design doc, không bắt đầu bằng code.
+
+```text
+# Multi-LLM AI Platform Design Doc
+
+## 1. Product Goal
+Build a multi-tenant AI platform that powers multiple AI products with shared routing, RAG, agents, observability, cost and safety controls.
+
+## 2. Users
+- End users
+- Tenant admins
+- Platform admins
+- Developers integrating products
+
+## 3. Core Use Cases
+- Streaming chat
+- RAG Q&A with citations
+- Agent workflow execution
+- Cost and usage analytics
+- Prompt/model experiments
+- Safety incident review
+
+## 4. Non-Functional Requirements
+- Reliability:
+- Latency:
+- Security:
+- Privacy:
+- Cost:
+- Observability:
+- Governance:
+
+## 5. Architecture
+- Component diagram
+- Data flow
+- Trust boundaries
+
+## 6. Data Model
+- Tables
+- Retention
+- Tenant isolation
+
+## 7. Risks
+- Technical risks
+- Safety/privacy risks
+- Cost risks
+
+## 8. Milestones
+- M0 ... M10
+
+## 9. Open Questions
+- ...
+```
+
+<Callout type="warning" title="Đừng code Capstone trước khi có boundaries">
+Nếu bạn chưa xác định component ownership, tenant isolation, provider abstraction và safety gateway boundary, code sẽ nhanh chóng thành một monolith khó debug.
+</Callout>
+
+---
+
+## 10. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="danger" title="Pitfall 1: Xây chatbot rồi gọi là platform">
+**Triệu chứng:** Có chat UI đẹp nhưng không có tenants, router, RAG, cost tracking, audit logs hoặc safety controls.
+
+**Nguyên nhân:** Team tối ưu demo flow thay vì platform capabilities.
+
+**Cách khắc phục:** Build vertical slice platform: auth → gateway → routing → safety → trace → admin visibility trước khi mở rộng UI.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Không có tenant context xuyên suốt">
+**Triệu chứng:** Một số service quên filter `tenant_id`, dẫn đến data leak hoặc cost attribution sai.
+
+**Nguyên nhân:** Tenant context không phải dependency bắt buộc ở service layer.
+
+**Cách khắc phục:** Tenant context phải được resolve ở gateway và truyền typed qua mọi service. DB queries, cache keys, vector filters và audit logs đều phải include tenant.
+</Callout>
+
+<Callout type="warning" title="Pitfall 3: Observability thêm sau cùng">
+**Triệu chứng:** Khi có bad response, không biết model nào, prompt nào, chunks nào hoặc safety scores nào liên quan.
+
+**Nguyên nhân:** Tracing/logging không được thiết kế từ đầu.
+
+**Cách khắc phục:** Mọi request cần trace ID từ ngày đầu. Log model call, prompt version, cost, latency, retrieved sources, tool calls và safety decisions.
+</Callout>
+
+<Callout type="danger" title="Pitfall 4: Safety là middleware cuối cùng">
+**Triệu chứng:** Primary path có guardrails, nhưng agent tools hoặc fallback provider bypass safety.
+
+**Nguyên nhân:** Safety không nằm ở gateway/control plane chung.
+
+**Cách khắc phục:** Safety gateway độc lập trước/sau mọi provider, RAG, agent và fallback. Tool authorization nằm server-side.
+</Callout>
+
+---
+
+## 11. Platform Unit Economics
+
+| Đòn bẩy | Tác động | Metric cần theo dõi |
+|---|---|---|
+| Model routing | Giảm cost, tăng reliability | cost/request, fallback rate, quality score |
+| Streaming | Tăng UX perceived speed | TTFT, stream interruption rate |
+| Cache | Giảm repeated calls | cache hit rate, stale response rate |
+| RAG citations | Tăng trust, giảm hallucination | faithfulness, citation accuracy |
+| Safety gateway | Giảm incident risk | block rate, false refusal rate, critical failures |
+| Admin dashboard | Giảm debug time | MTTR, trace completeness |
+| CI red-team tests | Giảm regression | safety pass rate per release |
+
+Capstone thành công nếu bạn chứng minh được: platform không chỉ trả lời được, mà còn **đo được, kiểm soát được và vận hành được**.
+
+---
+
+## Practice exercises
+
+1. Vẽ architecture diagram cho platform gồm gateway, router, RAG, agents, safety và observability.
+2. Viết 5 non-functional requirements có acceptance criteria đo được.
+3. Chọn một product surface như CodeLLM và liệt kê platform capabilities nó cần.
+4. Viết 3 ADRs bạn sẽ cần trước khi code.
+5. Thiết kế milestone M0–M3 cho team 2 người trong 2 tuần.
+6. Liệt kê 5 risks lớn nhất của Capstone và mitigation.
+
+---
+
+## Knowledge check
+
+1. Vì sao Capstone nên dùng `content/phase-18` trong repo này?
+2. Control plane trong AI platform quản lý những gì?
+3. Vì sao tenant context phải xuất hiện trong cache keys và vector filters?
+4. Một Capstone deliverable production-grade khác chatbot demo ở điểm nào?
+5. Safety gateway nên nằm ở đâu trong architecture?
+
+---
+
+## Answer key
+
+1. Vì `lib/content.ts` load theo `content/phase-${phaseNumber}/${topicId}.mdx`, và Capstone có `number: 18`.
+2. Policies, routing, model registry, prompt versions, cost tracking, safety, experiments và observability controls.
+3. Nếu thiếu tenant context, cache/vector retrieval có thể trả dữ liệu cross-tenant hoặc tính cost sai.
+4. Có NFRs, multi-tenancy, routing/fallback, RAG, observability, cost tracking, safety, audit, deployment và runbooks.
+5. Ở gateway/control plane chung, trước và sau mọi model/RAG/agent/fallback path.
+
+---
+
+## Điểm cần nhớ
+
+- Capstone là production AI platform, không phải chatbot demo.
+- Platform phải có control plane: routing, prompts, models, cost, safety, tenants và observability.
+- Tenant isolation, auditability và safety phải thiết kế từ đầu.
+- Mỗi milestone nên tạo working vertical slice có tests và traceability.
+- Deliverables quan trọng không chỉ là code: design doc, ADRs, diagrams, runbooks, dashboards và demo script cũng là sản phẩm.
+
+## Next chapter bridge
+
+Bạn đã có overview và scope của Capstone. Bước tiếp theo là bóc tách từng component, xác định ownership boundary, data flow, acceptance criteria và failure modes. Chương tiếp theo: **Core Components** — nơi chúng ta thiết kế API Gateway, Multi-LLM Router, RAG Engine, Agent Orchestrator, MCP Layer, Safety/Governance, Observability và Admin Dashboard.

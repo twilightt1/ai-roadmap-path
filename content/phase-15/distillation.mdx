@@ -1,0 +1,433 @@
+Quantization nén cách model biểu diễn số. SLM chọn model nhỏ hơn ngay từ đầu. Nhưng còn một kỹ thuật thứ ba: nén **hành vi** của model lớn sang model nhỏ. Đó là Knowledge Distillation.
+
+Distillation giúp bạn dùng một teacher model mạnh để tạo tín hiệu huấn luyện cho một student model nhỏ hơn. Nếu làm đúng, student có thể đạt chất lượng rất tốt trên task hẹp với latency và chi phí thấp hơn nhiều so với teacher.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Teacher model thắng benchmark nhưng thua production economics">
+**Bối cảnh:** Một công ty fintech dùng frontier LLM để phân loại giao dịch đáng ngờ và sinh giải thích ngắn cho analyst. Teacher model có accuracy cao và giải thích rất tốt.
+
+**Sự cố:** Khi triển khai realtime, mỗi giao dịch phải được đánh giá trong dưới 300ms. Frontier API có latency p95 hơn 2 giây và chi phí tăng tuyến tính theo volume giao dịch.
+
+1. Rule-based system quá cứng, bỏ sót pattern mới.
+2. Frontier LLM quá chậm và đắt cho mọi transaction.
+3. SLM chưa fine-tune trả lời không ổn định.
+
+**Hậu quả:** Team có capability tốt trong demo nhưng không thể đặt vào hot path production. Họ cần một student model nhỏ học hành vi của teacher trên domain giao dịch.
+</Callout>
+
+Bài học rút ra: Distillation không chỉ là bài toán nghiên cứu. Nó là cách chuyển “trí tuệ đắt tiền” của teacher thành một model nhỏ, nhanh và deploy được.
+
+---
+
+## 2. Architecture Blueprint (Teacher → Student Pipeline)
+
+Một pipeline distillation production có thể trông như sau:
+
+```text
+[ Production / Synthetic Prompts ]
+       │
+       ▼
+[ Teacher Model lớn ]
+  - frontier LLM
+  - domain expert model
+  - ensemble hoặc human-reviewed outputs
+       │
+       ▼
+[ Distillation Dataset ]
+  - inputs
+  - teacher outputs
+  - soft labels / logits nếu có
+  - rationales / explanations
+  - quality filters
+       │
+       ▼
+[ Student Model nhỏ ]
+  - train/fine-tune
+  - optimize for task latency
+       │
+       ▼
+[ Evaluation ]
+  - correctness vs ground truth
+  - agreement with teacher
+  - latency/cost
+  - failure modes
+       │
+       ▼
+[ Production Deployment ]
+  - student handles common cases
+  - teacher/fallback handles hard cases
+```
+
+Điểm mấu chốt: teacher output chỉ là nguyên liệu. Bạn vẫn cần filtering, evaluation và fallback.
+
+---
+
+## 3. Teacher-Student Training
+
+Trong distillation, teacher là model lớn/mạnh hơn, student là model nhỏ hơn cần học hành vi.
+
+```text
+Input x:
+  "Phân loại ticket: Tôi bị trừ phí hai lần"
+
+Teacher y_teacher:
+  {"intent": "billing_refund", "urgency": "medium", "reason": "double charge"}
+
+Student learns:
+  x -> y_teacher
+```
+
+Teacher có thể là:
+
+- Frontier LLM API.
+- Model lớn self-hosted.
+- Ensemble nhiều model.
+- Human-reviewed labels.
+- Rule + model hybrid trong domain hẹp.
+
+Student có thể là:
+
+- Classifier nhỏ.
+- SLM 1B–7B.
+- Encoder model cho classification/extraction.
+- Domain-specific assistant fine-tuned.
+
+<Callout type="tip" title="Teacher không cần chạy production forever">
+Một pattern tiết kiệm là dùng teacher offline để tạo dữ liệu, rồi deploy student online. Teacher chỉ còn dùng cho refresh dataset, hard-case escalation hoặc shadow evaluation.
+</Callout>
+
+---
+
+## 4. Hard Labels vs Soft Labels
+
+Hard label là câu trả lời cuối cùng:
+
+```text
+intent = "billing_refund"
+```
+
+Soft label là phân phối xác suất hoặc logits:
+
+```text
+billing_refund: 0.72
+billing_question: 0.18
+bug_report: 0.06
+other: 0.04
+```
+
+Soft labels chứa nhiều thông tin hơn vì chúng cho student biết teacher phân vân giữa các lớp nào. Ví dụ `billing_refund` và `billing_question` gần nhau hơn `abuse`.
+
+| Label type | Ưu điểm | Nhược điểm |
+|---|---|---|
+| Hard labels | Dễ lưu, dễ train, phù hợp LLM output text | Mất thông tin về uncertainty |
+| Soft labels/logits | Truyền knowledge giàu hơn | Không phải API nào trả logits, storage/training phức tạp hơn |
+| Rationales | Giúp student học cách giải thích | Có thể chứa hallucination hoặc thông tin nhạy cảm |
+
+Với LLM API, bạn thường không có logits đầy đủ. Khi đó distillation thường dùng teacher-generated outputs + rationales + quality filtering.
+
+---
+
+## 5. Distillation Objectives
+
+Ở mức khái niệm, student học để gần teacher.
+
+### Cross-entropy với hard labels
+
+Dùng khi teacher/human cung cấp nhãn đúng.
+
+```text
+Loss = CE(student_prediction, hard_label)
+```
+
+### KL divergence với soft labels
+
+Dùng khi teacher cung cấp phân phối xác suất.
+
+```text
+Loss = KL(teacher_distribution || student_distribution)
+```
+
+KL divergence đo student distribution lệch khỏi teacher distribution bao nhiêu. Đây là cầu nối với Information Theory từ Phase 2.
+
+### Logit matching
+
+Student cố gắng match logits của teacher trước softmax. Điều này hữu ích khi bạn có quyền truy cập logits.
+
+### Intermediate layer distillation
+
+Student không chỉ match output cuối, mà còn match hidden states/attention patterns ở một số layer. Kỹ thuật này phổ biến hơn khi bạn kiểm soát cả teacher và student architecture.
+
+<Callout type="info" title="Distillation cho LLM thường thực dụng hơn công thức">
+Trong nhiều dự án AI engineering, bạn không có logits hoặc hidden states từ frontier API. Workflow thực tế thường là: dùng teacher sinh dữ liệu chất lượng cao, lọc kỹ, fine-tune student và đánh giá bằng production metrics.
+</Callout>
+
+---
+
+## 6. Examples: DistilBERT, TinyLlama và Domain Assistants
+
+### DistilBERT
+
+DistilBERT là ví dụ kinh điển: một phiên bản nhỏ hơn của BERT học từ BERT lớn để giữ phần lớn chất lượng với kích thước và latency thấp hơn.
+
+Ý tưởng chính:
+
+- Student ít layer hơn.
+- Học từ output distribution và hidden representations.
+- Phù hợp cho NLP classification/extraction truyền thống.
+
+### TinyLlama
+
+TinyLlama đại diện cho xu hướng model nhỏ nhưng được train/tối ưu để hữu dụng trong nhiều tác vụ. Dù không phải mọi “tiny model” đều là kết quả distillation thuần, nó minh họa mục tiêu: capability hữu dụng trong footprint nhỏ.
+
+### Domain-specific distilled assistant
+
+Ví dụ production:
+
+```text
+Teacher: GPT-4-class model sinh output chuẩn cho 100k tickets.
+Student: 3B instruct model fine-tuned trên tickets + teacher answers.
+Runtime: Student xử lý 85% tickets; teacher xử lý hard cases.
+```
+
+Kết quả mong muốn:
+
+- Latency giảm.
+- Cost/request giảm.
+- Dữ liệu nhạy cảm ít rời hệ thống hơn.
+- Output ổn định hơn trong domain hẹp.
+
+---
+
+## 7. Practical AI Engineering Use Cases
+
+Distillation hữu ích nhất khi task lặp lại, volume cao và có tiêu chí đánh giá rõ.
+
+| Use case | Teacher làm gì | Student deploy để làm gì |
+|---|---|---|
+| Router model | Gán route/model/provider tối ưu | Quyết định model rẻ/đắt trong realtime |
+| Classifier | Tạo label + rationale | Phân loại nhanh, rẻ |
+| Extractor | Sinh JSON chuẩn từ documents | Trích xuất field ổn định |
+| Support bot hẹp | Trả lời câu hỏi domain | Chatbot nội bộ/local |
+| Safety filter | Đánh giá policy violation | Guardrail latency thấp |
+| Code assistant hẹp | Sinh completion theo codebase | Local/private autocomplete |
+
+Distillation không phù hợp khi:
+
+- Task thay đổi liên tục và không có data ổn định.
+- Teacher thường xuyên hallucinate nhưng không được lọc.
+- Chất lượng cần general reasoning vượt khả năng student.
+- Không có eval set để biết student học đúng hay chỉ bắt chước bề mặt.
+
+---
+
+## 8. Distillation Pipeline
+
+Một pipeline thực dụng:
+
+```text
+1. Collect inputs
+   - production logs đã ẩn danh
+   - synthetic edge cases
+   - human-curated prompts
+
+2. Generate teacher outputs
+   - temperature thấp cho consistency
+   - structured output nếu task có schema
+   - lưu prompt version/model config
+
+3. Filter and validate
+   - JSON schema validation
+   - rule checks
+   - human review sample
+   - remove hallucinated/unsafe outputs
+
+4. Train student
+   - supervised fine-tuning
+   - classification head hoặc instruction tuning
+   - cân bằng class/domain
+
+5. Evaluate
+   - ground truth correctness
+   - teacher agreement
+   - latency/cost
+   - hard-case failure analysis
+
+6. Deploy hybrid
+   - student first
+   - confidence threshold
+   - teacher fallback
+   - shadow evaluation
+```
+
+<Callout type="warning" title="Dữ liệu teacher phải versioned">
+Nếu bạn không lưu teacher model, prompt version, temperature và generation config, bạn sẽ không reproduce được distillation dataset. Hãy dùng bài học Phase 14: prompt/data provenance là bắt buộc.
+</Callout>
+
+---
+
+## 9. Implementation Playbook (Thực thi)
+
+Ví dụ dưới đây minh họa bước tạo teacher labels cho task intent classification. Trong production, bạn sẽ thêm retry, rate limit, schema validation và data governance.
+
+```python
+import json
+from openai import OpenAI
+
+client = OpenAI()
+
+LABELS = ["billing", "bug", "refund", "abuse", "feature_request", "other"]
+
+SYSTEM_PROMPT = """
+Bạn là hệ thống gán nhãn ticket support.
+Chỉ trả về JSON hợp lệ với schema:
+{
+  "label": one of billing|bug|refund|abuse|feature_request|other,
+  "confidence": number between 0 and 1,
+  "rationale": short Vietnamese explanation
+}
+"""
+
+
+def teacher_label(ticket_text: str) -> dict:
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": ticket_text},
+        ],
+        temperature=0.0,
+        response_format={"type": "json_object"},
+    )
+    data = json.loads(response.choices[0].message.content)
+
+    if data["label"] not in LABELS:
+        raise ValueError(f"Invalid label: {data['label']}")
+    if not (0 <= float(data["confidence"]) <= 1):
+        raise ValueError("Invalid confidence")
+
+    return data
+
+
+examples = [
+    "Tôi bị trừ tiền hai lần trong tháng này, vui lòng kiểm tra.",
+    "Ứng dụng bị crash khi tôi upload file PDF lớn hơn 20MB.",
+]
+
+for text in examples:
+    label = teacher_label(text)
+    record = {
+        "input": text,
+        "teacher_model": "gpt-4o",
+        "prompt_version": "support-intent-v3",
+        "teacher_output": label,
+    }
+    print(json.dumps(record, ensure_ascii=False))
+```
+
+Sau đó student có thể được train theo supervised fine-tuning hoặc classification pipeline. Điều quan trọng là mỗi record có provenance: teacher model, prompt version, config và timestamp.
+
+---
+
+## 10. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="danger" title="Pitfall 1: Student học cả hallucination của teacher">
+**Triệu chứng:** Student trả lời tự tin nhưng sai giống các lỗi hiếm của teacher.
+
+**Nguyên nhân:** Teacher outputs được dùng trực tiếp làm ground truth mà không lọc/human review.
+
+**Cách khắc phục:** Validate bằng rules/schema, review sample theo class, thêm ground truth thật, và loại các teacher answers có confidence thấp hoặc không kiểm chứng được.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Dataset quá hẹp">
+**Triệu chứng:** Student rất tốt trên eval nội bộ nhưng fail khi user hỏi khác wording.
+
+**Nguyên nhân:** Distillation dataset chỉ chứa happy path, thiếu edge cases, adversarial inputs, multilingual/noisy text.
+
+**Cách khắc phục:** Kết hợp production logs, synthetic hard cases, data augmentation và continuous eval từ traffic mới.
+</Callout>
+
+<Callout type="warning" title="Pitfall 3: Chỉ đo agreement với teacher">
+**Triệu chứng:** Student agree 95% với teacher nhưng vẫn sai theo ground truth.
+
+**Nguyên nhân:** Teacher không hoàn hảo. Agreement cao chỉ cho thấy student bắt chước teacher, không đảm bảo đúng.
+
+**Cách khắc phục:** Đánh giá trên ground truth/human labels, business metrics và failure cost. Teacher agreement chỉ là một metric phụ.
+</Callout>
+
+<Callout type="danger" title="Pitfall 4: Legal/license issues với synthetic data">
+**Triệu chứng:** Dataset distillation bị chặn bởi legal trước production.
+
+**Nguyên nhân:** Điều khoản provider/model không cho phép dùng output để train model cạnh tranh hoặc redistributable artifact.
+
+**Cách khắc phục:** Kiểm tra terms trước khi generate dữ liệu. Lưu nguồn dữ liệu, provider, license và hạn chế sử dụng trong dataset card/model card.
+</Callout>
+
+---
+
+## 11. Cost & Performance Unit Economics
+
+| Thành phần | Chi phí | Lợi ích |
+|---|---|---|
+| Teacher generation | Tốn API/GPU offline | Tạo dữ liệu chất lượng cao cho nhiều lần train |
+| Filtering/human review | Tốn thời gian/domain expert | Giảm student học sai |
+| Student training | Tốn GPU training/fine-tuning | Chi phí một lần hoặc định kỳ |
+| Student serving | Rẻ/nhanh hơn teacher | Tiết kiệm lớn ở volume cao |
+| Teacher fallback | Vẫn tốn cost cho hard cases | Bảo vệ quality và SLA |
+
+Công thức tư duy:
+
+```text
+Total saving = (teacher_cost_per_request - student_cost_per_request) × student_handled_requests
+               - teacher_data_generation_cost
+               - training_and_eval_cost
+               - fallback_cost
+```
+
+Distillation đáng làm khi request volume đủ lớn, task ổn định, và student xử lý được phần lớn traffic mà không làm giảm outcome.
+
+---
+
+## Practice exercises
+
+1. Viết pseudo-code Python (HuggingFace) để train một student 1.3B từ teacher 7B cho task classification, dùng teacher-generated outputs (logits) và KL divergence loss.
+2. Giải thích vì sao soft labels (logits) truyền nhiều thông tin hơn hard labels (argmax), và vì sao với LLM API thường dùng teacher outputs dạng text.
+3. Thiết kế một distillation pipeline cho support automation: 3 bước (data collection, filtering, training), và 1 metric để đo quality.
+4. So sánh distillation vs quantization: 2 điểm giống nhau, 2 điểm khác nhau về mục tiêu, và 1 use case khi nào kết hợp.
+5. Một student model sau distillation cho 80% accuracy, teacher 92%. Đề xuất 3 bước để cải thiện quality và 1 cách fallback cho production.
+
+---
+
+## Knowledge check
+
+1. Distillation là gì và khác biệt với quantization thế nào?
+2. Vì sao soft labels (logits) truyền nhiều thông tin hơn hard labels?
+3. Vì sao teacher-generated outputs (text) cần quality filtering trước khi train student?
+4. Production pattern student-first + confidence threshold + teacher fallback là gì?
+5. Khi nào distillation phù hợp hơn, và khi nào không?
+
+---
+
+## Answer key
+
+1. Distillation nén hành vi/capability từ teacher sang student; quantization chỉ giảm precision của weights, không thay đổi kiến thức.
+2. Soft labels giữ thông tin phân phối xác suất (ví dụ "B" vs "A" rất gần), giúp student học được uncertainty; hard labels mất thông tin.
+3. Teacher có thể hallucinate, generate noise, hoặc output sai; nếu không filter, student học sai và không thể reproduce.
+4. Student xử lý majority request, nếu confidence < threshold, fallback sang teacher; teacher đảm bảo quality cho minority khó.
+5. Phù hợp khi task hẹp, volume cao, latency/cost-sensitive; không phù hợp khi cần reasoning phức tạp, đa task, hoặc không có dữ liệu.
+
+---
+
+## Điểm cần nhớ
+
+- Distillation nén hành vi/capability từ teacher model sang student model, khác với quantization chỉ giảm precision.
+- Soft labels/logits truyền nhiều thông tin hơn hard labels, nhưng trong LLM API thực tế thường dùng teacher-generated outputs + filtering.
+- Student không nên học dữ liệu teacher chưa kiểm chứng; quality filtering và ground truth eval là bắt buộc.
+- Distillation phù hợp cho task hẹp, volume cao, latency/cost-sensitive như routing, classification, extraction và support automation.
+- Production pattern tốt thường là student-first + confidence threshold + teacher fallback + shadow evaluation.
+
+## Next chapter bridge
+
+Bạn đã học ba hướng tối ưu model: lượng hóa weights, chọn SLM phù hợp và distill hành vi từ teacher sang student. Bước cuối là đóng gói tất cả vào một serving stack đáng tin cậy: runtime nào, API nào, autoscaling ra sao, benchmark thế nào và theo dõi metric gì. Chương tiếp theo: **Model Serving Efficiency** — nơi chúng ta biến model tối ưu thành dịch vụ inference production-grade.

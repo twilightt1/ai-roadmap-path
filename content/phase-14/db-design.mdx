@@ -1,0 +1,476 @@
+Nhiều AI app không thất bại vì model yếu. Chúng thất bại vì schema không đủ để trả lời các câu hỏi production: prompt nào tạo ra câu trả lời này, model config lúc đó là gì, context RAG gồm những chunks nào, token cost thuộc về user nào, và tại sao cùng một câu hỏi hôm nay trả lời khác hôm qua.
+
+Database design cho AI applications là nghệ thuật lưu đủ dữ liệu để audit, debug và tối ưu, nhưng không biến database thành bãi rác log vô hạn.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Không thể reproduce câu trả lời sai của LLM">
+**Bối cảnh:** Một trợ lý AI pháp lý trả lời sai điều khoản hợp đồng cho khách hàng enterprise. Khách hàng yêu cầu giải thích: prompt nào được gửi, model nào dùng, retrieved context gồm tài liệu nào, và version prompt có bị thay đổi không.
+
+**Sự cố:** Database chỉ lưu `conversation_id`, `user_message` và `assistant_message`. Không lưu:
+
+1. Prompt template/version.
+2. Model provider, model name, temperature, max tokens.
+3. Retrieved chunks từ RAG.
+4. Token usage và latency.
+5. Tool calls và intermediate reasoning trace.
+
+**Hậu quả:** Team không thể reproduce output. Incident report chỉ có thể nói “model hallucinated”, một câu trả lời không đủ cho khách hàng enterprise và compliance.
+</Callout>
+
+Bài học rút ra: Với AI production, “lưu hội thoại” không đủ. Bạn cần lưu provenance: nguồn gốc của mọi output.
+
+---
+
+## 2. Architecture Blueprint (Reference Schema cho AI Platform)
+
+Một schema production-grade cho multi-tenant AI platform nên tách rõ identity, conversation, inference, prompt versioning, retrieval và analytics.
+
+```text
+[ tenants ]
+  id, name, plan, created_at
+      │
+      ├──< [ users ]
+      │       id, tenant_id, email, role, preferences jsonb
+      │
+      ├──< [ conversations ]
+      │       id, tenant_id, user_id, title, status, created_at
+      │          │
+      │          └──< [ messages ]
+      │                  id, tenant_id, conversation_id, parent_message_id,
+      │                  role, content, metadata jsonb, created_at
+      │
+      ├──< [ prompt_templates ] ──< [ prompt_versions ] ──< [ prompt_runs ]
+      │
+      ├──< [ model_calls ]
+      │       id, tenant_id, user_id, conversation_id, prompt_run_id,
+      │       provider, model, config jsonb, tokens, cost, latency, status
+      │
+      ├──< [ documents ] ──< [ chunks ] ──< [ embeddings ]
+      │
+      ├──< [ feedback ]
+      ├──< [ ab_tests ]
+      └──< [ usage_daily ]
+```
+
+Thiết kế này ưu tiên ba mục tiêu:
+
+- **Auditability:** biết output đến từ prompt/model/context nào.
+- **Tenant isolation:** mọi bảng quan trọng có `tenant_id`.
+- **Analytics:** usage/cost có thể aggregate mà không join quá sâu vào raw traces.
+
+---
+
+## 3. Conversation History Schema
+
+Conversation schema tốt phải hỗ trợ cả chat tuyến tính và agent tree.
+
+```sql
+CREATE TABLE conversations (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  title text,
+  status text NOT NULL DEFAULT 'active',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE messages (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  conversation_id uuid NOT NULL REFERENCES conversations(id),
+  parent_message_id uuid REFERENCES messages(id),
+  role text NOT NULL CHECK (role IN ('system', 'user', 'assistant', 'tool')),
+  content text NOT NULL,
+  metadata jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_messages_conversation_time
+ON messages (tenant_id, conversation_id, created_at);
+```
+
+`parent_message_id` cho phép biểu diễn:
+
+- Thread hội thoại.
+- Branch khi user regenerate answer.
+- Agent/tool-call tree.
+- Message lineage để debug context.
+
+<Callout type="tip" title="Đừng chỉ lưu transcript đã render">
+Transcript là output cho UI. Database production cần lưu cấu trúc gốc: role, parent-child relation, metadata, tool result và timestamp. Render transcript có thể tái tạo từ dữ liệu cấu trúc; chiều ngược lại thì không.
+</Callout>
+
+---
+
+## 4. Prompt Versioning and Results
+
+Prompt là code. Nếu bạn overwrite prompt mà không versioning, bạn mất khả năng reproduce.
+
+```sql
+CREATE TABLE prompt_templates (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  name text NOT NULL,
+  owner_team text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE prompt_versions (
+  id uuid PRIMARY KEY,
+  template_id uuid NOT NULL REFERENCES prompt_templates(id),
+  version int NOT NULL,
+  system_prompt text NOT NULL,
+  user_prompt_template text NOT NULL,
+  variables_schema jsonb NOT NULL DEFAULT '{}',
+  changelog text,
+  created_by uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (template_id, version)
+);
+
+CREATE TABLE prompt_runs (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  prompt_version_id uuid NOT NULL REFERENCES prompt_versions(id),
+  input_variables jsonb NOT NULL,
+  rendered_prompt text NOT NULL,
+  output jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+Lưu `rendered_prompt` có thể tốn storage, nhưng cực kỳ hữu ích khi:
+
+- Variable injection bị sai.
+- Template thay đổi sau incident.
+- Bạn cần audit prompt đã gửi thật sự, không chỉ template.
+
+---
+
+## 5. Token Usage Tracking
+
+Bảng `model_calls` là trung tâm FinOps và reliability.
+
+```sql
+CREATE TABLE model_calls (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  user_id uuid,
+  conversation_id uuid,
+  prompt_run_id uuid REFERENCES prompt_runs(id),
+  feature text NOT NULL,
+  provider text NOT NULL,
+  model text NOT NULL,
+  config jsonb NOT NULL DEFAULT '{}',
+  input_tokens int DEFAULT 0,
+  output_tokens int DEFAULT 0,
+  cached_tokens int DEFAULT 0,
+  cost_usd numeric(12, 6),
+  latency_ms int,
+  status text NOT NULL,
+  error_code text,
+  idempotency_key text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_model_calls_tenant_time
+ON model_calls (tenant_id, created_at DESC);
+
+CREATE INDEX idx_model_calls_user_feature_time
+ON model_calls (tenant_id, user_id, feature, created_at DESC);
+```
+
+Các trường nên có:
+
+| Field | Vì sao quan trọng |
+|---|---|
+| `provider`, `model` | So sánh chất lượng/chi phí/fallback |
+| `config` | Lưu temperature, max_tokens, top_p, response format |
+| `input_tokens`, `output_tokens`, `cached_tokens` | Tính chi phí và tối ưu prompt/cache |
+| `cost_usd` | Source cho billing dashboard |
+| `latency_ms` | SLO/SLA và routing decision |
+| `status`, `error_code` | Reliability analytics |
+| `idempotency_key` | Chống double charge khi retry |
+
+---
+
+## 6. User Preferences and Memory
+
+AI memory rất nhạy cảm vì nó có thể chứa sở thích, dữ liệu cá nhân hoặc thông tin doanh nghiệp.
+
+```sql
+CREATE TABLE user_memories (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  memory_type text NOT NULL CHECK (memory_type IN ('preference', 'fact', 'instruction')),
+  content text NOT NULL,
+  source_message_id uuid,
+  confidence numeric(4, 3),
+  expires_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_user_memories_lookup
+ON user_memories (tenant_id, user_id, memory_type, expires_at);
+```
+
+Nguyên tắc thiết kế memory:
+
+- Tách **explicit preferences** (người dùng nói rõ) khỏi inferred memories.
+- Có `expires_at` hoặc retention policy.
+- Lưu `source_message_id` để giải thích memory đến từ đâu.
+- Cho phép user xem/xóa memory nếu sản phẩm có yêu cầu privacy.
+- Không dùng memory cross-tenant trừ khi có quyền rõ ràng.
+
+<Callout type="warning" title="Memory không phải cache">
+Cache có thể hết hạn và tái tạo. Memory ảnh hưởng hành vi model và niềm tin của người dùng. Hãy version, audit và cho phép xóa memory như một loại dữ liệu sản phẩm chính thức.
+</Callout>
+
+---
+
+## 7. Retrieval, Documents and Embeddings
+
+RAG cần schema giữ document metadata, chunks và embeddings có thể audit.
+
+```sql
+CREATE TABLE documents (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  title text NOT NULL,
+  source_uri text,
+  checksum text,
+  visibility text NOT NULL DEFAULT 'private',
+  metadata jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE chunks (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  document_id uuid NOT NULL REFERENCES documents(id),
+  chunk_index int NOT NULL,
+  content text NOT NULL,
+  metadata jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (document_id, chunk_index)
+);
+
+CREATE TABLE embeddings (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  chunk_id uuid NOT NULL REFERENCES chunks(id),
+  embedding_model text NOT NULL,
+  embedding vector(1536) NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+Nếu bạn đổi embedding model, đừng âm thầm overwrite embeddings cũ. Hãy lưu `embedding_model` để chạy backfill có kiểm soát và so sánh chất lượng retrieval.
+
+---
+
+## 8. Indexing for AI Workloads
+
+Index không phải “thêm cho nhanh” một cách cảm tính. Mỗi index phục vụ một access pattern cụ thể.
+
+```sql
+-- Conversation load
+CREATE INDEX idx_messages_conversation_created
+ON messages (tenant_id, conversation_id, created_at);
+
+-- Usage dashboard theo thời gian
+CREATE INDEX idx_model_calls_tenant_created
+ON model_calls (tenant_id, created_at DESC);
+
+-- Billing theo user/feature
+CREATE INDEX idx_model_calls_user_feature_created
+ON model_calls (tenant_id, user_id, feature, created_at DESC);
+
+-- Chỉ index lỗi để debug nhanh, tiết kiệm hơn index toàn bảng
+CREATE INDEX idx_model_calls_errors
+ON model_calls (tenant_id, created_at DESC)
+WHERE error_code IS NOT NULL;
+
+-- JSONB trace query
+CREATE INDEX idx_prompt_runs_output_gin
+ON prompt_runs USING gin (output);
+```
+
+Với bảng `model_calls` tăng cực nhanh, cân nhắc partitioning theo thời gian:
+
+```sql
+CREATE TABLE model_calls_2026_06
+PARTITION OF model_calls
+FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
+```
+
+Partitioning giúp:
+
+- Query tháng hiện tại scan ít dữ liệu hơn.
+- Xóa/archival dữ liệu cũ nhanh hơn.
+- Tách hot data và cold data.
+
+---
+
+## 9. Migrations and Schema Evolution
+
+AI app thay đổi nhanh: thêm provider mới, prompt format mới, trace mới, memory policy mới. Schema phải evolve an toàn.
+
+```text
+Safe migration pattern:
+
+1. Add nullable column / new table.
+2. Deploy app viết cả schema cũ và mới nếu cần.
+3. Backfill theo batch nhỏ.
+4. Add index concurrently.
+5. Bật read path mới.
+6. Add NOT NULL / constraint khi dữ liệu đã sạch.
+7. Xóa cột cũ ở migration sau.
+```
+
+<Callout type="info" title="Backfill cũng là production workload">
+Một backfill embeddings, token cost hoặc prompt_runs có thể scan hàng trăm triệu dòng. Hãy chạy theo batch, có checkpoint, có rate limit và monitoring. Đừng để migration làm sập primary database.
+</Callout>
+
+---
+
+## 10. Implementation Playbook (Thực thi)
+
+Một query audit tốt phải nối được user message, prompt version, model call và retrieved context.
+
+```sql
+SELECT
+  mc.id AS model_call_id,
+  mc.created_at,
+  mc.provider,
+  mc.model,
+  mc.config,
+  mc.input_tokens,
+  mc.output_tokens,
+  mc.cost_usd,
+  mc.latency_ms,
+  pv.version AS prompt_version,
+  pv.changelog,
+  pr.rendered_prompt,
+  pr.output,
+  jsonb_agg(
+    jsonb_build_object(
+      'document_id', d.id,
+      'title', d.title,
+      'chunk_id', ch.id,
+      'chunk_index', ch.chunk_index,
+      'preview', left(ch.content, 200)
+    )
+  ) FILTER (WHERE ch.id IS NOT NULL) AS retrieved_context
+FROM model_calls mc
+LEFT JOIN prompt_runs pr ON pr.id = mc.prompt_run_id
+LEFT JOIN prompt_versions pv ON pv.id = pr.prompt_version_id
+LEFT JOIN retrieval_events re ON re.model_call_id = mc.id
+LEFT JOIN chunks ch ON ch.id = re.chunk_id
+LEFT JOIN documents d ON d.id = ch.document_id
+WHERE mc.tenant_id = $1
+  AND mc.id = $2
+GROUP BY mc.id, pv.version, pv.changelog, pr.rendered_prompt, pr.output;
+```
+
+Nếu query này khả thi trong hệ thống của bạn, incident response sẽ chuyển từ “đoán model hallucinated” sang “đây là prompt, context, config và trace chính xác”.
+
+---
+
+## 11. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="danger" title="Pitfall 1: Cross-tenant data leak">
+**Triệu chứng:** User thấy conversation/document không thuộc tenant của họ.
+
+**Nguyên nhân:** Một bảng thiếu `tenant_id`, hoặc join chỉ theo `id` mà không kiểm tra tenant ở cả hai phía.
+
+**Cách khắc phục:** Mọi bảng dữ liệu sản phẩm quan trọng nên có `tenant_id`. Query nên filter tenant ở root và join có điều kiện tenant khi cần. Với enterprise, cân nhắc Row-Level Security.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Prompt version bị overwrite">
+**Triệu chứng:** Không thể reproduce output cũ vì prompt hiện tại khác prompt lúc chạy.
+
+**Nguyên nhân:** Lưu prompt trong một hàng duy nhất rồi update trực tiếp.
+
+**Cách khắc phục:** Treat prompts as immutable versions. Mỗi thay đổi tạo `prompt_versions` mới; `prompt_runs` trỏ tới version cụ thể.
+</Callout>
+
+<Callout type="warning" title="Pitfall 3: Unbounded message history">
+**Triệu chứng:** Load conversation ngày càng chậm, prompt context ngày càng dài, cost tăng vô hạn.
+
+**Nguyên nhân:** Mọi message được nhồi lại vào prompt mà không có summarization/windowing policy.
+
+**Cách khắc phục:** Tách storage history khỏi prompt context. Lưu đầy đủ trong DB, nhưng chỉ đưa vào prompt phần gần nhất + summary đã version + retrieved memory phù hợp.
+</Callout>
+
+<Callout type="danger" title="Pitfall 4: Không audit được token cost">
+**Triệu chứng:** Billing provider cao hơn internal dashboard nhưng không truy ngược được.
+
+**Nguyên nhân:** Không lưu provider request id, token usage hoặc idempotency key.
+
+**Cách khắc phục:** Lưu `provider_request_id`, `idempotency_key`, usage fields và cost snapshot ngay khi provider trả response. Đừng tính lại cost lịch sử chỉ bằng bảng giá hiện tại.
+</Callout>
+
+---
+
+## 12. Cost & Performance Unit Economics
+
+| Thiết kế | Lợi ích | Chi phí |
+|---|---|---|
+| Lưu rendered prompt | Reproduce/audit tốt | Tốn storage, có thể chứa dữ liệu nhạy cảm |
+| Lưu full traces JSONB | Debug agent/tool calls | Payload lớn, cần retention policy |
+| Index nhiều access patterns | Dashboard/API nhanh | Insert chậm hơn, tốn disk |
+| Partition model_calls | Query và archival tốt hơn | Migration/ORM phức tạp hơn |
+| Prompt/version immutability | Audit rõ ràng | Nhiều records hơn, cần UI quản lý version |
+| Usage rollup table | Dashboard nhanh | Cần job aggregate và xử lý late-arriving data |
+
+Thiết kế database tốt là thiết kế biết dữ liệu nào cần giữ mãi, dữ liệu nào chỉ cần 30 ngày, dữ liệu nào phải xóa theo yêu cầu privacy, và dữ liệu nào nên được aggregate trước khi phân tích.
+
+---
+
+## Practice exercises
+
+1. Vẽ schema tối thiểu cho một chatbot multi-tenant gồm tenants, users, conversations, messages và model_calls.
+2. Thiết kế bảng `prompt_templates`, `prompt_versions`, `prompt_runs` sao cho prompt không bị overwrite.
+3. Viết query audit nối `model_calls`, `prompt_runs`, `prompt_versions` và retrieved chunks cho một incident cụ thể.
+4. Đề xuất 5 indexes cho AI platform có dashboard usage, conversation loading và error debugging.
+5. Viết kế hoạch migration an toàn để thêm cột `provider_request_id` vào bảng `model_calls` đang có hàng trăm triệu dòng.
+
+---
+
+## Knowledge check
+
+1. Provenance trong database AI nghĩa là gì?
+2. Vì sao mọi bảng dữ liệu multi-tenant quan trọng nên có `tenant_id`?
+3. Vì sao prompt versions nên immutable?
+4. Lưu full conversation history khác gì với đưa toàn bộ history vào prompt?
+5. Khi nào nên cân nhắc partitioning cho `model_calls`?
+
+---
+
+## Answer key
+
+1. Provenance là khả năng truy ngược output tới prompt version, model config, retrieved context, token usage, tool trace và user/request liên quan.
+2. `tenant_id` giúp enforce isolation, viết query an toàn, index theo access pattern và giảm rủi ro leak dữ liệu khi join.
+3. Immutable versions giúp reproduce output cũ, audit thay đổi prompt và rollback/debug chính xác sau incident.
+4. Database có thể lưu đầy đủ để audit; prompt runtime chỉ nên dùng window/summary/context phù hợp để kiểm soát cost và quality.
+5. Khi bảng tăng rất nhanh, query chủ yếu theo time range, cần archival nhanh hoặc dashboard hiện tại bị chậm vì scan quá nhiều dữ liệu.
+
+---
+
+## Điểm cần nhớ
+
+- AI database schema cần lưu provenance: prompt version, model config, context, token usage và trace.
+- Mọi bảng multi-tenant quan trọng nên có `tenant_id` và index theo access pattern thực tế.
+- Prompt là code: version immutable, không overwrite.
+- Conversation history lưu đầy đủ không đồng nghĩa với việc nhồi toàn bộ vào prompt.
+- Indexing, partitioning và retention policy là một phần của thiết kế sản phẩm AI, không chỉ là tối ưu database.
+
+## Next chapter bridge
+
+PostgreSQL là source of truth tuyệt vời cho AI systems, nhưng không phải mọi state đều nên nằm trong SQL. Session nóng, cache, rate limiting, pub/sub streaming và event ingestion quy mô lớn thường cần Redis, MongoDB hoặc DynamoDB. Chương tiếp theo: **NoSQL for AI** — cách kết hợp SQL và NoSQL mà không phá consistency, security và chi phí vận hành.

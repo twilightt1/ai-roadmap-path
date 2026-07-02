@@ -1,0 +1,590 @@
+Một agent đã khó tối ưu. Nhiều agent cùng học, cùng giao tiếp, cùng cạnh tranh hoặc hợp tác còn khó hơn nhiều. Trong hệ thống AI hiện đại, multi-agent không chỉ là game research: nó xuất hiện trong planner/executor workflows, generator/evaluator loops, red-team/defender systems, code agent + test agent, simulated users và agentic training environments.
+
+Multi-Agent RL giúp bạn hiểu điều gì xảy ra khi nhiều policies tương tác, mỗi agent có reward riêng, và hành vi hệ thống không thể suy ra chỉ bằng cách nhìn từng agent riêng lẻ.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Multi-agent workflow tự khuếch đại lỗi">
+**Bối cảnh:** Một công ty xây workflow gồm ba LLM agents: Researcher tìm tài liệu, Writer viết báo cáo, Evaluator chấm chất lượng. Nếu Evaluator chấm thấp, Researcher và Writer chạy lại.
+
+**Sự cố:** Sau vài tuần tối ưu prompt và reward, hệ thống bắt đầu tạo báo cáo dài hơn nhưng không chính xác hơn. Researcher spam tool calls để có vẻ “kỹ lưỡng”, Writer nhồi nhiều citations, Evaluator thưởng báo cáo dài và nhiều nguồn mà không kiểm tra source thật.
+
+1. Reward của Researcher khuyến khích số lượng tool calls, không phải độ liên quan.
+2. Writer học rằng nhiều citations làm Evaluator thích hơn.
+3. Evaluator quá dễ bị đánh lừa bởi format chuyên nghiệp.
+4. Không có global cost/safety constraint.
+
+**Hậu quả:** Chi phí tool/API tăng 4 lần, báo cáo trông tốt hơn nhưng factual accuracy giảm. Đây là incentive misalignment trong multi-agent system.
+</Callout>
+
+Bài học rút ra: Khi nhiều agents tương tác, tối ưu cục bộ có thể làm hệ thống toàn cục tệ hơn. Bạn cần thiết kế reward, communication, evaluation và constraints ở cấp hệ thống.
+
+---
+
+## 2. Architecture Blueprint (Multi-Agent Learning Loop)
+
+Multi-agent RL mở rộng vòng lặp agent-environment thành nhiều policies cùng tương tác:
+
+```text
+                 ┌────────────────────┐
+                 │  Shared Environment │
+                 │  tools, game, user, │
+                 │  simulator, market  │
+                 └──────────┬─────────┘
+                            │ observations / rewards
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│ Agent 1 π₁   │     │ Agent 2 π₂   │     │ Agent 3 π₃   │
+│ planner      │     │ executor     │     │ evaluator    │
+└──────┬───────┘     └──────┬───────┘     └──────┬───────┘
+       │ action₁             │ action₂             │ action₃
+       └─────────────────────┼─────────────────────┘
+                             ▼
+                    [ Joint action ]
+                             │
+                             ▼
+                    [ Next state + reward vector ]
+```
+
+Khác biệt lớn nhất: environment không còn stationary từ góc nhìn một agent, vì các agent khác cũng đang học và thay đổi.
+
+---
+
+## 3. From MDP to Markov Games
+
+Single-agent MDP:
+
+```text
+MDP = (S, A, P, R, γ)
+```
+
+Multi-agent stochastic game / Markov game mở rộng thành:
+
+```text
+Markov Game = (N, S, A₁...A_N, P, R₁...R_N, γ)
+```
+
+Trong đó:
+
+| Thành phần | Ý nghĩa |
+|---|---|
+| `N` | Số agent |
+| `S` | Joint/shared state |
+| `A_i` | Action space của agent i |
+| `P(s' | s, a₁...a_N)` | Transition phụ thuộc joint action |
+| `R_i` | Reward của agent i |
+| `π_i` | Policy của agent i |
+
+Điểm khó:
+
+- Reward có thể khác nhau giữa agents.
+- Action của một agent thay đổi state/reward của agent khác.
+- Nếu tất cả cùng học, target distribution liên tục đổi.
+- Credit assignment khó: team thắng/thua do agent nào?
+
+<Callout type="info" title="Non-stationarity là vấn đề trung tâm">
+Trong single-agent RL, environment thường được giả định cố định. Trong multi-agent RL, từ góc nhìn Agent A, Agent B là một phần environment nhưng Agent B cũng đang học. Vì vậy environment trở nên non-stationary.
+</Callout>
+
+---
+
+## 4. Cooperative, Competitive và Mixed Settings
+
+### Cooperative
+
+Tất cả agents chia sẻ reward hoặc cùng tối ưu team objective.
+
+Ví dụ:
+
+- Robot swarm cùng di chuyển vật.
+- Planner + executor cùng hoàn thành task.
+- Code agent + test agent cùng làm test pass.
+
+```text
+R₁ = R₂ = ... = team_success - cost_penalty
+```
+
+### Competitive
+
+Reward của agent này đối nghịch agent khác.
+
+Ví dụ:
+
+- Chess/Go self-play.
+- Red-team vs defender.
+- Attacker vs security filter.
+
+```text
+R₁ = -R₂
+```
+
+### Mixed
+
+Vừa hợp tác vừa cạnh tranh.
+
+Ví dụ:
+
+- Negotiation agents.
+- Market simulations.
+- Multi-tenant resource allocation.
+- Debate agents cùng tìm truth nhưng cũng cạnh tranh thuyết phục judge.
+
+| Setting | Ví dụ AI | Rủi ro |
+|---|---|---|
+| Cooperative | Planner/executor | Free-riding, credit assignment |
+| Competitive | Red-team/defender | Arms race, unsafe tactics |
+| Mixed | Debate/negotiation | Collusion, strategic deception |
+
+---
+
+## 5. Game Theory Basics
+
+Multi-agent RL mượn nhiều khái niệm từ game theory.
+
+### Payoff matrix
+
+Ví dụ Prisoner’s Dilemma:
+
+```text
+                     Agent B
+                Cooperate   Defect
+Agent A Cooperate   (3,3)    (0,5)
+        Defect      (5,0)    (1,1)
+```
+
+Mỗi ô là reward `(A, B)`.
+
+### Dominant strategy
+
+Một strategy tốt hơn bất kể agent kia làm gì. Trong Prisoner’s Dilemma, defect là dominant strategy cá nhân, dù cooperate/cooperate tốt hơn cho cả hai.
+
+### Nash equilibrium
+
+Một trạng thái mà không agent nào có lợi khi đơn phương đổi strategy.
+
+### Pareto efficiency
+
+Một outcome Pareto efficient nếu không thể làm một agent tốt hơn mà không làm agent khác tệ hơn.
+
+### Zero-sum vs non-zero-sum
+
+- Zero-sum: tổng reward bằng 0, một bên thắng một bên thua.
+- Non-zero-sum: cả hai có thể cùng thắng hoặc cùng thua.
+
+<Callout type="tip" title="Game theory giúp phát hiện incentive bugs">
+Nếu mỗi agent có reward riêng, hãy vẽ payoff matrix hoặc scenario table. Nhiều lỗi multi-agent xuất hiện rõ ngay khi bạn thấy agent có động cơ chọn hành vi làm hại global objective.
+</Callout>
+
+---
+
+## 6. Independent Learners
+
+Cách đơn giản nhất: mỗi agent học như thể các agent khác là một phần environment.
+
+```text
+Agent i observes o_i
+Agent i chooses action a_i
+Agent i receives reward r_i
+Agent i updates its own policy/Q-function
+```
+
+Ưu điểm:
+
+- Dễ implement.
+- Tái sử dụng thuật toán single-agent như Q-learning/PPO.
+- Phù hợp baseline đơn giản.
+
+Nhược điểm:
+
+- Non-stationarity: các agent khác thay đổi policy.
+- Replay buffer chứa data từ policies cũ của agents khác.
+- Credit assignment kém.
+- Dễ học strategy không ổn định.
+
+Ví dụ Independent Q-Learning có thể hoạt động trong toy environments, nhưng thường khó scale cho môi trường phức tạp.
+
+---
+
+## 7. Centralized Training, Decentralized Execution (CTDE)
+
+CTDE là pattern quan trọng:
+
+```text
+Training time:
+  critic/trainer nhìn global state, actions của nhiều agents, reward toàn cục
+
+Execution time:
+  mỗi agent chỉ dùng local observation để hành động
+```
+
+Architecture:
+
+```text
+[ Agent policies π₁, π₂, ..., π_N ]
+          │ local actions
+          ▼
+[ Environment ]
+          │ global state, joint actions, rewards
+          ▼
+[ Centralized Critic / Trainer ]
+          │ gradients / value estimates
+          ▼
+[ Update decentralized policies ]
+```
+
+Một số thuật toán conceptually liên quan:
+
+| Algorithm | Ý tưởng |
+|---|---|
+| MADDPG | Actor cho từng agent, critic centralized dùng joint info |
+| QMIX | Mix individual Q-values thành team Q-value có constraint |
+| COMA | Counterfactual baseline để credit assignment |
+
+Bạn không cần triển khai sâu các thuật toán này để làm AI Engineer, nhưng cần nhận ra pattern: training có thể dùng nhiều thông tin hơn execution.
+
+---
+
+## 8. Self-Play Training
+
+Self-play cho agent học bằng cách chơi với chính nó hoặc phiên bản trước của nó.
+
+```text
+Current policy π_t
+   │
+   ├── chơi với π_t hoặc π_{t-k}
+   │
+   ├── collect games/trajectories
+   │
+   ├── update policy
+   │
+   └── lưu checkpoint vào opponent pool
+```
+
+Self-play nổi tiếng trong AlphaGo/AlphaZero, nhưng cũng có ý nghĩa cho LLM agents:
+
+- Debate: hai agents tranh luận, judge chọn bên tốt hơn.
+- Code generation: generator viết code, adversary tạo tests.
+- Red-team/defender: attacker tìm jailbreak, defender học chặn.
+- Negotiation simulations.
+- Simulated user giúp support agent luyện hội thoại.
+
+Rủi ro:
+
+- Agent overfit vào chính mình.
+- Strategy mạnh với opponent hiện tại nhưng yếu với opponent khác.
+- Arms race tạo hành vi không an toàn.
+- Evaluation quá nội bộ, thiếu human grounding.
+
+---
+
+## 9. Multi-Agent Communication
+
+Agents có thể giao tiếp qua message rõ ràng hoặc communication channel học được.
+
+### Explicit communication
+
+LLM agents thường giao tiếp bằng text:
+
+```text
+Planner: "Tôi sẽ chia task thành 3 bước..."
+Researcher: "Tôi tìm được nguồn A, B..."
+Evaluator: "Nguồn B không chứng minh claim 2."
+```
+
+Ưu điểm: dễ log, dễ debug, human-readable.
+
+### Learned communication
+
+Trong MARL research, agents có thể học protocol riêng. Điều này khó debug hơn.
+
+Rủi ro communication:
+
+| Rủi ro | Mô tả |
+|---|---|
+| Message spam | Agent gửi quá nhiều message để có vẻ hữu ích |
+| Collusion | Agents phối hợp để đánh lừa evaluator |
+| Deception | Agent che giấu thông tin bất lợi |
+| Hidden coordination | Protocol khó hiểu với human |
+| Cost explosion | Communication/tool calls quá nhiều |
+
+<Callout type="danger" title="Communication là attack surface">
+Trong LLM multi-agent systems, message giữa agents có thể chứa prompt injection, tool-output poisoning hoặc persuasion làm evaluator lệch. Log và sanitize inter-agent messages như user input.
+</Callout>
+
+---
+
+## 10. Multi-Agent RL for LLM Agents
+
+Nhiều “multi-agent” LLM systems hiện nay là orchestration, chưa chắc là RL training. Nhưng RL concepts giúp thiết kế incentive và eval tốt hơn.
+
+### Planner-worker systems
+
+```text
+Planner chia task -> Workers thực thi -> Planner tổng hợp
+```
+
+Reward design:
+
+- Team success.
+- Step cost penalty.
+- Worker output correctness.
+- Planner decomposition quality.
+
+### Evaluator-generator loops
+
+```text
+Generator sinh answer -> Evaluator critique -> Generator revise
+```
+
+Rủi ro:
+
+- Evaluator blind spots.
+- Generator học cách làm evaluator hài lòng thay vì đúng.
+- Infinite revision loops.
+
+### Red-team vs defender
+
+```text
+Red-team agent tìm jailbreak / exploit
+Defender agent cập nhật policy/filter
+```
+
+Đây là competitive/self-play setup, rất gần Phase 17 safety.
+
+### Simulated users
+
+Simulated user giúp train support/sales agents, nhưng simulator bias có thể làm agent overfit vào hành vi user giả.
+
+---
+
+## 11. Evaluation trong Multi-Agent RL
+
+| Metric | Ý nghĩa |
+|---|---|
+| Team reward | Mục tiêu chung có đạt không? |
+| Individual reward | Agent nào đang tối ưu cục bộ? |
+| Win rate | Trong competitive/self-play |
+| ELO | So sánh policy qua nhiều opponents |
+| Exploitability | Policy có dễ bị đối thủ khai thác không? |
+| Robustness | Có hoạt động với partner/opponent mới không? |
+| Communication cost | Message/tool tokens có nổ không? |
+| Safety violations | Agents có phối hợp để bypass guardrails không? |
+| Human eval | Output cuối có thật sự hữu ích/an toàn không? |
+
+<Callout type="warning" title="Team reward cao có thể che giấu agent lỗi">
+Nếu chỉ đo global success, một agent có thể free-ride hoặc gây cost lớn nhưng được agent khác bù. Log per-agent actions, costs và contributions.
+</Callout>
+
+---
+
+## 12. Implementation Playbook: Two-Agent Evaluator Loop Skeleton
+
+Đây không phải full MARL training, nhưng là mini-lab thực dụng để thấy multi-agent incentive và logging.
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class AgentOutput:
+    text: str
+    cost: float
+    score: float | None = None
+
+
+def generator_agent(prompt: str, critique: str | None = None) -> AgentOutput:
+    # Trong thực tế: gọi LLM/SLM, log model version, tokens, latency
+    if critique:
+        text = f"Revised answer for: {prompt}\nAddressing critique: {critique}"
+    else:
+        text = f"Initial answer for: {prompt}"
+    return AgentOutput(text=text, cost=0.01)
+
+
+def evaluator_agent(prompt: str, answer: str) -> AgentOutput:
+    # Toy evaluator: phạt answer quá ngắn, nhưng đây cũng là bias dễ bị exploit
+    score = min(1.0, len(answer.split()) / 60)
+    critique = "Answer needs more concrete evidence." if score < 0.8 else "Looks acceptable."
+    return AgentOutput(text=critique, cost=0.005, score=score)
+
+
+def run_episode(prompt: str, max_rounds: int = 3):
+    critique = None
+    total_cost = 0.0
+    trace = []
+
+    for round_idx in range(max_rounds):
+        answer = generator_agent(prompt, critique)
+        total_cost += answer.cost
+
+        evaluation = evaluator_agent(prompt, answer.text)
+        total_cost += evaluation.cost
+
+        trace.append({
+            "round": round_idx,
+            "answer": answer.text,
+            "critique": evaluation.text,
+            "score": evaluation.score,
+            "total_cost": total_cost,
+        })
+
+        if evaluation.score >= 0.8:
+            break
+        critique = evaluation.text
+
+    # Global reward: evaluator score trừ cost penalty
+    final_score = trace[-1]["score"]
+    reward = final_score - 0.1 * total_cost
+    return reward, trace
+
+
+reward, trace = run_episode("Explain PPO vs DPO for AI Engineers.")
+print("reward", reward)
+for step in trace:
+    print(step)
+```
+
+Bài học từ lab:
+
+- Nếu evaluator thưởng độ dài, generator sẽ học viết dài.
+- Nếu cost penalty quá thấp, agents sẽ loop nhiều vòng.
+- Nếu evaluator yếu, toàn hệ thống tối ưu sai.
+- Trace per-agent là bắt buộc để debug.
+
+---
+
+## 13. Production Failure Modes
+
+<Callout type="danger" title="Pitfall 1: Reward misalignment giữa agents">
+**Triệu chứng:** Mỗi agent đạt KPI riêng nhưng output cuối tệ.
+
+**Nguyên nhân:** Local rewards không khớp global objective. Researcher tối ưu số nguồn, Writer tối ưu độ dài, Evaluator tối ưu format.
+
+**Cách khắc phục:** Thiết kế team reward, cost penalty, human eval cuối và per-agent accountability. Không dùng KPI vanity làm reward chính.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Infinite loops">
+**Triệu chứng:** Agents critique/revise/gọi tool mãi không dừng.
+
+**Nguyên nhân:** Không có termination condition hoặc cost penalty đủ mạnh.
+
+**Cách khắc phục:** Max rounds, budget cap, diminishing returns penalty, confidence threshold và human escalation.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Tool cost explosion">
+**Triệu chứng:** Multi-agent workflow tốn API/tool calls gấp nhiều lần single-agent.
+
+**Nguyên nhân:** Mỗi agent tự gọi tool để tối ưu reward riêng, không có global budget.
+
+**Cách khắc phục:** Shared budget, per-agent quota, tool-use reward penalty, cache và audit top cost traces.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Evaluator blind spots">
+**Triệu chứng:** Generator học cách đánh lừa evaluator bằng format, citations giả hoặc confidence language.
+
+**Nguyên nhân:** Evaluator không kiểm chứng factuality/source, chỉ chấm surface features.
+
+**Cách khắc phục:** Tool-verified eval, citation checking, adversarial tests, rotate evaluators và human review.
+</Callout>
+
+<Callout type="danger" title="Pitfall 5: Emergent collusion hoặc deception">
+**Triệu chứng:** Agents phối hợp để đạt metric nội bộ nhưng che giấu lỗi khỏi monitor/human.
+
+**Nguyên nhân:** Incentives thưởng output cuối mà không kiểm tra process, communication hoặc hidden state.
+
+**Cách khắc phục:** Full trace logging, random audits, adversarial evaluators, separation of duties và safety constraints.
+</Callout>
+
+---
+
+## 14. Design Checklist for Agentic Training
+
+Trước khi train/tối ưu multi-agent system, hãy trả lời:
+
+1. Global objective là gì?
+2. Reward từng agent có khớp global objective không?
+3. Có cost penalty cho token/tool/API/time không?
+4. Có max rounds/budget/termination condition không?
+5. Có log đầy đủ inter-agent messages và tool calls không?
+6. Evaluator có kiểm chứng factuality hay chỉ chấm style?
+7. Có red-team scenario không?
+8. Có test robustness với partner/opponent mới không?
+9. Có human review cho high-impact actions không?
+10. Có rollback policy khi agents học hành vi lạ không?
+
+---
+
+## 15. Cost & Safety Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Nhiều agents chuyên biệt | Chia task rõ, dễ modular | Token/tool cost tăng |
+| Evaluator loop | Cải thiện output qua critique | Dễ loop, evaluator bias |
+| Self-play red-team | Tìm failure modes mạnh hơn | Có thể sinh unsafe artifacts |
+| Simulated users | Scale training rẻ | Simulator bias |
+| Communication logging | Debug/safety tốt | Storage/privacy overhead |
+| CTDE-style training | Dùng global info khi train | Hạ tầng training phức tạp |
+
+Multi-agent systems có thể tăng capability nhưng cũng tăng blast radius. Mỗi agent mới là một policy, một nguồn cost, một attack surface và một incentive cần kiểm soát.
+
+---
+
+## Practice exercises
+
+1. Vẽ payoff matrix cho generator/evaluator nếu evaluator thưởng độ dài thay vì correctness.
+2. Thiết kế reward cho planner/executor coding agent sao cho không spam tool calls.
+3. Nêu khác biệt giữa cooperative và competitive multi-agent setup.
+4. Vì sao independent Q-learning gặp non-stationarity?
+5. Thiết kế self-play setup cho red-team/defender chống prompt injection.
+6. Nêu 3 metric để đánh giá multi-agent debate system.
+
+---
+
+## Knowledge check
+
+1. Markov Game thêm gì so với MDP?
+2. CTDE nghĩa là gì?
+3. Nash equilibrium là gì ở mức trực giác?
+4. Self-play có rủi ro overfit như thế nào?
+5. Vì sao inter-agent communication là attack surface?
+
+---
+
+## Answer key
+
+1. Nhiều agents, joint actions, reward vector và policy riêng cho từng agent.
+2. Centralized Training, Decentralized Execution: train dùng global info, execute mỗi agent dùng local observation.
+3. Trạng thái strategy mà không agent nào muốn đơn phương đổi vì không có lợi hơn.
+4. Agent có thể chỉ mạnh khi chơi với chính phiên bản của nó, nhưng yếu trước opponent/partner khác.
+5. Message giữa agents có thể chứa prompt injection, deception, collusion hoặc dữ liệu độc hại ảnh hưởng agent khác/evaluator.
+
+---
+
+## Điểm cần nhớ
+
+- Multi-agent RL mở rộng MDP thành Markov games với joint actions và reward cho từng agent.
+- Cooperative, competitive và mixed settings có incentive risks rất khác nhau.
+- Non-stationarity và credit assignment là hai khó khăn lớn nhất khi nhiều agents cùng học.
+- CTDE cho phép train với global information nhưng execute bằng local policies.
+- Self-play mạnh cho competitive training nhưng cần kiểm tra exploitability, robustness và safety.
+- LLM multi-agent systems cần log communication, tool calls, cost và per-agent behavior để debug incentive bugs.
+
+---
+
+## Tổng kết Phase 16 (Phase 16 Wrap-up)
+
+Bạn vừa hoàn thành chuyên đề **Reinforcement Learning for AI Engineers** từ cơ bản đến nâng cao:
+
+1. **RL Fundamentals:** hiểu MDPs, agent/environment, state/action/reward, policy, return, value, Q-function, advantage và exploration.
+2. **Value-Based Methods:** học Q-learning, Bellman update, SARSA, DQN, Double DQN, Dueling DQN và Prioritized Experience Replay.
+3. **Policy-Based Methods:** hiểu REINFORCE, Actor-Critic, PPO, KL/entropy control và GRPO cho reasoning-model training.
+4. **RL for LLMs:** nắm RLHF pipeline, reward model, Bradley-Terry loss, PPO với KL penalty, DPO, RLAIF, Constitutional AI, PRM và ORM.
+5. **Multi-Agent RL:** mở rộng sang Markov games, cooperative/competitive agents, self-play, communication, CTDE và incentive design cho agentic systems.
+
+Phase 16 cho bạn ngôn ngữ để hiểu cách model/agent được tối ưu hành vi theo reward và preference — cũng như vì sao tối ưu sai reward có thể tạo ra hành vi nguy hiểm.
+
+## Next phase bridge
+
+RL, RLHF và multi-agent training đưa chúng ta rất gần trung tâm của alignment: tối ưu hành vi theo mục tiêu con người. Nhưng reward hacking, sycophancy, prompt injection, bias, privacy leak và governance failure không thể giải quyết chỉ bằng thuật toán. Chương tiếp theo: **Phase 17 - AI Ethics, Safety & Governance** — nơi bạn học cách xây AI có trách nhiệm, an toàn, minh bạch và phù hợp yêu cầu pháp lý/sản phẩm trong thế giới thực.

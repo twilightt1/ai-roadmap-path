@@ -1,381 +1,367 @@
-Fine-tuning không phải là bước đi đầu tiên khi thiết kế một hệ thống trí tuệ nhân tạo dựa trên mô hình ngôn ngữ lớn (LLM). Ngược lại, trong kỹ nghệ AI thực tế, fine-tuning là một **bước tối ưu hóa nâng cao (advanced optimization step)**, chỉ được cân nhắc khi các kỹ thuật ít tốn kém và linh hoạt hơn như Prompt Engineering, Few-shot Learning, và Retrieval-Augmented Generation (RAG) đã chạm đến giới hạn trần về mặt hiệu năng (performance ceiling), độ trễ (latency), hoặc chi phí vận hành (inference cost). 
+Fine-tuning là một trong những quyết định dễ bị hiểu sai nhất khi xây LLM system. Sau khi bạn đã học Prompt Engineering, RAG, agentic workflows và evaluation cơ bản, câu hỏi không còn là “có fine-tune được không?” mà là “fine-tune có phải cách rẻ nhất, an toàn nhất và đo được nhất để cải thiện hành vi model không?”.
 
-Đứng dưới góc độ khoa học máy tính và kiến trúc hệ thống, quyết định fine-tune là một bài toán tối ưu hóa đa mục tiêu ràng buộc, đánh đổi giữa **Parametric Memory** (Trí nhớ tham số được lưu trữ tĩnh trong các trọng số mô hình) và **Non-parametric Memory** (Trí nhớ phi tham số được đưa động vào ngữ cảnh prompt). Việc lạm dụng fine-tuning mà không hiểu rõ bản chất toán học và hệ thống sẽ dẫn đến các hiện tượng suy giảm năng lực nghiêm trọng như dịch chuyển phân phối dữ liệu (data distribution shift), sụp đổ mô hình (catastrophic forgetting), và lãng phí tài nguyên tính toán khổng lồ.
+Trong production, fine-tuning là một bước tối ưu hóa nâng cao: nó thay đổi hoặc bổ sung trí nhớ tham số của model, tạo chi phí huấn luyện, chi phí vận hành, rủi ro regression và yêu cầu lifecycle quản trị model. Dùng đúng, nó giúp giảm token, ổn định format, học domain behavior và cải thiện latency. Dùng sai, nó biến một vấn đề retrieval hoặc product design thành một khoản GPU bill đắt đỏ.
 
-## Why this matters
+---
 
-Trong thực tế doanh nghiệp, rất nhiều dự án AI tiêu tốn hàng chục ngàn USD cho quá trình fine-tuning nhưng cuối cùng phải hủy bỏ hoặc quay lại dùng Prompt/RAG vì những sai lầm cốt lõi sau:
+## 1. The Incident (Tình huống sự cố)
 
-- **Nhầm lẫn giữa hành vi và kiến thức:** Fine-tune mô hình với mục đích cập nhật kiến thức động (ví dụ: giá cổ phiếu hàng ngày, tài liệu quy chế thay đổi liên tục). Kết quả là mô hình bị lỗi thời ngay khi quá trình huấn luyện kết thúc (knowledge cutoff) và tốn chi phí huấn luyện lại (retraining cost) theo chu kỳ ngày/tuần.
-- **Overfitting trên tập dữ liệu nhỏ:** Fine-tune một mô hình 7B/13B trên một tập dữ liệu chỉ có dưới 50 ví dụ. Mô hình nhanh chóng bị quá khớp, học thuộc lòng các token cụ thể (memorization) và hoàn toàn mất đi khả năng lập luận tổng quát (generalization).
-- **Lãng phí tài nguyên tính toán (Inference Compute):** Không tính toán tổng chi phí sở hữu (TCO - Total Cost of Ownership). Việc tự host một mô hình fine-tuned chuyên biệt đòi hỏi hạ tầng GPU chuyên dụng chạy 24/7 (với chi phí lạnh - cold start và duy trì cực cao), trong khi một API Serverless (như GPT-4o-mini hoặc Claude 3.5 Haiku) có thể xử lý lượng request tương đương với chi phí chỉ bằng 1/10.
-- **Hủy hoại năng lực nền tảng:** Mô hình sau khi fine-tune thực hiện rất tốt tác vụ chuyên biệt (ví dụ: viết code SQL) nhưng đột ngột mất khả năng viết một email tiếng Việt thông thường hoặc thực hiện các phép toán logic cơ bản.
+<Callout type="danger" title="Báo cáo sự cố: Fine-tune để nhồi kiến thức thay vì dùng RAG">
+**Bối cảnh:** Một startup fintech xây assistant trả lời chính sách sản phẩm, phí giao dịch và quy định onboarding. Team có 2,000 tài liệu nội bộ thay đổi hàng tuần và muốn giảm độ dài prompt nên quyết định fine-tune một model 8B bằng toàn bộ tài liệu.
 
-<Callout type="danger" title="Fine-tuning không phải là một hệ cơ sở dữ liệu động">
-Nếu bài toán của bạn yêu cầu truy xuất thông tin chính xác, cập nhật theo thời gian thực hoặc cần phân quyền bảo mật dữ liệu nghiêm ngặt (Access Control List - ACL), **RAG là giải pháp bắt buộc**. Fine-tuning chỉ nên được sử dụng để dạy mô hình **cách hành xử (style, tone, format)** và **thích ứng với domain hẹp (domain-specific terminology, specialized reasoning)**.
+**Sự cố:** Sau 3 tuần training và thử nghiệm, model trả lời rất tự tin nhưng sai các chính sách vừa cập nhật. Khi khách hàng hỏi về biểu phí mới, model trộn thông tin cũ và mới, không dẫn được nguồn và không tôn trọng quyền truy cập theo tenant.
+
+1. Dữ liệu thay đổi nhanh nhưng được nhồi vào weights tĩnh.
+2. Không có citation hoặc provenance để audit câu trả lời.
+3. Không có baseline RAG và eval set trước khi train.
+4. Team phải retrain liên tục nhưng vẫn không bắt kịp thay đổi chính sách.
+
+**Hậu quả:** Chi phí GPU tăng, trust giảm, legal yêu cầu tắt assistant cho đến khi có retrieval với ACL, citation và audit log.
 </Callout>
 
-## Learning objectives
-
-Sau chương này, bạn sẽ có thể:
-
-1. Phân tích và chứng minh toán học ranh giới hiệu năng giữa Prompt Engineering, RAG và Fine-tuning.
-2. Lập bản đồ đánh giá định lượng để đưa ra quyết định khi nào cần fine-tune mô hình và khi nào nên dùng RAG/Prompt.
-3. Tính toán chi phí tài nguyên (hạ tầng huấn luyện, nhân công gán nhãn, chi phí suy luận) để xác định điểm hòa vốn (break-even point) của dự án custom model.
-4. Hiểu sâu sắc cơ chế hoạt động của Parametric Memory và Non-parametric Memory dưới góc độ lý thuyết thông tin (Information Theory).
-5. Thiết kế một lộ trình tối ưu hóa tiệm tiến (progressive optimization roadmap) cho mô hình từ prompt zero-shot đến full parameter fine-tuning.
-6. Nhận diện và thiết lập các chỉ số đo lường rủi ro Catastrophic Forgetting và Model Drift trong production.
-
-## Prerequisites
-
-Để tiếp thu trọn vẹn chương này, bạn cần nắm vững:
-
-- Kiến trúc Transformer, cơ chế Self-Attention và khái niệm chiều ẩn (hidden dimension $d_{model}$) ở Phase 5.
-- Cơ chế In-context Learning và Tokenization ở Phase 6.
-- Thiết kế hệ thống RAG và các độ đo đánh giá truy xuất (Recall@K, MRR) ở Phase 8.
+Bài học rút ra: fine-tuning không phải database. Hãy dùng fine-tuning để dạy model **cách hành xử**, và dùng RAG/API để cung cấp **facts cập nhật, kiểm chứng được và có phân quyền**.
 
 ---
 
-## Core intuition: parametric vs non-parametric memory
+## 2. Architecture Blueprint (Decision Router trước khi Fine-Tune)
 
-Để hiểu bản chất kỹ thuật của fine-tuning, chúng ta phải phân tích cách mô hình ngôn ngữ lưu trữ và truy xuất thông tin.
-
-### 1. Parametric Memory (Trí nhớ tham số)
-Khi một LLM được huấn luyện (pretraining hoặc fine-tuning), thông tin được nén trực tiếp vào các ma trận trọng số (weights matrices) của nó thông qua quá trình tối ưu hóa gradient descent. 
-- **Toán học:** Trí nhớ tham số đại diện cho phân phối xác suất có điều kiện $P(X)$ được lưu trữ cố định trong các tham số $\theta$ của mạng neural.
-- **Đặc điểm:** 
-  - Truy xuất cực kỳ nhanh (chỉ tốn một lượt forward pass).
-  - Không làm tăng độ dài ngữ cảnh (context window) của prompt.
-  - Mang tính chất mờ (fuzzy), dễ bị nhiễu và sinh ra hiện tượng ảo giác (hallucination) khi cố gắng truy xuất các chi tiết cực kỳ chính xác (như mã số thuế, ngày sinh, hoặc số liệu tài chính cụ thể).
-
-### 2. Non-parametric Memory (Trí nhớ phi tham số)
-Dữ liệu không nằm trong weights của mô hình mà được truy xuất từ các nguồn tài nguyên bên ngoài (Cơ sở dữ liệu quan hệ, Vector Database, APIs) và được chèn trực tiếp vào prompt đầu vào tại thời điểm suy luận (inference time).
-- **Toán học:** Trí nhớ phi tham số hoạt động bằng cách thay đổi phân phối xác suất đầu ra bằng cách cung cấp thêm biến điều kiện trực tiếp: $P(X | \text{Context})$.
-- **Đặc điểm:**
-  - Độ chính xác tuyệt đối (mô hình có thể đọc trực tiếp văn bản nguồn).
-  - Hỗ trợ cơ chế trích dẫn (provenance/citations) tường minh.
-  - Dễ dàng cập nhật tức thời mà không cần huấn luyện lại.
-  - **Nhược điểm lớn:** Làm phình to chiều dài prompt, tăng chi phí tính toán tỷ lệ thuận với bình phương độ dài chuỗi $O(N^2)$ do cơ chế Self-Attention, và tăng độ trễ (latency) của quá trình Prefill trên GPU.
+Trước khi train model, hãy đưa bài toán qua một decision router:
 
 ```text
-+-----------------------------------------------------------------------------------+
-|                                 TRÍ NHỚ MÔ HÌNH                                   |
-+-----------------------------------------------------------------------------------+
-|                                                                                   |
-|  [PARAMETRIC MEMORY] (Weights - \theta)      [NON-PARAMETRIC MEMORY] (Context)    |
-|  - Huấn luyện tĩnh (Fine-Tuning)             - Truy xuất động tại Runtime (RAG)   |
-|  - Học hành vi, cấu trúc, phong cách         - Cung cấp dữ kiện, số liệu chính xác|
-|  - Tiết kiệm Context Window                  - Tiêu tốn Context Window            |
-|  - Không thể dẫn nguồn (No Citations)        - Dẫn nguồn chính xác (Citations)    |
-|                                                                                   |
-+-----------------------------------------------------------------------------------+
+[ Problem / User Pain ]
+        │
+        ▼
+[ Define target behavior + metrics ]
+        │
+        ├── Thiếu instruction rõ? ───────────────► Prompt engineering
+        │        - system prompt
+        │        - few-shot examples
+        │        - structured output instructions
+        │
+        ├── Thiếu facts cập nhật/citation? ─────► RAG / tools / database
+        │        - retrieval with ACL
+        │        - citations
+        │        - freshness and provenance
+        │
+        ├── Output format không ổn định? ───────► Fine-tuning candidate
+        │        - JSON/tool-call format
+        │        - tone/style
+        │        - domain reasoning pattern
+        │
+        ├── Prompt quá dài và traffic lớn? ─────► Fine-tuning candidate
+        │        - token reduction
+        │        - latency reduction
+        │        - cheaper small model
+        │
+        └── Không có eval baseline? ────────────► STOP: build eval first
 ```
+
+Một dự án fine-tuning chỉ nên bắt đầu khi bạn có:
+
+1. Baseline prompt/RAG đã đo được.
+2. Dataset đủ sạch và đúng license.
+3. Eval set đại diện production traffic.
+4. Release gate rõ: model mới phải tốt hơn baseline ở metric nào và không regress ở metric nào.
+5. Rollback path nếu model fine-tuned fail.
 
 ---
 
-## Prompt vs RAG vs Fine-Tuning: The trade-off matrix
+## 3. Parametric vs Non-Parametric Memory
 
-Dưới đây là bảng phân tích định lượng chi tiết các chiều kích kỹ thuật giữa ba phương pháp tối ưu hóa LLM:
+LLM có hai cách “biết” thông tin:
 
-| Tiêu chí kỹ thuật | Prompt Engineering (Few-shot) | RAG (Retrieval-Augmented) | Fine-Tuning (SFT / PEFT) |
+| Loại memory | Nằm ở đâu? | Tốt cho | Không tốt cho |
 |---|---|---|---|
-| **Cơ chế tác động** | Căn chỉnh phân phối xác suất qua ngữ cảnh ngắn hạn | Cung cấp dữ kiện ngoại cảnh qua hệ thống tìm kiếm | Thay đổi trực tiếp trọng số $\theta$ của mô hình |
-| **Dung lượng tri thức tối đa** | Bị giới hạn bởi Context Window ($< 10^5$ tokens) | Không giới hạn (phụ thuộc quy mô Vector DB / Index) | Giới hạn bởi dung lượng mô hình và tập dữ liệu train |
-| **Độ trễ suy luận (Inference Latency)** | Thấp đến Trung bình (tùy thuộc độ dài prompt) | Cao (trễ từ hệ thống tìm kiếm + trễ từ việc xử lý prompt dài) | **Thấp nhất** (prompt ngắn, quá trình prefill diễn ra cực nhanh) |
-| **Độ chính xác dữ kiện (Factual Accuracy)** | Thấp (dễ bị ảo giác nếu thiếu dữ kiện trong prompt) | **Cao nhất** (mô hình có nguồn dữ liệu trực tiếp để đối chiếu) | Trung bình (mô hình có xu hướng hallucinate khi nhớ thông tin cũ) |
-| **Khả năng thích ứng hành vi (Behavioral Alignment)** | Yếu (mô hình dễ quên hướng dẫn nếu prompt quá dài) | Yếu (chỉ tập trung vào việc trích xuất thông tin) | **Mạnh nhất** (định hình sâu sắc style, tone, format đầu ra) |
-| **Chi phí vận hành (Inference Cost)** | Trung bình (tính theo lượng token gửi đi) | Cao (tính phí cho cả query tokens và context tokens) | **Thấp nhất** (nếu dùng API) hoặc **Cao nhất** (nếu tự host GPU chuyên dụng) |
-| **Retraining Frequency** | Không cần | Không cần (chỉ cần cập nhật database) | Cần thiết lập pipeline huấn luyện lại định kỳ |
+| Parametric memory | Weights/model parameters | Style, format, domain patterns, reasoning routines | Facts thay đổi nhanh, citation, ACL |
+| Non-parametric memory | Context từ prompt/RAG/tool/API | Facts cập nhật, provenance, permissioning | Prompt dài, latency cao, context noise |
 
----
+### Parametric memory
 
-## Khi nào bắt buộc phải Fine-Tune? (Production Use-cases)
-
-Nhiều nhà phát triển cố gắng tránh né fine-tuning vì độ phức tạp của nó. Tuy nhiên, trong các bài toán thực tế dưới đây, fine-tuning là con đường duy nhất để đưa hệ thống đạt ngưỡng production-ready:
-
-### 1. Tối ưu hóa chi phí và băng thông ở quy mô cực lớn (Token Reduction)
-Giả sử bạn đang vận hành một ứng dụng dịch dịch thuật chuyên ngành hoặc phân loại thực thể y khoa với lưu lượng 1,000,000 requests/ngày.
-- **Nếu dùng Few-shot:** Mỗi prompt cần 3 ví dụ mẫu dài tổng cộng 2,500 tokens. Chi phí hàng ngày cho input tokens sẽ là:
-
-  Cost = 1,000,000 * 2,500 * Price_input
-
-- **Nếu dùng Fine-tuned Model:** Bạn không cần đưa ví dụ vào prompt nữa. Prompt chỉ còn 100 tokens. Tiết kiệm được 96% chi phí input token và giảm thiểu đáng kể thời gian TTFT (Time To First Token) do GPU không phải tính toán ma trận Attention cho 2,400 tokens thừa.
-
-### 2. Tuân thủ định dạng đầu ra tuyệt đối (Strict Output Adherence)
-Trong các hệ thống tự động hóa (agentic workflows), đầu ra của LLM phải là đầu vào của một trình biên dịch (compiler) hoặc một API downstream. Nếu mô hình sinh sai dù chỉ một dấu phẩy trong chuỗi JSON hoặc trả về thêm một câu giải thích thừa thãi ngoài mã code, hệ thống sẽ crash.
-- Các mô hình nhỏ (7B, 8B) rất khó giữ được sự ổn định này thông qua system prompt khi gặp các tình huống phức tạp. Fine-tuning trên tập dữ liệu cấu trúc chuẩn giúp khóa cứng phân phối đầu ra của mô hình vào đúng định dạng mong muốn.
-
-### 3. Ngôn ngữ hẹp và Thuật ngữ chuyên ngành sâu (Domain Adaptation)
-Mô hình nền tảng được huấn luyện trên dữ liệu đại chúng. Khi gặp các tài liệu y khoa chứa cấu trúc hóa học, các văn bản pháp luật Việt Nam với cấu trúc quy phạm phức tạp, hoặc các đoạn log viễn thông cổ điển, mô hình sẽ không hiểu ngữ cảnh. Fine-tuning giúp mô hình học cách biểu diễn từ vựng (vocabulary representations) và mối quan hệ ngữ nghĩa đặc thù của ngành đó trong không gian vector ẩn (latent space).
-
-### 4. Học cách sử dụng công cụ nội bộ phức tạp (Complex Tool Calling)
-Khi hệ thống của bạn có hơn 50 APIs nội bộ khác nhau với các tham số phức tạp, việc nhét toàn bộ API specs vào prompt sẽ làm cạn kiệt context window và làm nhiễu mô hình. Fine-tuning giúp mô hình học cách ánh xạ từ câu lệnh của người dùng sang đúng tên hàm và định dạng tham số một cách tự nhiên.
-
----
-
-## Khi nào không được phép Fine-Tune?
-
-Việc áp dụng fine-tuning vào các tình huống sau là một lỗi thiết kế hệ thống nghiêm trọng:
-
-### 1. Khi chưa xây dựng hệ thống đánh giá Prompt và RAG vững chắc
-Fine-tuning là một kỹ thuật "tối ưu hóa mù" nếu bạn không có baseline. Nếu không đo lường được hiệu năng của prompt zero-shot, few-shot và RAG, bạn sẽ không thể biết mô hình sau khi fine-tune tốt hơn hay tệ hơn, và tệ ở điểm nào.
-
-### 2. Dữ liệu thay đổi với tần suất cao (Dynamic Data)
-Nếu thông tin mô hình cần sử dụng thay đổi theo giờ hoặc ngày (ví dụ: danh mục sản phẩm của kho hàng, chính sách khuyến mãi tuần này), fine-tuning sẽ tạo ra một mô hình lỗi thời ngay khi kết thúc epoch cuối cùng. 
-
-### 3. Yêu cầu giải thích và dẫn nguồn (Auditability & Citations)
-Trong các ngành nhạy cảm như Tài chính, Y tế, hoặc Pháp lý, quyết định của AI phải đi kèm bằng chứng xác thực. Trí nhớ tham số của mô hình fine-tuned chỉ trả về câu trả lời dựa trên trọng số tĩnh. Nếu bạn yêu cầu nó dẫn nguồn, nó sẽ tự bịa ra tên tài liệu hoặc số trang (hallucinated citations) vì bản chất weights không lưu trữ con trỏ vật lý tới file nguồn.
-
----
-
-## Phân tích sâu: Catastrophic Forgetting
-
-Một trong những thách thức lớn nhất của Full Fine-Tuning là **Catastrophic Forgetting** (Sự quên mất mát). 
-
-### Cơ chế toán học:
-Trong quá trình huấn luyện ban đầu (pretraining), mô hình tối ưu hóa hàm mất mát trên không gian phân phối dữ liệu rộng lớn D_general. Khi ta thực hiện fine-tuning trên tập dữ liệu chuyên biệt D_specialized, thuật toán tối ưu (ví dụ: AdamW) sẽ cập nhật các trọng số \theta để giảm thiểu loss trên D_specialized. 
-
-Nếu không có ràng buộc, các trọng số quan trọng phục vụ cho việc lập luận tổng quát sẽ bị ghi đè hoàn toàn. Về mặt hình học, mô hình bị kéo ra khỏi vùng tối ưu toàn cục của tác vụ tổng quát để rơi vào một cực tiểu cục bộ của tác vụ mới:
+Khi fine-tune, bạn cập nhật hoặc bổ sung vào phân phối xác suất của model:
 
 ```text
-                  Loss Space
-                 /          \
-                /            \
-  [Vùng tối ưu tổng quát]    [Vùng tối ưu tác vụ mới]
-         (Pretrained)             (Fine-tuned)
-              │                       │
-              └─────── Dịch chuyển ───┘
-               (Mất khả năng tổng quát)
+Base model:       P(next_token | prompt; theta_base)
+Fine-tuned model: P(next_token | prompt; theta_base + delta_theta)
 ```
 
-### Giải pháp giảm thiểu trong sản xuất:
-1. **Parameter-Efficient Fine-Tuning (PEFT/LoRA):** Đóng băng hoàn toàn trọng số gốc và chỉ huấn luyện các ma trận bổ sung (sẽ học kỹ ở chương 10.3).
-2. **Dataset Mixing (Trộn dữ liệu):** Luôn pha trộn dữ liệu huấn luyện chuyên biệt với một tỷ lệ nhất định (ví dụ: 20-30%) dữ liệu tổng quát (general instruct datasets như ShareGPT hoặc SlimOrca). Việc này giữ cho gradient cập nhật không bị lệch hoàn toàn về một hướng.
-3. **Regularization (Phạt L2 / EWC):** Sử dụng các kỹ thuật như Elastic Weight Consolidation (EWC) để tính toán ma trận thông tin Fisher (Fisher Information Matrix), từ đó phạt nặng việc thay đổi các trọng số có đóng góp lớn cho các tác vụ cũ.
+Điều này phù hợp khi bạn muốn model có xu hướng sinh output theo một kiểu ổn định hơn:
 
----
+- Luôn trả lời theo schema JSON.
+- Dùng tone thương hiệu.
+- Viết SQL theo dialect nội bộ.
+- Chọn tool đúng hơn trong một tập API ổn định.
+- Giảm phụ thuộc vào few-shot examples dài.
 
-## Lộ trình tối ưu hóa tiệm tiến (Progressive Optimization Roadmap)
+### Non-parametric memory
 
-Một AI Engineer chuyên nghiệp luôn tiếp cận bài toán theo lộ trình từ rẻ đến đắt, từ đơn giản đến phức tạp:
+RAG/tooling thay đổi context tại inference time:
 
 ```text
-[Bước 1: Prompt Engineering] ──> [Bước 2: RAG / Contextual Search] ──> [Bước 3: PEFT / LoRA] ──> [Bước 4: Full Fine-Tuning]
-- Thiết lập baseline           - Cung cấp tri thức ngoại cảnh        - Tối ưu hóa style, format    - Thay đổi sâu sắc mô hình
-- Zero-shot, Few-shot          - Giải quyết kiến thức động          - Tiết kiệm latency & cost    - Chi phí cực lớn
-- Chi phí tối thiểu            - Độ chính xác dữ kiện cao           - Cần 100 - 1,000 examples     - Cần cụm GPU chuyên dụng
+P(next_token | user_prompt + retrieved_context + tool_result; theta_base)
 ```
 
-Không bao giờ nhảy vọt từ Bước 1 lên Bước 4 nếu chưa đi qua các bước trung gian để thu thập dữ liệu và đánh giá sai số của hệ thống.
+Điều này phù hợp khi câu trả lời cần dựa trên dữ liệu cụ thể:
+
+- Policy mới nhất.
+- Giá sản phẩm.
+- Hồ sơ khách hàng.
+- Log/debug trace.
+- Tài liệu có phân quyền.
+
+<Callout type="info" title="Quy tắc ngắn gọn">
+Nếu thông tin cần **cập nhật, dẫn nguồn hoặc phân quyền**, dùng RAG/tool. Nếu hành vi cần **ổn định, rẻ hơn hoặc chuyên biệt hơn**, fine-tuning mới đáng cân nhắc.
+</Callout>
 
 ---
 
-## Implementation lab: Decision Matrix Builder
+## 4. Khi nào Fine-Tune là lựa chọn đúng?
 
-**Nhiệm vụ:** Xây dựng một thư viện Python phân tích định lượng dựa trên các biến số hệ thống (Request Volume, Latency SLA, Data Update Frequency, Budget, Labeled Data Size) để đưa ra đề xuất kiến trúc tối ưu kèm theo phân tích tài chính chi tiết.
+Fine-tuning đáng tiền khi nó giải quyết một bottleneck mà prompt/RAG không còn xử lý tốt.
+
+### 4.1 Behavioral alignment
+
+Bạn muốn model thay đổi cách phản hồi, không phải nhớ thêm facts.
+
+Ví dụ:
+
+- Support assistant luôn hỏi đúng 2 câu clarification trước khi escalate.
+- Legal assistant luôn phân biệt “thông tin tham khảo” và “tư vấn pháp lý”.
+- Coding model luôn sinh patch theo format diff thay vì giải thích dài.
+
+### 4.2 Strict output adherence
+
+Nếu output là input của hệ thống downstream, sai format là incident.
+
+```json
+{
+  "intent": "refund_request",
+  "confidence": 0.91,
+  "required_actions": ["lookup_order", "validate_policy"],
+  "user_message": "..."
+}
+```
+
+Prompt có thể cải thiện schema adherence, nhưng fine-tuning giúp model nhỏ tuân thủ format ổn định hơn khi prompt phức tạp.
+
+### 4.3 Domain language and reasoning pattern
+
+Một số domain không chỉ cần facts, mà cần cách đọc và lập luận đặc thù:
+
+- Medical coding.
+- Telecom log analysis.
+- Vietnamese legal clause extraction.
+- Financial transaction classification.
+- Internal API/tool naming.
+
+### 4.4 Token reduction at scale
+
+Nếu mỗi request phải kèm 2,000 tokens few-shot examples và traffic rất lớn, fine-tuning có thể giảm cost và latency.
+
+```text
+Daily input tokens saved = requests_per_day * removed_prompt_tokens
+Daily saving = Daily input tokens saved / 1_000_000 * price_per_million_input_tokens
+```
+
+Nếu saving vượt training + eval + ops cost trong vài tháng, fine-tuning có business case.
+
+### 4.5 Smaller specialist model
+
+Thay vì gọi model lớn cho mọi request, bạn có thể fine-tune một small model để xử lý workload hẹp:
+
+| Workload | Baseline | Fine-tuned target |
+|---|---|---|
+| Intent classification | Large API model | Small encoder/SLM |
+| JSON extraction | General chat model | Fine-tuned 3B/7B |
+| Code style conversion | Frontier model | LoRA specialist |
+| Internal tool routing | Long prompt with specs | Fine-tuned tool router |
+
+---
+
+## 5. Khi nào không được Fine-Tune?
+
+### 5.1 Dynamic knowledge
+
+Nếu dữ liệu thay đổi theo giờ/ngày/tuần, fine-tuning sẽ tạo stale weights. Dùng RAG/API.
+
+### 5.2 Auditability and citations
+
+Weights không lưu “con trỏ” tới tài liệu nguồn. Nếu bạn cần trả lời kèm bằng chứng, citation phải đến từ retrieval/tool trace.
+
+### 5.3 Access control
+
+Fine-tuned model không tự biết user nào được xem document nào. ACL nên nằm ở retrieval layer hoặc policy gateway, không nằm trong weights.
+
+### 5.4 Dataset quá nhỏ hoặc quá nhiễu
+
+Một tập 30 ví dụ không đủ để thay đổi hành vi model lớn một cách đáng tin. Nó thường gây memorization hoặc overfitting.
+
+### 5.5 Chưa có eval baseline
+
+Không có baseline nghĩa là bạn không biết model mới tốt hơn hay chỉ “có vẻ hay hơn”. Fine-tuning không có eval là tối ưu mù.
+
+<Callout type="warning" title="Không fine-tune để sửa product ambiguity">
+Nếu người dùng không rõ task, policy nội bộ chưa thống nhất, hoặc output requirements thay đổi liên tục, fine-tuning sẽ đóng băng sự mơ hồ đó vào model. Hãy sửa spec, workflow và eval trước.
+</Callout>
+
+---
+
+## 6. Implementation Playbook: Fine-Tuning Decision Matrix
+
+Bạn có thể dùng ma trận sau để quyết định:
+
+| Câu hỏi | Nếu câu trả lời là “có” | Hướng xử lý |
+|---|---|---|
+| Cần facts mới nhất? | Có | RAG/API, không fine-tune facts |
+| Cần citation/provenance? | Có | RAG với source tracking |
+| Cần phân quyền theo user/tenant? | Có | Retrieval ACL + policy gateway |
+| Prompt dài vì nhiều ví dụ cố định? | Có | Fine-tuning candidate |
+| Output format thường xuyên sai? | Có | Fine-tuning hoặc constrained decoding |
+| Model cần học tone/style/domain pattern? | Có | Fine-tuning candidate |
+| Có eval set đại diện production? | Không | Dừng, xây eval trước |
+| Có rollback path? | Không | Dừng, thiết kế release process trước |
+
+### Gating checklist trước khi train
+
+```text
+[ ] Problem statement rõ: metric nào cần tăng?
+[ ] Baseline prompt zero-shot/few-shot đã đo.
+[ ] Baseline RAG/tooling đã đo nếu bài toán có knowledge.
+[ ] Dataset train/validation/test tách rõ.
+[ ] Có data card: nguồn, license, PII, cleaning steps.
+[ ] Có eval set gồm success cases + failure cases.
+[ ] Có regression eval cho năng lực tổng quát.
+[ ] Có cost estimate: training, inference, monitoring, retraining.
+[ ] Có model registry/checkpoint naming.
+[ ] Có rollback policy.
+```
+
+### Một scoring function thực dụng
 
 ```python
-from dataclasses import dataclass
-from typing import Dict, Any
+def fine_tune_score(problem):
+    score = 0
+    score += 3 if problem.needs_stable_output_format else 0
+    score += 3 if problem.needs_behavior_change else 0
+    score += 2 if problem.prompt_tokens_removed_at_scale > 1000 else 0
+    score += 2 if problem.domain_pattern_is_stable else 0
+    score -= 4 if problem.knowledge_changes_frequently else 0
+    score -= 4 if problem.requires_citations else 0
+    score -= 3 if problem.requires_user_level_acl else 0
+    score -= 5 if not problem.has_eval_baseline else 0
+    return score
 
-@dataclass
-class ProjectConstraints:
-    daily_requests: int
-    avg_prompt_tokens: int
-    avg_output_tokens: int
-    data_update_frequency_hours: float
-    labeled_examples: int
-    latency_sla_seconds: float
-    monthly_budget_usd: float
-    private_data_required: bool
-
-class ArchitectureRouter:
-    def __init__(self, constraints: ProjectConstraints):
-        self.c = constraints
-        # Giá token trung bình của frontier API (ví dụ: GPT-4o) trên 1M tokens
-        self.input_price_1m = 5.0  # USD
-        self.output_price_1m = 15.0 # USD
-
-    def calculate_api_cost(self) -> float:
-        input_cost = (self.c.daily_requests * self.c.avg_prompt_tokens / 1_000_000) * self.input_price_1m
-        output_cost = (self.c.daily_requests * self.c.avg_output_tokens / 1_000_000) * self.output_price_1m
-        return (input_cost + output_cost) * 30  # Chi phí hàng tháng
-
-    def analyze(self) -> Dict[str, Any]:
-        scores = {"prompt": 0, "rag": 0, "fine_tuning": 0}
-        reasons = []
-        hard_blocks = []
-
-        # 1. Ràng buộc về dữ liệu động (Data Freshness)
-        if self.c.data_update_frequency_hours < 24:
-            scores["rag"] += 15
-            scores["prompt"] += 10
-            scores["fine_tuning"] -= 20
-            reasons.append("Dữ liệu thay đổi nhanh (<24h): Fine-tuning bị phạt điểm nặng do không thể train lại liên tục.")
-        elif self.c.data_update_frequency_hours > 720: # Hơn 30 ngày
-            scores["fine_tuning"] += 10
-            reasons.append("Dữ liệu tĩnh hoặc ít thay đổi: Thuận lợi cho việc đóng băng tri thức vào weights.")
-
-        # 2. Ràng buộc về dữ liệu nhãn (Data Availability)
-        if self.c.labeled_examples < 100:
-            scores["fine_tuning"] -= 30
-            scores["prompt"] += 15
-            hard_blocks.append("Fine-Tuning bị khóa: Số lượng mẫu nhãn quá ít (<100) để đảm bảo mô hình không bị sụp đổ.")
-        elif 100 <= self.c.labeled_examples < 1000:
-            scores["fine_tuning"] += 5
-            reasons.append("Lượng dữ liệu nhãn trung bình: Khuyến nghị dùng PEFT/LoRA thay vì Full Fine-Tuning.")
-        else:
-            scores["fine_tuning"] += 15
-            reasons.append("Dữ liệu nhãn dồi dào (>1000): Đủ điều kiện cho cả Full Fine-Tuning.")
-
-        # 3. Phân tích tài chính và quy mô (Inference Cost & Latency)
-        api_cost_monthly = self.calculate_api_cost()
-        # Giả định chi phí tự host 1 GPU chuyên dụng (ví dụ: A10G/A100) khoảng 1,500 USD/tháng bao gồm cả công vận hành
-        hosting_cost_monthly = 1500.0 
-
-        if api_cost_monthly > hosting_cost_monthly * 2 and self.c.labeled_examples >= 500:
-            scores["fine_tuning"] += 15
-            reasons.append(f"API Cost ({api_cost_monthly:.2f}/tháng) cao vượt trội so với Hosting Cost ({hosting_cost_monthly:.2f}/tháng): Fine-tuning giúp tối ưu ROI.")
-        else:
-            scores["prompt"] += 10
-            reasons.append(f"API Cost ({api_cost_monthly:.2f}/tháng) ở mức chấp nhận được: Nên giữ Prompt/RAG để giảm độ phức tạp hệ thống.")
-
-        # 4. Ràng buộc về độ trễ (Latency SLA)
-        if self.c.latency_sla_seconds < 1.0:
-            scores["fine_tuning"] += 15
-            scores["rag"] -= 10
-            reasons.append("SLA độ trễ cực thấp (<1s): Phạt điểm RAG do tốn thời gian tìm kiếm database và xử lý prompt dài.")
-
-        # Quyết định cuối cùng
-        if hard_blocks:
-            # Nếu bị khóa cứng, loại bỏ Fine-tuning khỏi danh sách lựa chọn
-            scores["fine_tuning"] = -999
-
-        recommendation = max(scores, key=scores.get)
-
-        return {
-            "recommendation": recommendation,
-            "monthly_api_cost_estimate": round(api_cost_monthly, 2),
-            "scores": scores,
-            "reasons": reasons,
-            "hard_blocks": hard_blocks
-        }
-
-# Kịch bản kiểm thử: Hệ thống hỗ trợ y tế với yêu cầu dữ liệu nội bộ bảo mật, latency thấp
-constraints = ProjectConstraints(
-    daily_requests=50000,
-    avg_prompt_tokens=3000,   # Prompt dài do chứa tài liệu y khoa
-    avg_output_tokens=250,
-    data_update_frequency_hours=168, # Cập nhật hàng tuần
-    labeled_examples=1200,    # Có dữ liệu gán nhãn tốt từ bác sĩ
-    latency_sla_seconds=0.8,   # Cần phản hồi tức thì
-    monthly_budget_usd=5000.0,
-    private_data_required=True
-)
-
-router = ArchitectureRouter(constraints)
-analysis = router.analyze()
-print(f"Đề xuất kiến trúc: {analysis['recommendation']}")
-print(f"Ước tính chi phí API hàng tháng: {analysis['monthly_api_cost_estimate']}")
-print("Lý do chi tiết:")
-for r in analysis["reasons"]:
-    print(f" - {r}")
-if analysis["hard_blocks"]:
-    print("CẢNH BÁO KHÓA CỨNG:")
-    for b in analysis["hard_blocks"]:
-        print(f" [!] {b}")
+# Rule of thumb:
+# score >= 5: fine-tuning candidate
+# score 1..4: improve prompt/RAG first
+# score <= 0: do not fine-tune yet
 ```
 
 ---
 
-## Common mistakes & debugging checklist
+## 7. Cost & Decision Unit Economics
 
-<Callout type="warning" title="Mistake 1: Dùng Fine-Tuning như một giải pháp vá lỗi prompt cẩu thả">
-Nhiều đội ngũ kỹ thuật khi thấy mô hình sinh ra output sai định dạng liền lập tức đem đi fine-tune. Thực tế, 80% trường hợp lỗi định dạng có thể được giải quyết bằng cách thiết lập cấu hình JSON Schema nghiêm ngặt tại API layer (như Structured Outputs của OpenAI) hoặc sửa lại system prompt. Hãy chỉ fine-tune khi prompt đã được tối ưu hóa tối đa nhưng vẫn không đáp ứng được SLA độ trễ hoặc chi phí.
+Fine-tuning không chỉ có training cost. Nó tạo một lifecycle cost.
+
+| Cost bucket | Ví dụ | Câu hỏi cần trả lời |
+|---|---|---|
+| Data cost | labeling, cleaning, dedup, PII review | Ai sở hữu chất lượng dữ liệu? |
+| Training cost | GPU hours, API fine-tuning fee | Có budget cho retry không? |
+| Evaluation cost | LLM judge, human review, benchmark runs | Release gate tốn bao nhiêu mỗi lần? |
+| Serving cost | hosted endpoint, GPU, adapter storage | Model mới có thật sự rẻ hơn không? |
+| Ops cost | monitoring, rollback, retraining | Ai trực on-call khi regression? |
+| Risk cost | hallucination, privacy leak, compliance | Incident tệ nhất là gì? |
+
+### Break-even đơn giản
+
+```text
+training_project_cost = data_cost + training_cost + eval_cost + engineering_cost
+monthly_saving = prompt_token_saving + latency_saving + provider_cost_saving
+break_even_months = training_project_cost / monthly_saving
+```
+
+Nếu break-even quá dài hoặc model cần retrain thường xuyên hơn break-even period, fine-tuning không hợp lý về kinh tế.
+
+<Callout type="tip" title="Tính cả chi phí eval lại">
+Mỗi lần retrain là một lần phải chạy eval, safety checks và release process. Đừng chỉ tính GPU hours.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: Đánh giá mô hình dựa trên trực giác chủ quan (Vibe Check)">
-Sau khi fine-tune, kỹ sư chat thử với mô hình khoảng 10 câu, thấy câu trả lời mượt mà và kết luận mô hình đã thành công. Đây là sai lầm chết người. Mô hình ngôn ngữ là hệ thống mang tính xác suất. Bạn phải xây dựng một tập dữ liệu kiểm thử độc lập (holdout evaluation set) tối thiểu 100-500 mẫu và chạy các thang đo tự động để đánh giá.
+---
+
+## 8. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Fine-tune để nhớ facts">
+**Triệu chứng:** Model trả lời tự tin nhưng sai dữ liệu mới, không dẫn nguồn.
+
+**Nguyên nhân:** Dynamic knowledge bị đưa vào weights thay vì retrieval layer.
+
+**Cách khắc phục:** Chuyển facts sang RAG/API, chỉ fine-tune format hoặc reasoning pattern nếu cần.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: Bỏ qua vấn đề bản quyền và bảo mật của dữ liệu huấn luyện">
-Khi gửi dữ liệu lên các API Fine-tuning đám mây của bên thứ ba, dữ liệu của bạn có thể được lưu trữ trên server của họ. Đối với các ngành có tính bảo mật cao (Tài chính, Y tế), điều này vi phạm nghiêm trọng các quy định pháp lý (GDPR, HIPAA). Trong trường hợp này, bạn bắt buộc phải tự host và fine-tune các mô hình mã nguồn mở (như LLaMA, Qwen) trên hạ tầng private cloud của mình.
+<Callout type="warning" title="Pitfall 2: Không có baseline">
+**Triệu chứng:** Team không chứng minh được model fine-tuned tốt hơn prompt/RAG.
+
+**Nguyên nhân:** Không xây eval harness trước khi training.
+
+**Cách khắc phục:** Tạo holdout eval set, chạy baseline model, định nghĩa release threshold.
 </Callout>
 
-### Checklist quyết định kiến trúc:
+<Callout type="warning" title="Pitfall 3: Dataset nhỏ nhưng epoch quá nhiều">
+**Triệu chứng:** Training loss giảm nhanh, validation quality xấu, model lặp lại câu mẫu.
 
-- [ ] Bạn đã thử viết prompt few-shot với mô hình mạnh nhất (GPT-4o / Claude 3.5 Sonnet) để xác định "trần hiệu năng" chưa?
-- [ ] Dữ liệu mà mô hình cần truy cập có thay đổi với tần suất dưới 48 giờ không? (Nếu có -> Chọn RAG).
-- [ ] Bạn có nguồn tài chính và nhân lực để gán nhãn và kiểm định chất lượng cho tối thiểu 500 cặp dữ liệu Instruction/Output sạch không?
-- [ ] Bạn đã tính toán chi phí vận hành GPU (VRAM, tính khả dụng của GPU trên cloud) so với chi phí gọi API chưa?
-- [ ] Bạn có kế hoạch và tập dữ liệu để đo lường sự suy giảm năng lực tổng quát (catastrophic forgetting) của mô hình sau khi train chưa?
-- [ ] Bài toán của bạn có yêu cầu mô hình dẫn nguồn chính xác đến từng trang tài liệu không? (Nếu có -> Chọn RAG).
+**Nguyên nhân:** Overfitting và memorization.
+
+**Cách khắc phục:** Thêm dữ liệu chất lượng, giảm epoch/LR, dùng PEFT, tăng validation coverage.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Fine-tune thay cho policy design">
+**Triệu chứng:** Model inconsistent vì policy nội bộ mâu thuẫn.
+
+**Nguyên nhân:** Requirements chưa rõ, annotation không nhất quán.
+
+**Cách khắc phục:** Chuẩn hóa rubric, policy, examples và reviewer agreement trước khi train.
+</Callout>
 
 ---
 
 ## Practice exercises
 
-1. **Phân tích ca lâm nghiệp (Case Study):** Một công ty thương mại điện tử lớn muốn xây dựng hệ thống tự động gắn thẻ phân loại (tagging) cho 500,000 sản phẩm mới mỗi ngày vào 1,500 danh mục ngành hàng cố định. Hãy viết bản phân tích kiến trúc chi tiết chọn giữa: (a) Prompt Engineering với GPT-4o, (b) RAG với Vector Database, (c) Fine-tune một mô hình nhỏ 8B (ví dụ LLaMA-3) tự host. Đánh giá dựa trên 3 tiêu chí: Độ chính xác, Độ trễ (Latency), và Chi phí (Cost).
-2. **Thiết kế hệ thống Hybrid (RAG + FT):** Thiết kế kiến trúc cho một trợ lý ảo hỗ trợ lập trình viên viết code nội bộ của một tập đoàn công nghệ lớn. Trợ lý này cần sử dụng các thư viện code nội bộ (luôn thay đổi) và phải viết đúng coding style của tập đoàn. Hãy chỉ rõ phần nào trong hệ thống sẽ do RAG đảm nhiệm và phần nào sẽ được tối ưu hóa bằng Fine-tuning.
-3. **Đọc hiểu bài báo khoa học:** Đọc bài báo khoa học "LIMA: Less Is More for Alignment" (Zhou et al., 2023) và giải thích tại sao chỉ với 1,000 ví dụ huấn luyện chất lượng cao, mô hình LIMA lại có khả năng căn chỉnh hành vi tương đương với các mô hình được train trên hàng chục ngàn ví dụ khác. Liên hệ trực tiếp với chiến lược chuẩn bị dữ liệu trong thực tế.
+1. Chọn một AI feature bạn từng xây hoặc muốn xây. Phân loại nhu cầu thành: behavior, knowledge, format, cost, latency, safety.
+2. Viết decision matrix cho feature đó và kết luận: prompt, RAG, fine-tune hay hybrid.
+3. Tính break-even sơ bộ nếu fine-tuning giúp giảm 1,500 input tokens/request ở 500,000 requests/tháng.
+4. Thiết kế eval set tối thiểu 50 cases để chứng minh fine-tuning tốt hơn baseline.
+5. Liệt kê 5 failure modes nếu team fine-tune mà không có RAG/citation.
 
 ---
 
 ## Knowledge check
 
-1. Sự khác biệt cốt lõi giữa Parametric Memory và Non-parametric Memory trong mô hình ngôn ngữ lớn là gì?
-2. Tại sao việc cập nhật kiến thức thời gian thực bằng phương pháp Fine-tuning lại không khả thi trong môi trường sản xuất?
-3. Trong trường hợp nào chi phí chạy mô hình tự host (Self-hosted) sẽ rẻ hơn so với việc gọi API thương mại?
-4. Hiện tượng Catastrophic Forgetting xảy ra do nguyên lý tối ưu hóa nào của mạng neural?
-5. Tại sao RAG lại là giải pháp ưu việt hơn Fine-tuning khi hệ thống yêu cầu tính minh bạch và khả năng kiểm toán thông tin (auditability)?
-6. Lợi thế lớn nhất của việc rút ngắn chiều dài prompt (token reduction) thông qua fine-tuning đối với GPU serving là gì?
+1. Vì sao fine-tuning không phù hợp để lưu thông tin thay đổi hằng ngày?
+2. Parametric memory khác non-parametric memory ở điểm nào?
+3. Khi nào token reduction có thể tạo business case cho fine-tuning?
+4. Vì sao cần baseline prompt/RAG trước khi train?
+5. ACL nên nằm ở model weights hay retrieval/policy layer?
 
 ---
 
 ## Answer key
 
-1. Parametric Memory được lưu trữ tĩnh dưới dạng các trọng số vật lý của mô hình thông qua quá trình học. Non-parametric Memory được đưa động vào ngữ cảnh prompt tại thời điểm suy luận từ các nguồn dữ liệu bên ngoài.
-2. Vì quá trình huấn luyện mô hình tốn thời gian (từ vài giờ đến vài ngày) và chi phí tính toán lớn, không thể đáp ứng được tốc độ thay đổi liên tục của dữ liệu thời gian thực.
-3. Khi lượng request cực kỳ lớn và liên tục (high throughput), khiến tổng chi phí token tích lũy của API vượt quá chi phí cố định để thuê và vận hành phần cứng GPU chuyên dụng.
-4. Do quá trình tối ưu hóa gradient descent trên tập dữ liệu mới làm thay đổi mạnh các trọng số đã được tối ưu hóa cho các tác vụ tổng quát trước đó mà không có ràng buộc bảo toàn.
-5. Vì RAG cho phép trích xuất trực tiếp nguồn thông tin vật lý (file, trang, dòng) chèn vào prompt, giúp mô hình dẫn nguồn chính xác. Weights của mô hình fine-tuned không có con trỏ vật lý tới dữ liệu gốc nên không thể dẫn nguồn thật.
-6. Giúp giảm thiểu thời gian xử lý giai đoạn Prefill trên GPU (giai đoạn tính toán ma trận Attention trên toàn bộ chiều dài input), từ đó giảm thiểu đáng kể chỉ số TTFT (Time To First Token) và tiết kiệm VRAM của KV Cache.
-
----
-
-## Mini-project: Fine-tuning Feasibility Study
-
-### Nhiệm vụ:
-Hãy đóng vai trò là Principal AI Architect của một công ty Fintech. Bạn được giao nhiệm vụ viết một tài liệu nghiên cứu khả thi (Feasibility Report) bằng Markdown dài khoảng 3 trang để trình bày lên CTO về việc có nên fine-tune một mô hình mã nguồn mở để thay thế dịch vụ API của OpenAI hiện tại cho tác vụ: **Trích xuất thông tin từ hợp đồng tài chính và xuất ra định dạng JSON chuẩn**.
-
-### Yêu cầu chi tiết trong báo cáo:
-1. **Phân tích hiện trạng:** 
-   - Lượng request hiện tại: 200,000 giao dịch/ngày.
-   - Kích thước prompt trung bình (chứa system instruction + 2 few-shot examples + hợp đồng đầu vào): 4,000 tokens.
-   - Kích thước output trung bình: 300 tokens.
-   - Tính toán chi phí API hàng tháng sử dụng bảng giá hiện tại của GPT-4o-mini.
-2. **Đề xuất giải pháp kiến trúc mới:**
-   - Lựa chọn mô hình nền (ví dụ: Qwen-2.5-7B-Instruct hoặc LLaMA-3-8B-Instruct).
-   - Thiết kế cấu trúc prompt mới sau khi fine-tune (loại bỏ instructions dài và few-shot). Ước tính kích thước prompt mới.
-3. **Phân tích tài chính (TCO & Break-even point):**
-   - Ước tính chi phí huấn luyện (Sử dụng dịch vụ GPU cloud như RunPod hoặc AWS với ước tính số giờ train).
-   - Ước tính chi phí vận hành GPU hàng tháng (Giả định số lượng GPU cần thiết để đáp ứng throughput 200,000 requests/ngày dựa trên tốc độ sinh token của mô hình 8B).
-   - Xác định điểm hòa vốn (sau bao nhiêu tháng hệ thống mới bắt đầu tiết kiệm tiền cho công ty).
-4. **Kế hoạch rủi ro và đánh giá (Risk & Evaluation Plan):**
-   - Đề xuất metrics cụ thể để đánh giá độ chính xác của cấu trúc JSON.
-   - Thiết lập phương án đo lường và giảm thiểu catastrophic forgetting trên năng lực lập luận chung của mô hình.
+1. Vì weights là static artifact sau training; muốn cập nhật phải retrain và vẫn không có citation/provenance rõ.
+2. Parametric memory nằm trong weights và tốt cho behavior/style/pattern; non-parametric memory nằm trong context/tool/RAG và tốt cho facts cập nhật, citation, ACL.
+3. Khi traffic lớn, prompt chứa nhiều ví dụ cố định và số token tiết kiệm đủ bù training/eval/ops cost.
+4. Baseline giúp đo model mới thật sự cải thiện metric nào và regress metric nào; nếu không có baseline, fine-tuning là tối ưu mù.
+5. ACL nên nằm ở retrieval/policy layer vì quyền truy cập thay đổi theo user/tenant/request và cần audit được.
 
 ---
 
 ## Điểm cần nhớ
 
-- Quyết định fine-tuning phải dựa trên dữ liệu định lượng về chi phí, độ trễ và chất lượng, không dựa trên cảm tính.
-- Prompt Engineering và RAG là nền tảng bắt buộc phải làm trước để thiết lập baseline hiệu năng.
-- RAG quản lý tri thức động và dữ liệu chính xác; Fine-tuning quản lý hành vi, phong cách và tối ưu hóa tài nguyên.
-- Catastrophic Forgetting là rủi ro lớn nhất của Full Fine-Tuning và cần được kiểm soát bằng Dataset Mixing.
-
----
+- Fine-tuning là công cụ tối ưu hành vi, không phải database động.
+- RAG/tooling phù hợp hơn cho facts cập nhật, citation và access control.
+- Fine-tuning đáng cân nhắc khi cần format ổn định, domain behavior, token reduction hoặc specialist model.
+- Không train nếu chưa có baseline, eval set, data card và rollback path.
+- Quyết định fine-tune phải tính cả data, eval, serving, monitoring và retraining cost.
+- Càng gần production, fine-tuning càng giống một release engineering process hơn là một notebook experiment.
 
 ## Next chapter bridge
 
-Khi tài liệu nghiên cứu khả thi được duyệt và bạn xác định rõ tác vụ cần fine-tune, bước tiếp theo là tiến hành quá trình huấn luyện toàn bộ tham số. Chương tiếp theo: **Full Fine-Tuning** — đi sâu vào toán học của Supervised Fine-Tuning (SFT), cấu trúc dữ liệu Chat Templates, sử dụng HuggingFace Trainer API, cách tính toán chính xác nhu cầu VRAM của optimizer và các kỹ thuật tối ưu hóa phần cứng để tránh lỗi Out-Of-Memory.
+Bây giờ bạn đã biết **khi nào nên fine-tune**, chương tiếp theo đi vào câu hỏi khó hơn: nếu thật sự cần cập nhật toàn bộ weights, **Full Fine-Tuning** hoạt động như thế nào, tốn bao nhiêu VRAM và làm sao tránh catastrophic forgetting.

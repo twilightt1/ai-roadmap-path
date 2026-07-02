@@ -1,0 +1,640 @@
+Bạn đã học safety fundamentals, prompt injection security, fairness audit, privacy governance và transparency. Nhưng responsible AI không sống trong tài liệu riêng lẻ. Nó phải trở thành một operating system của sản phẩm: policy, people, process, technical controls, monitoring, audit và incident response.
+
+Responsible AI in Production là lớp cuối trước Capstone: biến mọi kỹ năng trong roadmap thành một nền tảng AI có thể vận hành trong thế giới thật, nơi người dùng, dữ liệu, pháp lý, adversaries và failure modes đều tồn tại cùng lúc.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Harmful output nhưng không có audit trail">
+**Bối cảnh:** Một AI assistant doanh nghiệp trả lời câu hỏi về chính sách nhân sự, hợp đồng và tài liệu nội bộ. Hệ thống có RAG, tool calling, fallback model và output moderation đơn giản.
+
+**Sự cố:** Một nhân viên nhận được câu trả lời sai về chính sách nghỉ việc, kèm trích dẫn không tồn tại. Khi incident được báo cáo, team không thể trả lời đầy đủ:
+
+1. Model version nào đã sinh câu trả lời?
+2. Prompt template và policy version lúc đó là gì?
+3. Retrieved chunks nào được đưa vào context?
+4. Safety classifier score ra sao?
+5. Có output moderation không và vì sao pass?
+6. Ai là owner để rollback hoặc sửa policy?
+
+**Hậu quả:** Team mất nhiều ngày điều tra thủ công. Legal yêu cầu tạm dừng AI assistant vì không có auditability và incident response process.
+</Callout>
+
+Bài học rút ra: Responsible AI production không chỉ là chặn nội dung xấu. Nó là khả năng kiểm soát, truy vết, giải thích, rollback và cải thiện hệ thống sau mỗi sự cố.
+
+---
+
+## 2. Architecture Blueprint (Production Safety Pipeline)
+
+Một safety pipeline production nên nằm trước, trong và sau model call:
+
+```text
+[ User Request ]
+       │
+       ▼
+[ Auth / Tenant Policy ]
+  - user role
+  - tenant config
+  - feature permissions
+       │
+       ▼
+[ Input Safety Gateway ]
+  - PII detection/masking
+  - prompt injection classifier
+  - harmful request moderation
+  - high-stakes domain classifier
+       │
+       ▼
+[ Policy Router ]
+  - allow / refuse / ask clarification
+  - route to safe model
+  - require human review
+       │
+       ▼
+[ LLM / RAG / Agent Tools ]
+  - retrieval with ACL
+  - tool allowlist
+  - action authorization
+  - cost/budget limits
+       │
+       ▼
+[ Output Safety Gateway ]
+  - toxicity/harmful content check
+  - PII/secrets DLP
+  - hallucination/evidence checks
+  - format/schema validation
+       │
+       ▼
+[ Human Review / Escalation ]
+  - high-risk cases
+  - low-confidence answers
+  - irreversible actions
+       │
+       ▼
+[ Audit Log + Monitoring + Incident Response ]
+  - request trace
+  - policy/model versions
+  - safety scores
+  - user report
+  - postmortem/regression test
+```
+
+Mục tiêu: mỗi request quan trọng phải có policy decision object, audit trace và owner rõ ràng.
+
+---
+
+## 3. Content Moderation Architecture
+
+Moderation không chỉ là “gọi API kiểm duyệt”. Bạn cần quyết định kiểm duyệt ở đâu, khi nào và theo policy nào.
+
+### Pre-moderation
+
+Kiểm tra input trước khi gọi model.
+
+Ưu điểm:
+
+- Chặn yêu cầu nguy hiểm sớm.
+- Giảm token/API cost.
+- Giảm rủi ro model bị kích hoạt hành vi xấu.
+
+Nhược điểm:
+
+- False positives có thể chặn user hợp lệ.
+- Không phát hiện output model tự sinh sai.
+
+### Post-moderation
+
+Kiểm tra output trước khi trả về user.
+
+Ưu điểm:
+
+- Chặn harmful output/hallucinated unsafe advice.
+- Có thể scan PII/secrets trong response.
+
+Nhược điểm:
+
+- Tăng latency.
+- Streaming khó hơn vì output đến từng token.
+
+### Streaming moderation
+
+Với streaming, bạn có thể:
+
+- Buffer vài tokens trước khi hiển thị.
+- Chạy moderation song song theo chunks.
+- Ngắt stream nếu phát hiện violation.
+- Log partial output cho incident với privacy controls.
+
+| Mode | Khi dùng | Trade-off |
+|---|---|---|
+| Pre-moderation | Harmful user request, prompt injection, PII | Có thể overblock |
+| Post-moderation | Output safety, DLP, schema validation | Tăng latency |
+| Streaming moderation | Chat UX realtime | Implementation phức tạp |
+| Human moderation | High-stakes/ambiguous | Operation cost |
+
+---
+
+## 4. Safety Classifiers và Guard Models
+
+Safety classifier có thể là:
+
+| Loại | Ví dụ | Khi dùng |
+|---|---|---|
+| Cloud moderation API | Provider moderation endpoints | Quick start, broad categories |
+| Open-source guard model | Llama Guard, ShieldGemma-style models | Self-host/privacy/custom policy |
+| Small custom classifier | DistilBERT/SLM classifier | Domain-specific, latency thấp |
+| Rule-based checks | Regex, keyword, schema rules | Secrets/PII/tool arguments |
+| Ensemble/cascade | Cheap-first, expensive-second | Tối ưu cost/latency |
+
+Cascade pattern:
+
+```text
+[ Input ]
+   │
+   ├── Rule checks: secrets, obvious PII, blocked patterns
+   │       └── fail fast nếu critical
+   │
+   ├── Small classifier: safe / unsafe / uncertain
+   │       └── nếu uncertain
+   │
+   └── Strong guard model or human review
+```
+
+<Callout type="tip" title="Cheap-first expensive-second">
+Không cần dùng model guard lớn cho mọi request. Rules/classifier nhỏ có thể xử lý phần rõ ràng; chỉ cases mơ hồ mới cần guard model mạnh hoặc human review.
+</Callout>
+
+---
+
+## 5. Human-in-the-Loop (HITL)
+
+Human review không nên là fallback mơ hồ. Nó cần rules rõ.
+
+Khi nào cần HITL:
+
+- High-stakes domains: y tế, tài chính, pháp lý, tuyển dụng.
+- Irreversible actions: xóa dữ liệu, gửi email, chuyển tiền, thay đổi quyền.
+- Low confidence hoặc retrieval evidence yếu.
+- Policy ambiguity.
+- User appeal/challenge.
+- Safety classifier uncertain.
+- Enterprise customer yêu cầu audit.
+
+Review queue nên có:
+
+| Field | Ý nghĩa |
+|---|---|
+| Case ID | Truy vết |
+| Risk category | Privacy, safety, legal, bias... |
+| Severity | Low/medium/high/critical |
+| Input/output | Đã redacted nếu cần |
+| Model/prompt/policy version | Auditability |
+| Retrieved evidence | Source docs/chunks |
+| Suggested decision | allow/refuse/escalate |
+| Reviewer decision | Final action |
+| Rationale | Lý do |
+| SLA | Thời gian xử lý |
+
+<Callout type="warning" title="HITL không miễn phí và không tự động an toàn">
+Reviewer cũng cần rubric, training, audit và workload management. Nếu review queue quá tải, hệ thống sẽ tạo bottleneck hoặc reviewer rubber-stamp quyết định model.
+</Callout>
+
+---
+
+## 6. Audit Trails and Logging
+
+Audit logs trả lời câu hỏi: “Điều gì đã xảy ra, với version nào, vì sao pass policy, và ai chịu trách nhiệm?”
+
+Nên log:
+
+- Request ID / trace ID.
+- User/tenant/role.
+- Feature name.
+- Model/provider/version.
+- Prompt template version.
+- Safety policy version.
+- Retrieved document IDs/chunk IDs.
+- Tool calls and arguments.
+- Moderation/safety scores.
+- PII masking decisions.
+- Output hash/full output tùy privacy policy.
+- Human review decision.
+- Incident link nếu có.
+
+Audit event schema:
+
+```json
+{
+  "request_id": "req_abc123",
+  "tenant_id": "tenant_001",
+  "user_role": "support_agent",
+  "feature": "hr_policy_assistant",
+  "model": "gpt-4o-mini",
+  "model_version": "2026-06-15",
+  "prompt_version": "hr-assistant-v7",
+  "policy_version": "safety-policy-v4",
+  "retrieved_sources": ["doc_12#chunk_4", "doc_19#chunk_2"],
+  "tool_calls": [
+    {"name": "search_policy_docs", "allowed": true},
+    {"name": "update_employee_record", "allowed": false, "reason": "requires_human_confirmation"}
+  ],
+  "safety": {
+    "input_flagged": false,
+    "output_flagged": false,
+    "pii_redacted": true,
+    "risk_tier": "medium"
+  },
+  "final_decision": "responded_with_citations",
+  "created_at": "2026-06-30T12:00:00Z"
+}
+```
+
+<Callout type="danger" title="Audit logs cũng có privacy risk">
+Nếu audit log lưu raw prompts/outputs chứa PII, bạn đã tạo thêm kho dữ liệu nhạy cảm. Hãy redaction, access control, retention và encryption cho audit logs.
+</Callout>
+
+---
+
+## 7. Incident Response for AI Failures
+
+AI incidents cần playbook riêng, nhưng vẫn giống SRE/security incident ở cấu trúc:
+
+```text
+1. Detect
+   - user report
+   - safety dashboard
+   - anomaly detection
+   - red-team regression failure
+
+2. Triage
+   - severity
+   - affected users/tenants
+   - harm category
+   - ongoing or contained?
+
+3. Contain
+   - disable feature
+   - rollback model/prompt/policy
+   - tighten guardrail
+   - revoke tool permission
+
+4. Investigate
+   - audit traces
+   - model/prompt versions
+   - retrieved data
+   - safety classifier decisions
+
+5. Remediate
+   - fix prompt/tool/policy/data
+   - update eval set
+   - notify users if needed
+
+6. Postmortem
+   - root cause
+   - impact
+   - prevention
+   - owner
+   - deadline
+```
+
+Severity taxonomy:
+
+| Severity | Ví dụ | Response |
+|---|---|---|
+| Low | Minor formatting issue, harmless refusal | Track and fix normally |
+| Medium | Incorrect low-stakes answer, isolated over-refusal | Patch and monitor |
+| High | Privacy leak to wrong user, harmful advice, unfair decision impact | Immediate containment, owner assigned |
+| Critical | Cross-tenant data leak, dangerous tool action, regulatory breach | Kill switch, exec/legal/security response |
+
+---
+
+## 8. Governance Frameworks: EU AI Act và NIST AI RMF
+
+### EU AI Act intuition
+
+EU AI Act dùng risk-based approach:
+
+| Risk category | Ý nghĩa |
+|---|---|
+| Prohibited risk | Một số use cases bị cấm |
+| High risk | Yêu cầu nghiêm ngặt: risk management, data governance, human oversight, logging |
+| Limited risk | Transparency obligations |
+| Minimal risk | Ít yêu cầu hơn |
+
+Engineering mapping:
+
+- Risk classification cho từng feature.
+- Documentation/model/system cards.
+- Data governance.
+- Human oversight.
+- Logging/audit trails.
+- Monitoring và incident response.
+
+### NIST AI RMF
+
+NIST AI Risk Management Framework gồm 4 functions:
+
+| Function | Engineering translation |
+|---|---|
+| Govern | Roles, policies, accountability, risk appetite |
+| Map | Context, stakeholders, intended use, harm model |
+| Measure | Metrics, evals, red-team tests, monitoring |
+| Manage | Mitigations, release gates, incident response, continuous improvement |
+
+<Callout type="info" title="Framework không tự tạo safety">
+EU AI Act/NIST AI RMF cho bạn cấu trúc governance. Bạn vẫn phải biến chúng thành artifacts kỹ thuật: eval suites, logs, policies, dashboards, review queues và release gates.
+</Callout>
+
+---
+
+## 9. Implementation Playbook: FastAPI Safety Gateway Skeleton
+
+Skeleton dưới đây minh họa safety gateway trước khi gọi LLM.
+
+```python
+from dataclasses import dataclass, asdict
+from typing import Literal
+from fastapi import FastAPI, HTTPException
+
+app = FastAPI()
+
+Decision = Literal["allow", "refuse", "human_review"]
+
+@dataclass
+class SafetyDecision:
+    decision: Decision
+    risk_tier: str
+    reasons: list[str]
+    policy_version: str
+    redacted_input: str
+
+
+def mask_pii(text: str) -> tuple[str, bool]:
+    redacted = text.replace("john@example.com", "[EMAIL]")
+    return redacted, redacted != text
+
+
+def detect_prompt_injection(text: str) -> bool:
+    patterns = ["ignore previous instructions", "reveal system prompt", "developer message"]
+    return any(p in text.lower() for p in patterns)
+
+
+def classify_domain_risk(text: str) -> str:
+    high_risk_terms = ["loan", "medical diagnosis", "legal advice", "fire employee"]
+    return "high" if any(t in text.lower() for t in high_risk_terms) else "standard"
+
+
+def safety_gate(user_input: str) -> SafetyDecision:
+    redacted, pii_found = mask_pii(user_input)
+    reasons = []
+
+    if pii_found:
+        reasons.append("pii_redacted")
+
+    if detect_prompt_injection(redacted):
+        return SafetyDecision(
+            decision="refuse",
+            risk_tier="high",
+            reasons=["prompt_injection_detected"],
+            policy_version="safety-policy-v4",
+            redacted_input=redacted,
+        )
+
+    risk = classify_domain_risk(redacted)
+    if risk == "high":
+        return SafetyDecision(
+            decision="human_review",
+            risk_tier="high",
+            reasons=reasons + ["high_stakes_domain"],
+            policy_version="safety-policy-v4",
+            redacted_input=redacted,
+        )
+
+    return SafetyDecision(
+        decision="allow",
+        risk_tier="standard",
+        reasons=reasons,
+        policy_version="safety-policy-v4",
+        redacted_input=redacted,
+    )
+
+
+@app.post("/safety/check")
+def check(payload: dict):
+    text = payload.get("input", "")
+    decision = safety_gate(text)
+    # In production: write audit event to PostgreSQL / log pipeline.
+    return asdict(decision)
+
+
+@app.post("/chat")
+def chat(payload: dict):
+    decision = safety_gate(payload.get("input", ""))
+
+    if decision.decision == "refuse":
+        raise HTTPException(status_code=400, detail={"reason": decision.reasons})
+
+    if decision.decision == "human_review":
+        return {"status": "queued_for_review", "decision": asdict(decision)}
+
+    # Call LLM with decision.redacted_input here.
+    return {"status": "ok", "safe_input": decision.redacted_input}
+```
+
+Production cần thêm:
+
+- Real PII detector.
+- Real moderation/prompt-injection classifiers.
+- Tenant-specific policy config.
+- Audit log database.
+- Review queue.
+- Output moderation.
+- Streaming handling.
+- Metrics dashboards.
+
+---
+
+## 10. Project Guide: Production Safety Pipeline
+
+Official project Phase 17 hard:
+
+```text
+Production Safety Pipeline
+- End-to-end safety pipeline cho AI app
+- Input/output moderation, PII masking, audit logging, incident response
+- Stack: FastAPI, OpenAI Moderation, Redis, PostgreSQL
+```
+
+MVP deliverables:
+
+1. Safety Gateway API:
+   - `/moderate/input`
+   - `/moderate/output`
+   - `/chat`
+2. PII masking:
+   - before LLM call
+   - before logs
+3. Prompt injection detection:
+   - rule-based baseline
+   - optional classifier
+4. Policy decision object:
+   - allow/refuse/human_review
+   - risk tier
+   - reasons
+   - policy version
+5. Audit logging:
+   - request trace
+   - model/prompt/policy versions
+   - safety scores
+6. Incident table:
+   - severity
+   - status
+   - owner
+   - linked request IDs
+7. Basic dashboard:
+   - flagged inputs/outputs
+   - PII redactions
+   - human review queue
+   - incidents by severity
+
+Stretch goals:
+
+- Per-tenant policy configs.
+- CI red-team regression.
+- HITL review UI.
+- Streaming moderation.
+- Tamper-evident audit logs.
+- System card generated from config.
+
+---
+
+## 11. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Moderation latency làm UX tệ">
+**Triệu chứng:** Chatbot an toàn hơn nhưng TTFT tăng mạnh.
+
+**Nguyên nhân:** Mọi safety checks chạy tuần tự và dùng model guard đắt.
+
+**Cách khắc phục:** Cascade cheap-first, parallelize checks, cache policy decisions cho static docs, và chỉ escalates uncertain cases.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Overblocking làm giảm utility">
+**Triệu chứng:** User hợp lệ bị từ chối quá nhiều.
+
+**Nguyên nhân:** Policy quá rộng hoặc classifier threshold quá nhạy.
+
+**Cách khắc phục:** Đo false refusal rate, thêm allowed educational/safety contexts, human review cho borderline cases.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Fallback model bypass safety">
+**Triệu chứng:** Primary model bị guardrails chặn đúng, nhưng fallback provider trả unsafe output.
+
+**Nguyên nhân:** Safety pipeline gắn vào một provider/model, không nằm ở gateway chung.
+
+**Cách khắc phục:** Đặt safety gateway độc lập trước/sau mọi model provider. Policy phải áp dụng nhất quán cho routing/fallback.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Không audit streamed responses">
+**Triệu chứng:** Output vi phạm xuất hiện trong stream nhưng final log chỉ lưu message đã bị cắt.
+
+**Nguyên nhân:** Streaming path không log chunk-level moderation decisions.
+
+**Cách khắc phục:** Log stream chunks có redaction/hash phù hợp, record stop reason và moderation event.
+</Callout>
+
+<Callout type="danger" title="Pitfall 5: Human review queue không có SLA">
+**Triệu chứng:** High-risk cases bị treo nhiều ngày hoặc reviewer xử lý tùy ý.
+
+**Nguyên nhân:** HITL được thêm như fallback nhưng không có owner, rubric, priority hoặc SLA.
+
+**Cách khắc phục:** Thiết kế review operations: severity, routing, reviewer training, SLA, audit và escalation.
+</Callout>
+
+---
+
+## 12. Cost & Safety Unit Economics
+
+| Control | Chi phí | Lợi ích |
+|---|---|---|
+| Input moderation | Latency + classifier cost | Chặn harmful prompts sớm |
+| Output moderation | Latency + streaming complexity | Chặn harmful/PII output |
+| PII masking | False positives + preprocessing | Giảm privacy exposure |
+| Human review | Operation cost | Giảm harm high-stakes |
+| Audit logs | Storage + privacy controls | Incident response/auditability |
+| Red-team CI | Eval token cost | Chống regression trước deploy |
+| Governance docs | Time/process cost | Compliance và stakeholder trust |
+
+Một pattern tối ưu:
+
+```text
+low-risk request  -> cheap rules + small classifier
+medium-risk       -> guard model + stricter output checks
+high-risk         -> human review + audit + evidence requirement
+critical action   -> explicit approval / disable automation
+```
+
+Safety economics là tối ưu theo risk tier, không phải áp cùng chi phí cho mọi request.
+
+---
+
+## Practice exercises
+
+1. Vẽ safety pipeline cho AI email assistant có quyền gửi email.
+2. Thiết kế policy decision object cho request high-stakes.
+3. Liệt kê audit fields cần log cho RAG answer có citations.
+4. Viết severity taxonomy cho AI incidents trong công ty bạn.
+5. Map một AI hiring tool vào NIST AI RMF: Govern, Map, Measure, Manage.
+6. Thiết kế fallback policy để model fallback không bypass safety.
+
+---
+
+## Knowledge check
+
+1. Pre-moderation khác post-moderation thế nào?
+2. Khi nào cần Human-in-the-Loop?
+3. Audit log cho AI request nên chứa những version nào?
+4. NIST AI RMF có 4 functions nào?
+5. Vì sao safety gateway nên độc lập với model provider?
+6. EU AI Act dùng cách tiếp cận gì để phân loại hệ thống AI?
+
+---
+
+## Answer key
+
+1. Pre-moderation kiểm tra input trước model call; post-moderation kiểm tra output trước khi trả cho user.
+2. High-stakes domain, irreversible tool action, low confidence, policy ambiguity, user appeal hoặc safety classifier uncertain.
+3. Model version, prompt version, safety policy version, tool/pipeline version nếu có.
+4. Govern, Map, Measure, Manage.
+5. Để mọi model/routing/fallback đều chịu cùng policy; không provider nào bypass guardrails.
+6. Risk-based approach: prohibited, high-risk, limited-risk, minimal-risk.
+
+---
+
+## Điểm cần nhớ
+
+- Responsible AI production là operating system gồm policy, people, process, technical controls và monitoring.
+- Safety pipeline nên kiểm tra input, model behavior, tools, output và incident feedback loop.
+- HITL cần rubric, SLA, owner và audit; không phải fallback mơ hồ.
+- Audit logs phải version model, prompt, policy, retrieved data, tool calls và safety decisions.
+- EU AI Act và NIST AI RMF cần được chuyển thành engineering artifacts: evals, logs, release gates và incident response.
+- Safety controls nên được tier theo risk để cân bằng latency, cost và harm reduction.
+
+---
+
+## Tổng kết Phase 17 (Phase 17 Wrap-up)
+
+Bạn vừa hoàn thành chuyên đề **AI Ethics, Safety & Governance**:
+
+1. **AI Safety Fundamentals:** hiểu harm taxonomy, alignment problem, hallucination, dual-use và safety risk register.
+2. **Prompt Injection & Security:** xây threat model cho direct/indirect injection, jailbreaks, tool abuse và red-team regression.
+3. **Bias & Fairness:** audit subgroup performance, fairness metrics, mitigation trade-offs và Bias Audit Tool.
+4. **Privacy & Data Governance:** kiểm soát PII, data minimization, right to erasure, embeddings, logs, DP và federated learning.
+5. **AI Transparency & Explainability:** tạo model cards, system cards, citations, explanations và audit traces.
+6. **Responsible AI in Production:** thiết kế moderation, safety classifiers, HITL, audit logs, incident response và governance frameworks.
+
+Phase 17 biến “AI có trách nhiệm” từ khẩu hiệu thành engineering discipline: có artifacts, owners, metrics, release gates và incident playbooks.
+
+## Next phase bridge
+
+Bạn đã đi qua toàn bộ lộ trình: programming, math, ML, deep learning, NLP, LLM APIs, RAG, agents, fine-tuning, multimodal, MLOps, system design, databases, optimization, RL và responsible AI. Bước cuối cùng là tổng hợp tất cả vào một sản phẩm production-grade. Chương tiếp theo: **Capstone — Multi-LLM AI Platform** — nơi bạn xây một nền tảng AI đa tenant với gateway, routing, RAG, agents, MCP, observability, cost tracking, safety gateway, privacy controls, red-team regression, audit logging và governance dashboard.

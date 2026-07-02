@@ -1,298 +1,441 @@
-Hệ sinh thái công cụ Fine-Tuning hiện đại đã phát triển vượt bậc, chuyển dịch từ việc viết code PyTorch thủ công sang các thư viện tối ưu hóa chuyên sâu ở cấp độ biên dịch phần cứng. Để làm chủ quá trình huấn luyện LLM trong môi trường sản xuất (production), một AI Engineer cần thành thạo các công cụ tăng tốc như **Unsloth**, các bộ khung cấu hình mạnh mẽ như **Axolotl** và **LLaMA-Factory**, cùng hệ thống giám sát và chẩn đoán thời gian thực như **Weights & Biases (W&B)**.
+Bạn đã học Full Fine-Tuning, LoRA và QLoRA. Nhưng trong team production, thành công không đến từ việc “notebook chạy được một lần”. Thành công đến từ một workflow có thể lặp lại: cấu hình rõ, dataset version rõ, experiment tracking đầy đủ, checkpoint có thể audit và eval report đi kèm.
 
-## Why this matters
+Fine-tuning tools như Unsloth, Axolotl, LLaMA-Factory, TRL, W&B và MLflow giúp AI Engineer chuyển từ thử nghiệm thủ công sang training operations. Chúng không thay thế hiểu biết nền tảng, nhưng giúp bạn giảm boilerplate, giảm VRAM, chuẩn hóa config và debug training job nhanh hơn.
 
-Lựa chọn và làm chủ đúng công cụ giúp bạn:
+---
 
-- **Tiết kiệm hàng ngàn USD chi phí compute:** Tăng tốc độ huấn luyện lên 2-5 lần và giảm 50% lượng VRAM tiêu thụ nhờ cơ chế tối ưu hóa viết lại các Triton kernels của Unsloth.
-- **Loại bỏ code boilerplate:** Tránh việc phải tự viết các đoạn code phức tạp cho data collator, chat template formatting, model loading, và distributed setup bằng cách sử dụng các file cấu hình YAML chuẩn hóa (Axolotl/LLaMA-Factory).
-- **Giám sát trực quan và chẩn đoán lỗi:** Phát hiện sớm hiện tượng gradient vanishing/explosion, over-fitting qua eval loss, và chẩn đoán nghẽn cổ chai phần cứng (GPU utilization, PCIe bandwidth) trực tiếp trên dashboard (W&B).
+## 1. The Incident (Tình huống sự cố)
 
-<Callout type="tip" title="Unsloth là lựa chọn tối ưu cho Single GPU">
-Nếu bạn chỉ chạy huấn luyện trên một GPU duy nhất (như RTX 3090, 4090, hoặc A10G), **Unsloth** là công cụ bắt buộc phải cân nhắc đầu tiên nhờ tốc độ vượt trội và khả năng tiết kiệm bộ nhớ đỉnh cao mà không làm suy giảm độ chính xác của mô hình.
+<Callout type="danger" title="Báo cáo sự cố: Notebook fine-tune tốt nhưng không thể tái tạo">
+**Bối cảnh:** Một engineer fine-tune QLoRA trên notebook cá nhân. Demo nội bộ rất tốt, model trả lời đúng format và tone. Product muốn ship bản này trong tuần.
+
+**Sự cố:** Khi team ML platform cố chạy lại training, kết quả khác hoàn toàn. Không ai biết chính xác dataset split nào đã dùng, base model revision nào, seed bao nhiêu, `max_seq_length` là gì, và checkpoint tốt nhất nằm ở cell output nào.
+
+1. Training config nằm rải rác trong notebook.
+2. Dataset đã bị chỉnh tay nhưng không version.
+3. Không log W&B/MLflow đầy đủ.
+4. Không có eval script cố định để so sánh checkpoint.
+5. Không có artifact manifest để deploy.
+
+**Hậu quả:** Model không được release. Team mất thêm 2 tuần để viết lại pipeline config-first, tái tạo dataset và rebuild eval harness.
 </Callout>
 
-## Learning objectives
-
-Sau chương này, bạn sẽ có thể:
-
-1. Phân tích điểm mạnh, giới hạn và trường hợp sử dụng của Unsloth, Axolotl và LLaMA-Factory.
-2. Giải thích cơ chế tối ưu hóa của Unsloth thông qua việc viết lại Triton Kernels.
-3. Cấu hình và chạy pipeline SFT tốc độ cao bằng Unsloth.
-4. Thiết lập file cấu hình YAML để chạy huấn luyện phân tán đa GPU với Axolotl.
-5. Sử dụng giao diện LlamaBoard của LLaMA-Factory để cấu hình nhanh các tác vụ SFT/DPO.
-6. Tích hợp Weights & Biases (W&B) để theo dõi các chỉ số loss, learning rate và tài nguyên hệ thống.
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Khái niệm LoRA và QLoRA từ chương trước.
-- Cách sử dụng dòng lệnh (CLI) trong môi trường Linux.
-- Khái niệm cơ bản về logging và monitoring.
+Bài học rút ra: fine-tuning production là một MLOps workflow. Nếu không tái tạo được training run, bạn không thể audit, rollback hoặc cải thiện nó một cách đáng tin.
 
 ---
 
-## Thư viện tăng tốc: Unsloth và Triton Kernels
+## 2. Architecture Blueprint (Fine-Tuning Toolchain)
 
-Thông thường, khi dùng HuggingFace `SFTTrainer` tiêu chuẩn, quá trình lan truyền ngược (backward pass) được xử lý bởi PyTorch Autograd. Cơ chế này lưu trữ rất nhiều trạng thái kích hoạt trung gian (activations) dưới dạng FP32 để tính toán đạo hàm, gây lãng phí VRAM và làm giảm tốc độ tính toán của GPU.
-
-**Unsloth** giải quyết vấn đề này bằng cách viết lại các layer lõi của Transformer (Attention, MLP, RoPE, Cross-Entropy Loss) bằng **Triton** (ngôn ngữ lập trình song song mã nguồn mở của OpenAI cho GPU).
+Một toolchain tốt tách rõ data, config, training, tracking, eval và registry:
 
 ```text
-Chuẩn HuggingFace: PyTorch Autograd → Lưu nhiều activations dư thừa → Tốn VRAM, Chậm
-Unsloth:            Triton Kernels → Tính toán thủ công đạo hàm → Tiết kiệm VRAM, Nhanh x2-x5
+[ Data repository ]
+  - raw data
+  - processed jsonl
+  - split manifests
+        │
+        ▼
+[ Training config ]
+  - base model id/revision
+  - method: SFT/LoRA/QLoRA/DPO
+  - hyperparameters
+  - eval config
+        │
+        ▼
+[ Training runner ]
+  - TRL / Unsloth / Axolotl / LLaMA-Factory
+  - single GPU or distributed
+        │
+        ▼
+[ Experiment tracking ]
+  - W&B / MLflow
+  - loss, LR, grad norm
+  - GPU utilization
+  - config and artifacts
+        │
+        ▼
+[ Evaluation job ]
+  - task eval
+  - regression eval
+  - safety/format eval
+        │
+        ▼
+[ Model / Adapter registry ]
+  - checkpoint
+  - tokenizer
+  - manifest
+  - eval report
 ```
 
-### Cơ chế tối ưu hóa của Unsloth:
-1. **Manual Backpropagation:** Unsloth tự tính toán đạo hàm của các hàm kích hoạt (như SwiGLU, GeLU) và tích hợp trực tiếp vào nhân Triton. Điều này loại bỏ nhu cầu lưu trữ toàn bộ đồ thị tính toán (computation graph) của PyTorch.
-2. **Memory Efficient Cross-Entropy:** Hàm tính loss Cross-Entropy được tối ưu hóa để không thực hiện phép toán Softmax trên toàn bộ kích thước từ vựng (vocabulary size $V$) ở bộ nhớ toàn cục (HBM), mà xử lý trực tiếp trong bộ nhớ chia sẻ (SRAM) của GPU.
-3. **RoPE Embedding Fusion:** Hợp nhất (fuse) các phép toán xoay vector của Rotary Position Embedding (RoPE) thành một nhân tính toán duy nhất trên GPU.
-
-### Hạn chế của Unsloth:
-- Phiên bản mã nguồn mở miễn phí chỉ tối ưu hóa tốt cho Single GPU (không hỗ trợ đa máy multi-node bằng DeepSpeed).
-- Chỉ hỗ trợ các kiến trúc phổ biến: LLaMA, Mistral, Gemma, Qwen.
+Mục tiêu: bất kỳ engineer nào cũng có thể lấy config, dataset version và command để reproduce cùng một run.
 
 ---
 
-## Huấn luyện bằng cấu hình: Axolotl & LLaMA-Factory
+## 3. API Fine-Tuning vs Self-Hosted OSS Stack
 
-Để quản lý các dự án fine-tuning ở quy mô lớn, việc viết script Python riêng lẻ rất khó bảo trì và theo dõi phiên bản. Chúng ta sử dụng các bộ khung (frameworks) quản lý quá trình huấn luyện qua các file cấu hình YAML.
+Không phải dự án nào cũng cần tự quản lý GPU. Có hai hướng chính:
 
-### 1. Axolotl
-Là công cụ mạnh mẽ nhất hiện nay dành cho các kỹ sư kinh nghiệm. Axolotl tích hợp sâu với các công nghệ phân tán: DeepSpeed (ZeRO 2/3), FSDP, FlashAttention-2, xFormers, Pack Sequences (Multipack).
+| Hướng | Khi dùng | Ưu điểm | Nhược điểm |
+|---|---|---|---|
+| Provider/API fine-tuning | Dữ liệu có thể gửi provider, workload đơn giản, muốn vận hành nhanh | Ít MLOps, serving managed | Ít kiểm soát, cost theo provider, giới hạn model |
+| Self-host OSS stack | Cần kiểm soát model/data/runtime, PEFT/QLoRA, privacy | Linh hoạt, tối ưu cost, nhiều model | Phải quản lý GPU, dependency, serving |
 
-Ví dụ một file cấu hình `llama3_qlora.yml` của Axolotl:
+### Provider/API fine-tuning phù hợp khi
+
+- Bạn cần fine-tune model thương mại để cải thiện format/tone trên workload rõ.
+- Không muốn tự vận hành GPU hoặc inference server.
+- Data governance cho phép gửi dữ liệu ra provider.
+- Bạn chấp nhận giới hạn về hyperparameters và model family.
+
+### Self-host phù hợp khi
+
+- Dữ liệu nhạy cảm hoặc cần on-prem/VPC.
+- Cần LoRA/QLoRA, adapter routing hoặc merge.
+- Cần benchmark nhiều open-weight models.
+- Cần tối ưu unit economics ở scale.
+
+<Callout type="info" title="Tool chọn theo constraint, không theo hype">
+Nếu team chưa có GPU/MLOps và task đơn giản, API fine-tuning có thể là con đường nhanh nhất. Nếu bạn cần privacy, adapter lifecycle hoặc tối ưu chi phí sâu, self-host stack đáng đầu tư hơn.
+</Callout>
+
+---
+
+## 4. Tool Map: Unsloth, Axolotl, LLaMA-Factory, TRL
+
+| Tool | Vai trò | Điểm mạnh | Khi dùng |
+|---|---|---|---|
+| TRL | Python library cho SFT/DPO/RLHF workflows | Linh hoạt, code-first | Muốn kiểm soát training loop |
+| Unsloth | Optimized single-GPU fine-tuning | Nhanh, tiết kiệm VRAM | QLoRA/SFT trên 1 GPU |
+| Axolotl | YAML config framework cho LLM fine-tuning | Reproducible, multi-model, production-friendly | Team muốn config-first |
+| LLaMA-Factory | Training UI/CLI cho nhiều method | Dễ thử nghiệm, nhiều mode | Research/app team cần tốc độ thử |
+| W&B/MLflow | Experiment tracking | Metrics, artifacts, comparison | Gần như mọi training project |
+
+### Unsloth
+
+Unsloth tối ưu memory và tốc độ bằng cách viết lại một số kernel/operation, thường hữu ích cho single GPU QLoRA.
+
+Ưu điểm:
+
+- Giảm VRAM.
+- Tăng tốc training.
+- API gần với HuggingFace/TRL.
+- Phù hợp prototyping nhanh.
+
+Giới hạn:
+
+- Không phải mọi architecture/method đều support như nhau.
+- Dependency/GPU compatibility cần kiểm tra.
+- Vẫn phải tự quản lý eval, registry và release.
+
+### Axolotl
+
+Axolotl giúp đưa training vào YAML config:
 
 ```yaml
 base_model: meta-llama/Meta-Llama-3-8B-Instruct
-model_type: LlamaForCausalLM
+model_type: AutoModelForCausalLM
 tokenizer_type: AutoTokenizer
 
 load_in_4bit: true
-adapter: lora
-lora_model_dir:
-
-datasets:
-  - path: train_data.jsonl
-    type: sharegpt
-    conversation: llama3
-
-dataset_prepared_path: ./last_run_prepared
-val_set_size: 0.05
-output_dir: ./lora-out
-
-sequence_len: 2048
-sample_packing: true # Bật Sequence Packing để loại bỏ padding tokens
-
+adapter: qlora
 lora_r: 16
 lora_alpha: 32
 lora_dropout: 0.05
-lora_target_linear: true # Áp dụng LoRA lên tất cả các linear layers
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
 
-gradient_accumulation_steps: 4
+datasets:
+  - path: ./data/customer_support_sft.jsonl
+    type: chat_template
+
+sequence_len: 4096
+sample_packing: true
 micro_batch_size: 2
-num_epochs: 3
-optimizer: paged_adamw_8bit
-lr_scheduler: cosine
+gradient_accumulation_steps: 8
+num_epochs: 2
 learning_rate: 0.0002
+warmup_ratio: 0.03
+optimizer: paged_adamw_8bit
+bf16: auto
 
-wandb_project: llama3-axolotl
+output_dir: ./outputs/support-qlora-v1
+wandb_project: phase10-finetuning
+wandb_run_name: support-qlora-v1
 ```
 
-Để chạy huấn luyện đa GPU bằng Axolotl kết hợp DeepSpeed:
+Ưu điểm lớn: config có thể review trong PR, lưu cùng repo và chạy lại trên môi trường khác.
+
+### LLaMA-Factory
+
+LLaMA-Factory hữu ích khi cần UI/CLI nhanh cho nhiều method như SFT, LoRA, QLoRA, DPO.
+
+Phù hợp cho:
+
+- Team ứng dụng muốn thử nhiều model nhanh.
+- Demo nội bộ.
+- Tạo baseline trước khi chuyển sang pipeline production.
+
+Nhưng production vẫn cần export config, pin versions và chạy eval tự động.
+
+---
+
+## 5. Config-First Training Operations
+
+Một run production cần có tối thiểu:
+
+```text
+training_run/
+  config.yaml
+  data_manifest.json
+  environment.txt
+  command.sh
+  metrics.json
+  eval_report.json
+  adapter_or_model_manifest.json
+```
+
+### Data manifest
+
+```json
+{
+  "dataset_id": "support_sft_2026_07_01",
+  "train_path": "data/processed/train.jsonl",
+  "validation_path": "data/processed/validation.jsonl",
+  "test_path": "data/processed/test.jsonl",
+  "split_seed": 42,
+  "num_train": 18000,
+  "num_validation": 1000,
+  "num_test": 1000,
+  "pii_scan": "passed",
+  "license_review": "approved",
+  "data_hash": "sha256:..."
+}
+```
+
+### Environment capture
 
 ```bash
-accelerate launch -m axolotl.cli.train llama3_qlora.yml --deepspeed deepspeed_configs/zero2.json
+python --version
+pip freeze > environment.txt
+nvidia-smi > gpu_info.txt
+git rev-parse HEAD > code_revision.txt
 ```
 
-### 2. LLaMA-Factory
-Cung cấp một giải pháp toàn diện từ chuẩn bị dữ liệu, huấn luyện (SFT, DPO, PPO, ORPO) đến suy luận và đánh giá. LLaMA-Factory nổi tiếng với giao diện **LlamaBoard** (WebUI) giúp người dùng cấu hình trực quan mà không cần viết code hay file YAML thủ công.
+### Naming convention
+
+```text
+{task}-{method}-{base_model_short}-{dataset_version}-{date}-{run_number}
+
+support-qlora-llama3-8b-supportsft20260701-20260701-r001
+```
+
+<Callout type="tip" title="Config review giống code review">
+Training config quyết định behavior của model. Hãy review nó như production code: base model, dataset, LR, epoch, template, eval gate và output path đều phải rõ.
+</Callout>
+
+---
+
+## 6. Monitoring Training Runs
+
+Training dashboard không chỉ để nhìn loss đẹp. Nó giúp phát hiện lỗi sớm.
+
+| Metric | Ý nghĩa | Cảnh báo |
+|---|---|---|
+| train loss | Model fit training data | Giảm quá nhanh có thể overfit |
+| eval loss | Generalization trên validation | Tăng trong khi train loss giảm là overfit |
+| learning rate | Scheduler hoạt động đúng không | Warmup/schedule sai |
+| gradient norm | Stability | Spike lớn có thể gây NaN |
+| tokens/sec | Throughput | Data loader hoặc GPU bottleneck |
+| GPU utilization | Hardware efficiency | Util thấp do I/O/packing kém |
+| memory allocated | VRAM pressure | Gần max dễ OOM |
+
+### Debug dashboard pattern
+
+```text
+If GPU util low + CPU high:
+  -> data preprocessing bottleneck
+
+If GPU util low + many short sequences:
+  -> enable packing
+
+If eval loss rises early:
+  -> reduce LR/epoch, improve data split
+
+If grad norm spikes:
+  -> reduce LR, add clipping, inspect bad batches
+```
+
+---
+
+## 7. Implementation Playbook: Reproducible Training Command
+
+Một workflow tối thiểu với Axolotl-style config:
 
 ```bash
-# Cài đặt và khởi chạy giao diện WebUI của LLaMA-Factory
-pip install llamafactory[metrics]
-llamafactory-cli webui
+# 1. Validate dataset
+python scripts/validate_dataset.py \
+  --input data/processed/train.jsonl \
+  --schema chat_sft \
+  --tokenizer meta-llama/Meta-Llama-3-8B-Instruct \
+  --max-seq-length 4096
+
+# 2. Launch training
+accelerate launch -m axolotl.cli.train configs/support_qlora.yaml
+
+# 3. Run evaluation
+python eval/run_eval.py \
+  --model outputs/support-qlora-v1 \
+  --base-model meta-llama/Meta-Llama-3-8B-Instruct \
+  --eval-set data/eval/support_holdout.jsonl \
+  --report outputs/support-qlora-v1/eval_report.json
+
+# 4. Package artifact
+python scripts/package_adapter.py \
+  --adapter outputs/support-qlora-v1 \
+  --manifest outputs/support-qlora-v1/adapter_manifest.json
 ```
 
----
+Một script packaging nên fail nếu thiếu:
 
-## Giám sát thời gian thực: Weights & Biases (W&B)
-
-Trong quá trình huấn luyện, bạn bắt buộc phải theo dõi các chỉ số hệ thống để kịp thời điều chỉnh hoặc dừng quá trình (early stopping) nếu xảy ra lỗi.
-
-Các chỉ số quan trọng cần giám sát trên W&B:
-- **`train/loss` vs `eval/loss`:** 
-  - Nếu `train/loss` giảm mượt mà nhưng `eval/loss` bắt đầu đi ngang hoặc tăng ngược trở lại -> Mô hình đang bị **Overfitting**. Bạn cần tăng `weight_decay`, tăng `lora_dropout`, hoặc thu thập thêm dữ liệu.
-  - Nếu `train/loss` đi ngang ngay từ đầu -> Learning Rate quá nhỏ hoặc quá trình tính loss bị lỗi.
-  - Nếu loss nhảy lên `NaN` -> Gradient bị tràn số (Gradient Explosion), cần giảm Learning Rate hoặc chuyển sang BF16.
-- **`train/global_step` và `train/learning_rate`:** Đảm bảo quá trình Warmup (tăng dần LR) và Decay (giảm dần LR theo hình cosine) hoạt động đúng cấu hình.
-- **System Metrics (GPU VRAM, GPU Temp, GPU Power):** Theo dõi VRAM đạt đỉnh (Peak VRAM). Nếu Peak VRAM thấp hơn nhiều so với dung lượng GPU, bạn có thể tăng `micro_batch_size` để tối ưu hóa hiệu năng tính toán.
+1. Config YAML.
+2. Dataset manifest.
+3. Eval report.
+4. Base model revision.
+5. Tokenizer files.
+6. Adapter/model weights.
 
 ---
 
-## Implementation lab: Fast SFT with Unsloth
+## 8. Project Guide: Custom Q&A Fine-Tune (Phase 10 Easy)
 
-**Nhiệm vụ:** Viết một script Python hoàn chỉnh sử dụng `unsloth` để load mô hình Qwen2.5 ở chế độ lượng hóa 4-bit, cấu hình LoRA, và chạy huấn luyện nhanh trên tập dữ liệu hội thoại ShareGPT, đồng thời cấu hình gửi logs trực tiếp sang Weights & Biases.
+Official project Phase 10 easy:
 
-```python
-import os
-import torch
-from unsloth import FastLanguageModel
-from trl import SFTTrainer
-from transformers import TrainingArguments
-from datasets import load_dataset
-
-# Cấu hình dự án Weights & Biases
-os.environ["WANDB_PROJECT"] = "unsloth-qwen-sft"
-
-max_seq_length = 2048
-dtype = None # Tự động phát hiện (Float16/Bfloat16 dựa trên GPU)
-load_in_4bit = True # Bật lượng hóa 4-bit (QLoRA)
-
-# 1. Load Model & Tokenizer bằng Unsloth (Tốc độ load nhanh gấp 2 lần)
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name = "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit",
-    max_seq_length = max_seq_length,
-    dtype = dtype,
-    load_in_4bit = load_in_4bit,
-)
-
-# 2. Cấu hình LoRA Adapter tối ưu hóa của Unsloth
-model = FastLanguageModel.get_peft_model(
-    model,
-    r = 16,
-    target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-    lora_alpha = 32,
-    lora_dropout = 0, # Unsloth tối ưu hóa dropout=0 để tăng tốc độ tính toán
-    bias = "none",
-    use_gradient_checkpointing = "unsloth", # Dùng gradient checkpointing tối ưu của Unsloth
-    random_state = 3407,
-)
-
-# 3. Load Dataset định dạng ShareGPT
-# Giả sử file dataset.json có cấu trúc: [{"conversations": [{"from": "human", "value": "..."}, {"from": "gpt", "value": "..."}]}]
-dataset = load_dataset("json", data_files="dataset.json", split="train")
-
-# 4. Sử dụng Chat Template mặc định của Qwen2.5
-from unsloth.chat_templates import get_chat_template
-tokenizer = get_chat_template(
-    tokenizer,
-    chat_template = "qwen-2.5",
-)
-
-def format_prompts(examples):
-    texts = []
-    for conv in examples["conversations"]:
-        # Chuyển đổi hội thoại ShareGPT sang định dạng ChatML của Qwen
-        texts.append(tokenizer.apply_chat_template(conv, tokenize=False, add_generation_prompt=False))
-    return { "text" : texts }
-
-dataset = dataset.map(format_prompts, batched=True)
-
-# 5. Cấu hình Trainer
-trainer = SFTTrainer(
-    model = model,
-    tokenizer = tokenizer,
-    train_dataset = dataset,
-    dataset_text_field = "text",
-    max_seq_length = max_seq_length,
-    dataset_num_proc = 2,
-    args = TrainingArguments(
-        per_device_train_batch_size = 2,
-        gradient_accumulation_steps = 4, # Effective batch size = 8
-        warmup_steps = 10,
-        max_steps = 100,
-        learning_rate = 2e-4,
-        fp16 = not torch.cuda.is_bf16_supported(),
-        bf16 = torch.cuda.is_bf16_supported(),
-        logging_steps = 1,
-        output_dir = "outputs",
-        optim = "paged_adamw_8bit", # Tiết kiệm VRAM bằng 8-bit optimizer + paging
-        report_to = "wandb"         # Gửi logs sang W&B
-    ),
-)
-
-# 6. Bắt đầu chạy huấn luyện
-trainer_stats = trainer.train()
-print(f"Training completed. Total runtime: {trainer_stats.metrics['train_runtime']:.2f} seconds")
+```text
+Fine-tune a small/API model on custom Q&A
+- Prepare a clean question-answer dataset
+- Train using provider fine-tuning API or small open model SFT
+- Compare against prompt-only baseline
+- Stack: OpenAI fine-tuning API or TRL/Unsloth, W&B/MLflow
 ```
 
+MVP deliverables:
+
+1. 200-1,000 clean Q&A examples in JSONL.
+2. Data card: source, license, PII handling, split seed.
+3. Training config or provider fine-tuning job config.
+4. Baseline vs fine-tuned eval report:
+   - exactness/helpfulness,
+   - format adherence,
+   - hallucination checks,
+   - latency/cost estimate.
+5. Short README: when this should use RAG instead.
+
+Stretch goals:
+
+- Add regression prompts outside the narrow Q&A domain.
+- Track runs with W&B or MLflow.
+- Package model/adapter with manifest and rollback instructions.
+
 ---
 
-## Common mistakes & debugging checklist
+## 9. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
-<Callout type="warning" title="Mistake 1: Cài đặt sai phiên bản CUDA/PyTorch cho Unsloth">
-Unsloth được compile trực tiếp dựa trên phiên bản cụ thể của PyTorch và CUDA. Việc cài đặt sai thứ tự hoặc dùng `pip install unsloth` mà không chỉ định đúng phiên bản CUDA sẽ khiến thư viện bị crash khi import hoặc không kích hoạt được Triton kernel. Hãy luôn copy lệnh cài đặt chuẩn từ trang GitHub của Unsloth.
+<Callout type="warning" title="Pitfall 1: Hidden notebook state">
+**Triệu chứng:** Run không reproduce được dù code nhìn giống nhau.
+
+**Nguyên nhân:** Biến trong notebook, dataset tạm, seed hoặc package version không được ghi lại.
+
+**Cách khắc phục:** Chuyển sang script/config, log environment, pin dataset hash và commit hash.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: Thiếu cấu hình đồng bộ Weights & Biases ở cụm máy ảo">
-Khi chạy trên các nền tảng đám mây không có trình duyệt (headless server), quá trình đăng nhập W&B sẽ bị nghẽn. Bạn cần chạy lệnh `wandb login [API_KEY]` hoặc thiết lập biến môi trường `WANDB_API_KEY` trong script trước khi chạy.
+<Callout type="warning" title="Pitfall 2: Không tracking experiment">
+**Triệu chứng:** Không biết run nào tốt nhất hoặc config nào tạo ra checkpoint đang deploy.
+
+**Nguyên nhân:** Không dùng W&B/MLflow/artifact registry.
+
+**Cách khắc phục:** Log config, metrics, artifacts và eval report cho mọi run.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: Không sử dụng Sequence Packing khi tập dữ liệu có độ dài chênh lệch lớn">
-Nếu dataset của bạn có nhiều câu rất ngắn (100 tokens) và một vài câu dài (2048 tokens), việc không bật sequence packing (gom các câu ngắn lại chung một sequence) sẽ khiến GPU phải xử lý ngập tràn các `pad_tokens` vô nghĩa, làm giảm hiệu suất huấn luyện đi 2-3 lần.
+<Callout type="warning" title="Pitfall 3: Config default nguy hiểm">
+**Triệu chứng:** Training chạy nhưng dùng LR, template hoặc packing không như kỳ vọng.
+
+**Nguyên nhân:** Tool có defaults ẩn hoặc version thay đổi behavior.
+
+**Cách khắc phục:** Explicit mọi config quan trọng, pin tool version, lưu rendered/final config.
 </Callout>
 
-### Checklist cấu hình công cụ:
+<Callout type="warning" title="Pitfall 4: Dataset split không cố định">
+**Triệu chứng:** Eval metric dao động mạnh giữa các run.
 
-- [ ] Đã cài đặt Unsloth/Axolotl khớp hoàn toàn với phiên bản CUDA của GPU chưa?
-- [ ] Đã đăng nhập Weights & Biases bằng API key chưa?
-- [ ] Đã kích hoạt `sample_packing: true` (hoặc `packing=True` trong SFTTrainer) cho dataset có độ dài không đều chưa?
-- [ ] Đã sử dụng bộ tối ưu hóa `paged_adamw_8bit` hoặc `adamw_bnb_8bit` để tiết kiệm VRAM chưa?
-- [ ] Đã cấu hình lưu checkpoint định kỳ phòng trường hợp GPU bị ngắt kết nối giữa chừng chưa?
+**Nguyên nhân:** Split random mỗi lần hoặc leakage giữa train/test.
+
+**Cách khắc phục:** Lưu split manifest, seed cố định, hash từng example và kiểm tra leakage.
+</Callout>
+
+---
+
+## 10. Cost & Tooling Unit Economics
+
+Tooling tốt có chi phí học ban đầu nhưng giảm chi phí lặp lại.
+
+| Quyết định | Lợi ích | Trade-off |
+|---|---|---|
+| Notebook nhanh | Prototype cực nhanh | Khó reproduce, khó review |
+| Config-first | Reproducible, reviewable | Cần discipline và template |
+| Unsloth single GPU | Giảm GPU cost | Compatibility/version constraints |
+| Axolotl YAML | Team workflow tốt | Phải hiểu config sâu |
+| W&B/MLflow | Traceability, comparison | Thêm setup/security review |
+| API fine-tuning | Ít ops | Ít kiểm soát và phụ thuộc provider |
+
+Production takeaway: nếu dự án chỉ là demo một lần, notebook có thể đủ. Nếu model sẽ ảnh hưởng user thật, hãy đầu tư config-first workflow ngay từ đầu.
 
 ---
 
 ## Practice exercises
 
-1. **So sánh hiệu năng:** Chạy 100 steps huấn luyện bằng HuggingFace `SFTTrainer` tiêu chuẩn vs `unsloth` trên cùng một GPU và ghi nhận sự chênh lệch về thời gian huấn luyện (runtime) và lượng VRAM đạt đỉnh (peak VRAM).
-2. **Cấu hình Axolotl Multi-GPU:** Viết một file cấu hình YAML hoàn chỉnh cho Axolotl để chạy fine-tune mô hình Gemma-2-9B sử dụng phương pháp QLoRA với cấu hình tối ưu hóa bộ nhớ DeepSpeed ZeRO-2 trên 2 GPU.
-3. **Phân tích biểu đồ W&B:** Tạo một tài khoản W&B, chạy huấn luyện và chụp lại màn hình biểu đồ loss để phân tích hiện tượng quá khớp (over-fitting) dựa trên sự phân kỳ của hai đường `train/loss` và `eval/loss`.
+1. Viết `config.yaml` tối thiểu cho một QLoRA run: base model, dataset, rank, LR, epoch, output dir.
+2. Thiết kế naming convention cho checkpoint/adapters trong team của bạn.
+3. Liệt kê 10 trường cần có trong `data_manifest.json`.
+4. So sánh API fine-tuning và self-host QLoRA cho một chatbot nội bộ có dữ liệu nhạy cảm.
+5. Vẽ dashboard metrics bạn muốn theo dõi trong W&B/MLflow.
 
 ---
 
 ## Knowledge check
 
-1. Tại sao Unsloth lại có tốc độ huấn luyện nhanh hơn HuggingFace Trainer tiêu chuẩn?
-2. Điểm khác biệt chính giữa việc quản lý pipeline của Axolotl và viết script Python truyền thống là gì?
-3. Tính năng Paged Optimizer trong QLoRA giải quyết vấn đề gì của GPU?
-4. Tại sao chúng ta nên sử dụng Sequence Packing trong quá trình xử lý dataset?
-5. W&B giúp ích gì cho kỹ sư khi phát hiện hiện tượng "gradient explosion" (bùng nổ gradient)?
+1. Vì sao notebook fine-tuning khó dùng trực tiếp cho production?
+2. Axolotl giải quyết vấn đề gì bằng YAML config?
+3. Unsloth phù hợp nhất với loại workload nào?
+4. Experiment tracker nên log những artifact nào?
+5. Vì sao cần lưu dataset split manifest?
 
 ---
 
 ## Answer key
 
-1. Vì Unsloth viết lại toàn bộ các phép tính toán đạo hàm của các lớp Transformer bằng ngôn ngữ Triton, tối ưu hóa trực tiếp việc đọc/ghi bộ nhớ trên GPU SRAM thay vì dựa hoàn toàn vào PyTorch Autograd.
-2. Axolotl quản lý toàn bộ cấu trúc qua file cấu hình YAML tập trung, giúp tách biệt hoàn toàn phần cấu hình thử nghiệm và phần code logic thực thi.
-3. Khi VRAM của GPU đạt đỉnh giới hạn, Paged Optimizer sẽ tự động di chuyển (page) các trạng thái của optimizer sang RAM của CPU để tránh lỗi Out-Of-Memory, đổi lại tốc độ sẽ bị giảm nhẹ tại thời điểm đó.
-4. Nó ghép nhiều ví dụ ngắn lại với nhau thành một chuỗi duy nhất có độ dài bằng `max_seq_length`, loại bỏ việc phải tính toán trên các padding tokens dư thừa, giúp tăng throughput đáng kể.
-5. W&B hiển thị trực quan biểu đồ giá trị gradient norm; nếu chỉ số này đột ngột tăng vọt lên vô cực hoặc NaNs, kỹ sư biết ngay mô hình đã bị sụp đổ để dừng quá trình huấn luyện kịp thời.
-
----
-
-## Mini-project: Setup Axolotl configuration for Code Gen
-
-### Nhiệm vụ:
-Thiết lập một file cấu hình YAML (`code_config.yml`) hoàn chỉnh cho Axolotl để huấn luyện mô hình CodeLlama-7B trên tập dữ liệu lập trình Python.
-
-### Yêu cầu đầu ra:
-- Sử dụng phương pháp LoRA với các target modules bao gồm tất cả các cổng tuyến tính của mô hình.
-- Cấu hình tích hợp trực tiếp với Weights & Biases dưới tên project `codellama-ft`.
-- Bật tính năng `sequence_packing: true`.
-- Sử dụng optimizer `adamw_bnb_8bit` để tối ưu hóa bộ nhớ.
+1. Vì state, seed, dataset, dependency và config thường không được version hóa đầy đủ, làm run khó reproduce/audit.
+2. Nó đưa training parameters vào config reviewable/reproducible, giảm boilerplate và chuẩn hóa workflow.
+3. Single-GPU SFT/QLoRA cần tối ưu tốc độ và VRAM.
+4. Config, metrics, dataset manifest/hash, checkpoint/adapter, eval report, environment và code revision.
+5. Để eval nhất quán giữa các run và tránh leakage hoặc random split làm metric dao động.
 
 ---
 
 ## Điểm cần nhớ
 
-- Unsloth là thư viện tối ưu hóa hiệu năng hàng đầu cho Single GPU nhờ viết lại các nhân Triton kernel.
-- Axolotl và LLaMA-Factory giúp chuẩn hóa quá trình huấn luyện thông qua các tệp cấu hình YAML, loại bỏ code boilerplate.
-- Sử dụng Weights & Biases để giám sát trực quan các chỉ số loss, learning rate và tài nguyên hệ thống theo thời gian thực.
-
----
+- Fine-tuning production phải config-first, versioned và reproducible.
+- Tooling không thay thế evaluation; nó giúp training workflow đáng tin hơn.
+- Unsloth mạnh cho single-GPU efficiency, Axolotl mạnh cho config-first team workflow, LLaMA-Factory mạnh cho thử nghiệm nhanh.
+- W&B/MLflow/artifact registry là bắt buộc nếu model sẽ được deploy thật.
+- Dataset manifest, environment capture và adapter/model manifest là nền tảng cho audit và rollback.
+- Hãy chọn API fine-tuning hay self-host stack dựa trên privacy, cost, control và ops maturity.
 
 ## Next chapter bridge
 
-Các công cụ huấn luyện mạnh mẽ chỉ phát huy tác dụng khi chúng ta cung cấp cho chúng nguồn dữ liệu chất lượng cao. Chương tiếp theo: **Dataset Preparation** — tìm hiểu sâu về các định dạng dữ liệu Alpaca, ShareGPT, DPO, các kỹ thuật làm sạch, loại bỏ trùng lặp (deduplication) bằng MinHash LSH và trộn dữ liệu (dataset mixing) trước khi đưa vào huấn luyện.
+Bạn đã có toolchain để chạy fine-tuning một cách lặp lại. Nhưng tool tốt vẫn thất bại nếu dữ liệu xấu. Chương tiếp theo đi vào **Dataset Preparation**: format, cleaning, deduplication, PII/license checks, dataset mixing và synthetic data validation.

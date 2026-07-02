@@ -1,0 +1,391 @@
+AI Engineer không thể chỉ biết gọi model. Mỗi request LLM, mỗi đoạn hội thoại, mỗi token bị tính tiền và mỗi lỗi provider đều để lại dấu vết trong database. Nếu bạn không đọc được các dấu vết đó bằng SQL, bạn sẽ không thể debug, tối ưu chi phí hay chứng minh một tính năng AI đang tạo ra giá trị thật.
+
+Trong bài này, chúng ta học SQL cốt lõi qua lăng kính của một AI product: bảng người dùng, hội thoại, tin nhắn, request model, token usage và chi phí.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Dashboard AI cost sai lệch 37%">
+**Bối cảnh:** Một SaaS có tính năng trợ lý AI cho đội sales. Backend lưu mọi lần gọi LLM vào bảng `model_calls`, mỗi dòng có `user_id`, `feature`, `model`, `input_tokens`, `output_tokens`, `cost_usd`, `status` và `created_at`.
+
+**Sự cố:** Cuối tháng, dashboard nội bộ báo tổng chi phí AI là 8,400 USD. Nhưng hóa đơn từ provider là 11,500 USD.
+
+1. Query dashboard chỉ tính `status = 'success'`, bỏ qua các request timeout vẫn bị provider tính tiền.
+2. Join `users` với `conversations` rồi mới join `model_calls`, làm một model call bị nhân đôi khi conversation có nhiều message.
+3. Bộ lọc thời gian dùng local timezone, trong khi database lưu UTC.
+
+**Hậu quả:** Product team tưởng feature vẫn có biên lợi nhuận tốt, tiếp tục mở rộng free tier. Đến khi finance phát hiện, công ty đã đốt thêm vài nghìn USD không được phân bổ đúng cho từng khách hàng.
+</Callout>
+
+Bài học rút ra: SQL cơ bản không hề “cơ bản” khi nó là nguồn sự thật cho billing, observability và quyết định sản phẩm AI.
+
+---
+
+## 2. Architecture Blueprint (Kiến trúc dữ liệu mẫu)
+
+Ta sẽ dùng một schema nhỏ nhưng đủ thực tế cho AI usage analytics:
+
+```text
+[ users ]
+  id, email, plan, created_at
+       │
+       ├──< [ conversations ]
+       │       id, user_id, title, created_at
+       │          │
+       │          └──< [ messages ]
+       │                  id, conversation_id, role, content, created_at
+       │
+       └──< [ model_calls ]
+               id, user_id, conversation_id, feature, provider, model,
+               input_tokens, output_tokens, cached_tokens,
+               latency_ms, status, error_code, cost_usd, created_at
+
+[ ai_features ]
+  key, display_name, owner_team, is_billable
+```
+
+Trong một AI platform, bảng `model_calls` thường là “hộp đen máy bay” của hệ thống. Mọi câu hỏi về chi phí, latency, lỗi và usage đều bắt đầu từ bảng này.
+
+---
+
+## 3. Core Query Patterns (Mẫu truy vấn cốt lõi)
+
+SQL luôn bắt đầu bằng câu hỏi kinh doanh rõ ràng. Ví dụ: “Ai đang dùng feature đắt nhất trong 24 giờ qua?”
+
+```sql
+SELECT
+  user_id,
+  feature,
+  model,
+  cost_usd,
+  created_at
+FROM model_calls
+WHERE created_at >= now() - interval '24 hours'
+  AND status IN ('success', 'timeout')
+ORDER BY cost_usd DESC
+LIMIT 20;
+```
+
+Các mảnh ghép quan trọng:
+
+| Cú pháp | Vai trò trong AI product | Ví dụ |
+|---|---|---|
+| `SELECT` | Chọn metric cần quan sát | `input_tokens`, `cost_usd` |
+| `FROM` | Chọn nguồn sự thật | `model_calls` |
+| `WHERE` | Cắt theo tenant, user, feature, thời gian | `created_at >= ...` |
+| `ORDER BY` | Tìm request chậm/đắt nhất | `ORDER BY latency_ms DESC` |
+| `LIMIT` | Debug nhanh mà không scan quá nhiều dòng | `LIMIT 100` |
+| `DISTINCT` | Đếm model/feature duy nhất | `DISTINCT model` |
+
+<Callout type="tip" title="Quy tắc vàng khi query log AI">
+Luôn filter theo thời gian trước. Bảng usage/token logs tăng rất nhanh. Một query không có `created_at` filter có thể vô tình scan hàng trăm triệu dòng chỉ để trả lời một câu hỏi dashboard đơn giản.
+</Callout>
+
+---
+
+## 4. Filtering for Production AI Logs
+
+Các filter cơ bản thường quyết định dashboard đúng hay sai.
+
+```sql
+SELECT id, user_id, feature, status, error_code, cost_usd
+FROM model_calls
+WHERE provider = 'openai'
+  AND model LIKE 'gpt-4%'
+  AND cost_usd BETWEEN 0.01 AND 1.00
+  AND error_code IS NOT NULL
+  AND feature NOT IN ('internal_eval', 'admin_test')
+ORDER BY created_at DESC;
+```
+
+Lưu ý các pattern hay gặp:
+
+- `AND` dùng để thu hẹp tập dữ liệu: provider là OpenAI **và** model GPT-4.
+- `OR` cần ngoặc rõ ràng, nếu không logic billing rất dễ sai.
+- `IN` phù hợp với danh sách status/model/feature cụ thể.
+- `BETWEEN` hữu ích cho khoảng thời gian hoặc khoảng cost.
+- `LIKE` phù hợp cho pattern model name, nhưng không nên lạm dụng cho cột lớn nếu thiếu index.
+- `IS NULL` khác hoàn toàn `= NULL`; trong SQL, `NULL` là trạng thái “không biết”.
+
+```sql
+-- Sai: không trả kết quả như bạn nghĩ
+SELECT * FROM model_calls WHERE error_code = NULL;
+
+-- Đúng
+SELECT * FROM model_calls WHERE error_code IS NULL;
+```
+
+---
+
+## 5. Joins for AI Product Data
+
+Một bảng log riêng lẻ hiếm khi đủ ngữ cảnh. Bạn cần join để biết request thuộc user nào, plan nào và feature nào.
+
+```sql
+SELECT
+  u.email,
+  u.plan,
+  c.feature,
+  c.model,
+  c.cost_usd,
+  c.created_at
+FROM model_calls c
+JOIN users u ON u.id = c.user_id
+WHERE c.created_at >= date_trunc('month', now())
+ORDER BY c.cost_usd DESC
+LIMIT 50;
+```
+
+Các loại join quan trọng:
+
+| Join | Khi dùng trong AI app | Rủi ro |
+|---|---|---|
+| `INNER JOIN` | Chỉ lấy call có user hợp lệ | Có thể bỏ mất log orphan cần điều tra |
+| `LEFT JOIN` | Giữ toàn bộ model calls, kể cả thiếu user metadata | Cột bên phải có thể `NULL` |
+| `FULL OUTER JOIN` | Đối soát dữ liệu giữa billing provider và internal logs | Kết quả nhiều `NULL`, khó đọc |
+| `SELF JOIN` | So sánh message cha/con hoặc retry của cùng request | Dễ tạo join explosion |
+
+Ví dụ dùng `LEFT JOIN` để không làm biến mất các request lỗi do user đã bị xóa:
+
+```sql
+SELECT
+  c.id,
+  COALESCE(u.email, '[deleted-user]') AS user_email,
+  c.status,
+  c.error_code,
+  c.cost_usd
+FROM model_calls c
+LEFT JOIN users u ON u.id = c.user_id
+WHERE c.status <> 'success';
+```
+
+---
+
+## 6. Aggregations for AI Analytics
+
+Dashboard AI usage cần tổng hợp: tổng request, tổng token, chi phí, latency trung bình, lỗi theo provider.
+
+```sql
+SELECT
+  feature,
+  model,
+  COUNT(*) AS total_calls,
+  SUM(input_tokens) AS input_tokens,
+  SUM(output_tokens) AS output_tokens,
+  SUM(cost_usd) AS total_cost_usd,
+  AVG(latency_ms) AS avg_latency_ms
+FROM model_calls
+WHERE created_at >= now() - interval '7 days'
+GROUP BY feature, model
+ORDER BY total_cost_usd DESC;
+```
+
+`HAVING` dùng để lọc sau khi aggregate:
+
+```sql
+SELECT
+  user_id,
+  COUNT(*) AS calls,
+  SUM(cost_usd) AS spend_usd
+FROM model_calls
+WHERE created_at >= date_trunc('month', now())
+GROUP BY user_id
+HAVING SUM(cost_usd) > 50
+ORDER BY spend_usd DESC;
+```
+
+<Callout type="info" title="COUNT(*) vs COUNT(column)">
+`COUNT(*)` đếm số dòng. `COUNT(error_code)` chỉ đếm dòng mà `error_code` không null. Khi tính error rate, bạn thường cần cả hai: tổng request và số request có lỗi.
+</Callout>
+
+---
+
+## 7. Implementation Playbook (Thực thi)
+
+Dưới đây là bộ query tối thiểu cho project **AI Usage Analytics Dashboard**.
+
+```sql
+-- 1. Cost per user trong tháng hiện tại
+SELECT
+  u.email,
+  u.plan,
+  ROUND(SUM(c.cost_usd)::numeric, 2) AS monthly_cost_usd
+FROM model_calls c
+JOIN users u ON u.id = c.user_id
+WHERE c.created_at >= date_trunc('month', now())
+GROUP BY u.email, u.plan
+ORDER BY monthly_cost_usd DESC;
+
+-- 2. Top feature theo chi phí
+SELECT
+  feature,
+  COUNT(*) AS calls,
+  ROUND(SUM(cost_usd)::numeric, 2) AS cost_usd,
+  ROUND(AVG(latency_ms)::numeric, 0) AS avg_latency_ms
+FROM model_calls
+WHERE created_at >= now() - interval '30 days'
+GROUP BY feature
+ORDER BY cost_usd DESC;
+
+-- 3. Error rate theo provider/model
+SELECT
+  provider,
+  model,
+  COUNT(*) AS total_calls,
+  COUNT(error_code) AS error_calls,
+  ROUND(100.0 * COUNT(error_code) / NULLIF(COUNT(*), 0), 2) AS error_rate_pct
+FROM model_calls
+WHERE created_at >= now() - interval '7 days'
+GROUP BY provider, model
+ORDER BY error_rate_pct DESC;
+```
+
+Nếu ba query này chạy đúng, bạn đã có nền cho dashboard cost, product analytics và reliability.
+
+---
+
+## Project Guide: AI Usage Analytics Dashboard (Phase 14 Easy)
+
+Mục tiêu project: xây một dashboard đơn giản nhưng đúng về mặt billing để theo dõi AI API usage, cost, latency và error rate.
+
+### Requirements
+
+- Tạo schema PostgreSQL tối thiểu cho `users`, `ai_features` và `model_calls`.
+- Import hoặc seed ít nhất 200 dòng usage logs giả lập có nhiều provider/model/status khác nhau.
+- Viết query cho cost per user, top features theo cost, error rate theo provider/model và latency trung bình.
+- Kết nối query vào Metabase/Grafana hoặc xuất report bằng Python notebook/script.
+- Mọi dashboard phải có filter theo time range và không được bỏ qua request lỗi có `cost_usd`.
+
+### Suggested architecture
+
+```text
+[ AI API / seed script ]
+          │
+          ▼
+[ PostgreSQL: model_calls ]
+          │
+          ├── SQL views: usage_daily, feature_cost_daily
+          │
+          └── Metabase/Grafana/Python report
+                - cost per user
+                - top features
+                - error rate
+                - latency trend
+```
+
+### Starter view
+
+```sql
+CREATE VIEW usage_daily AS
+SELECT
+  created_at::date AS day,
+  user_id,
+  feature,
+  provider,
+  model,
+  COUNT(*) AS calls,
+  SUM(input_tokens) AS input_tokens,
+  SUM(output_tokens) AS output_tokens,
+  SUM(cost_usd) AS cost_usd,
+  COUNT(error_code) AS error_calls,
+  AVG(latency_ms) AS avg_latency_ms
+FROM model_calls
+WHERE cost_usd IS NOT NULL
+GROUP BY created_at::date, user_id, feature, provider, model;
+```
+
+### Acceptance criteria
+
+- Dashboard có ít nhất 4 panels: monthly cost, top features, provider/model error rate, high-spend users.
+- Query billing có thể giải thích vì sao failed/timeout calls vẫn được tính nếu provider đã charge.
+- Có README mô tả timezone dùng cho report và cách seed dữ liệu.
+- Có một query kiểm tra join explosion bằng cách so sánh tổng `SUM(cost_usd)` trước và sau join.
+
+Stretch goal: thêm alert khi cost của một feature trong ngày hiện tại vượt baseline 7 ngày hơn 40%.
+
+---
+
+## 8. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Join explosion làm chi phí bị nhân đôi">
+**Triệu chứng:** Tổng `cost_usd` sau join lớn hơn tổng trong bảng `model_calls`.
+
+**Nguyên nhân:** Bạn join bảng một-nhiều như `messages` vào `model_calls`, khiến một model call bị lặp lại theo số message trong conversation.
+
+**Cách khắc phục:** Aggregate ở đúng cấp trước khi join. Nếu muốn cost per conversation, hãy group `model_calls` theo `conversation_id` trước, sau đó mới join sang bảng metadata.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Timezone làm dashboard lệch ngày">
+**Triệu chứng:** Finance xem ngày 1 nhưng dashboard vẫn tính một phần request ngày 31.
+
+**Nguyên nhân:** Database lưu UTC, frontend hiển thị local timezone, query dùng `date_trunc('day', now())` mà không quy ước timezone rõ ràng.
+
+**Cách khắc phục:** Lưu timestamp bằng `timestamptz`, chuẩn hóa dashboard theo timezone doanh nghiệp, và ghi rõ timezone trong mọi query báo cáo.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Bỏ qua request lỗi vẫn bị tính tiền">
+**Triệu chứng:** Nội bộ tính cost thấp hơn provider invoice.
+
+**Nguyên nhân:** Query chỉ lấy `status = 'success'`, trong khi provider có thể tính tiền cho output đã stream một phần trước khi timeout.
+
+**Cách khắc phục:** Billing query nên tính mọi dòng có `cost_usd IS NOT NULL`, không chỉ request success. Status dùng để phân tích reliability, không phải để quyết định dòng nào được tính tiền.
+</Callout>
+
+---
+
+## 9. Cost & Performance Unit Economics
+
+| Metric | Query cốt lõi | Ý nghĩa kinh tế |
+|---|---|---|
+| Cost per user | `GROUP BY user_id` | Biết user nào đang âm biên lợi nhuận |
+| Cost per feature | `GROUP BY feature` | Quyết định feature nào cần model routing/cache |
+| Error rate | `COUNT(error_code) / COUNT(*)` | Provider nào đang làm giảm SLA |
+| Average latency | `AVG(latency_ms)` | Feature nào cần async/caching |
+| Token mix | `SUM(input_tokens)`, `SUM(output_tokens)` | Output dài có thể đắt hơn input nhiều lần |
+
+SQL cốt lõi giúp bạn biến “cảm giác hệ thống đắt” thành số liệu cụ thể: ai dùng, dùng feature nào, model nào đốt tiền, lỗi ở đâu và có đáng tối ưu không.
+
+---
+
+## Practice exercises
+
+1. Viết query liệt kê 20 request LLM đắt nhất trong 7 ngày qua, kèm `user_id`, `feature`, `model`, token usage và `status`.
+2. Viết query tính total cost theo `feature` trong tháng hiện tại, nhưng chỉ lấy các dòng có `cost_usd IS NOT NULL`.
+3. Tạo query error rate theo provider/model, phân biệt `COUNT(*)` và `COUNT(error_code)`.
+4. Thiết kế một query dùng `LEFT JOIN` để giữ lại model calls của user đã bị xóa khỏi bảng `users`.
+5. Viết checklist 5 dòng để review một billing query trước khi đưa vào dashboard finance.
+
+---
+
+## Knowledge check
+
+1. Vì sao usage query cho AI logs gần như luôn cần filter theo thời gian?
+2. `COUNT(*)` khác gì `COUNT(error_code)` khi tính error rate?
+3. Khi nào nên dùng `HAVING` thay vì `WHERE`?
+4. Vì sao join một-nhiều có thể làm dashboard cost sai?
+5. Vì sao billing query không nên chỉ tính `status = 'success'`?
+
+---
+
+## Answer key
+
+1. Vì bảng logs/token usage tăng rất nhanh; thiếu time filter có thể scan quá nhiều dữ liệu và làm dashboard chậm hoặc đắt.
+2. `COUNT(*)` đếm mọi dòng, còn `COUNT(error_code)` chỉ đếm dòng có error code không null; error rate thường cần error count chia cho total count.
+3. Dùng `HAVING` để lọc kết quả sau khi aggregate, ví dụ `HAVING SUM(cost_usd) > 50`.
+4. Một dòng cost có thể bị lặp nhiều lần khi join sang bảng có nhiều dòng liên quan, làm tổng chi phí bị nhân đôi hoặc hơn.
+5. Failed/timeout requests vẫn có thể bị provider tính tiền; billing nên dựa vào `cost_usd`/invoice và status chỉ là thông tin reliability.
+
+---
+
+## Điểm cần nhớ
+
+- SQL là công cụ observability, billing và product analytics cho AI systems.
+- Luôn filter usage logs theo thời gian, tenant/user và trạng thái phù hợp.
+- Join sai có thể làm dashboard cost sai nghiêm trọng hơn cả bug model.
+- `GROUP BY` và `HAVING` là nền tảng để tìm heavy users, feature đắt và provider lỗi.
+- Billing query nên dựa trên `cost_usd`/provider invoice, không chỉ dựa trên `status = 'success'`.
+
+## Next chapter bridge
+
+Core SQL giúp bạn trả lời câu hỏi “đã xảy ra bao nhiêu?”. Nhưng khi hệ thống lớn lên, bạn cần trả lời các câu hỏi khó hơn: “chi phí tăng từ lúc nào?”, “user nào tăng usage bất thường?”, “request trước đó ảnh hưởng request sau ra sao?”. Chương tiếp theo: **Advanced SQL** — nơi CTEs và Window Functions biến database thành một pipeline phân tích production AI telemetry.

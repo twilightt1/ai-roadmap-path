@@ -1,0 +1,618 @@
+Core Components cho bạn biết platform cần những mảnh ghép nào. Technical Stack trả lời câu hỏi tiếp theo: dùng công nghệ nào để triển khai, vì sao chọn, alternatives là gì, và làm sao giữ hệ thống modular để sau này thay provider, vector DB, orchestration framework hoặc deployment target mà không viết lại toàn bộ platform.
+
+Capstone stack không nên là danh sách tool thời thượng. Nó phải là tập quyết định kiến trúc phục vụ mục tiêu: async, provider-agnostic, multi-tenant, observable, cost-aware, safe by design và deploy được.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Stack chọn theo tutorial làm platform không scale">
+**Bối cảnh:** Team xây AI platform bằng cách copy nhiều tutorial: một endpoint dùng OpenAI SDK trực tiếp, RAG dùng Chroma local, agent dùng framework riêng, logs ghi console, frontend gọi vài API không versioned.
+
+**Sự cố:** Khi thêm tenant enterprise và provider Anthropic, stack bắt đầu vỡ:
+
+1. Provider logic hard-code trong route handlers.
+2. Vector store local không có tenant ACL rõ.
+3. Agent framework giữ state trong memory, không resume được.
+4. Không có schema chuẩn cho model calls/cost/audit.
+5. Docker Compose không giống production K8s.
+6. Observability không có trace ID chung giữa backend, LLM call và tool call.
+
+**Hậu quả:** Team mất nhiều thời gian refactor hơn là build features. Lỗi không nằm ở từng tool, mà ở việc thiếu stack principles và boundaries.
+</Callout>
+
+Bài học rút ra: Chọn stack Capstone phải dựa trên architecture requirements, không dựa trên tutorial nhanh nhất.
+
+---
+
+## 2. Architecture Blueprint (Stack Layers)
+
+```text
+[ Frontend ]
+  React + TypeScript
+  - chat playground
+  - admin dashboard
+  - trace viewer
+        │
+        ▼
+[ Backend API ]
+  FastAPI + async Python
+  - Pydantic schemas
+  - SSE streaming
+  - background jobs
+        │
+        ▼
+[ AI Services ]
+  - LiteLLM/custom provider adapters
+  - LangChain retrievers
+  - LangGraph agents
+  - MCP clients
+  - safety service
+        │
+        ▼
+[ Data Stores ]
+  - PostgreSQL + pgvector
+  - Redis
+  - Qdrant/Chroma optional
+        │
+        ▼
+[ Observability ]
+  - Langfuse
+  - Prometheus
+  - Grafana
+  - structured logs
+        │
+        ▼
+[ Infra / Delivery ]
+  - Docker Compose local
+  - Kubernetes production
+  - GitHub Actions CI/CD
+```
+
+---
+
+## 3. Stack Principles
+
+| Principle | Meaning |
+|---|---|
+| Async by default | Provider calls, streaming, ingestion and agent runs must not block web workers |
+| Provider-agnostic | OpenAI/Anthropic/Gemini/Mistral behind adapter interface |
+| Observability-first | Every request has trace ID, cost, latency, model/prompt version |
+| Tenant isolation by design | DB rows, cache keys, vector filters, tool policies include tenant |
+| Safety/audit built-in | Guardrails and audit events are part of platform core |
+| Local dev easy | One command should start dependencies for development |
+| Production reproducible | Docker/K8s configs mirror local architecture |
+| Frameworks are replaceable | Business logic should not disappear inside LangChain/LangGraph wrappers |
+
+<Callout type="tip" title="Stack tốt là stack có exit strategy">
+Nếu ngày mai bạn đổi vector DB, provider SDK hoặc agent framework, core domain logic không nên phải viết lại. Dùng interfaces và adapters ngay từ đầu.
+</Callout>
+
+---
+
+## 4. Backend: FastAPI + Async Python
+
+FastAPI phù hợp vì:
+
+- Python AI ecosystem mạnh.
+- Async support tốt cho provider calls.
+- Pydantic schemas giúp API contracts rõ.
+- Dễ tích hợp background workers, SSE streaming, auth dependencies.
+
+Suggested backend layout:
+
+```text
+backend/
+  app/
+    api/
+      routes_chat.py
+      routes_documents.py
+      routes_agents.py
+      routes_admin.py
+    core/
+      config.py
+      security.py
+      tenant_context.py
+      errors.py
+    models/
+      db.py
+      schemas.py
+    services/
+      llm/
+        adapters.py
+        router.py
+        registry.py
+      rag/
+        ingestion.py
+        retriever.py
+        reranker.py
+      agents/
+        graph.py
+        tools.py
+        runs.py
+      safety/
+        gateway.py
+        pii.py
+        moderation.py
+      observability/
+        tracing.py
+        metrics.py
+    workers/
+      ingestion_worker.py
+      eval_worker.py
+    tests/
+```
+
+SSE streaming endpoint skeleton:
+
+```python
+from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
+
+router = APIRouter()
+
+@router.post("/v1/chat/stream")
+async def stream_chat(payload: ChatRequest, tenant=Depends(get_tenant_context)):
+    async def event_stream():
+        async for event in chat_service.stream(payload, tenant):
+            yield f"data: {event.model_dump_json()}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+```
+
+Production needs:
+
+- Request timeouts.
+- Cancellation handling.
+- Backpressure for streams.
+- Structured error envelopes.
+- Correlation IDs.
+
+---
+
+## 5. Databases: PostgreSQL, pgvector, Redis, Qdrant/Chroma
+
+### PostgreSQL + pgvector
+
+PostgreSQL là source of truth:
+
+```text
+tenants
+users
+api_keys
+provider_keys
+model_registry
+prompt_templates
+prompt_versions
+conversations
+messages
+model_calls
+usage_events
+documents
+document_chunks
+embeddings
+agent_runs
+tool_calls
+safety_events
+audit_logs
+billing_limits
+experiments
+experiment_assignments
+```
+
+pgvector phù hợp khi:
+
+- Bạn muốn embeddings gần relational metadata.
+- Tenant filters và joins quan trọng.
+- Dataset vừa/medium.
+- Team muốn ít moving parts.
+
+### Redis
+
+Redis use cases:
+
+- Rate limiting counters.
+- Session/conversation hot state.
+- Exact prompt cache.
+- Task status for agent runs.
+- Streaming pub/sub.
+- Circuit breaker counters.
+- Short-lived locks.
+
+Key pattern:
+
+```text
+rate:{tenant_id}:{user_id}:{minute}
+cache:{tenant_id}:{prompt_hash}
+run:{tenant_id}:{run_id}:status
+circuit:{provider}:{model}
+stream:{conversation_id}
+```
+
+### Qdrant/Chroma optional
+
+Use dedicated vector DB when:
+
+- Vector workload outgrows Postgres.
+- Need specialized ANN ops/scaling.
+- Want separate retrieval infra.
+
+But metadata synchronization and tenant ACL become more complex.
+
+<Callout type="warning" title="Vector DB không được thiếu tenant filter">
+Dù dùng pgvector, Qdrant hay Chroma, tenant isolation phải là required query parameter. Không để application layer filter sau khi retrieve top-k toàn cục.
+</Callout>
+
+---
+
+## 6. LLM Provider Integration: LiteLLM + Native SDKs
+
+LiteLLM hữu ích vì cung cấp unified API cho nhiều providers:
+
+- OpenAI.
+- Anthropic.
+- Google AI/Gemini.
+- Mistral.
+- OpenAI-compatible local servers.
+
+Provider adapter interface:
+
+```python
+from typing import AsyncIterator, Protocol
+
+class LLMProviderAdapter(Protocol):
+    async def chat(self, request: ChatProviderRequest) -> ChatProviderResponse:
+        ...
+
+    async def stream(self, request: ChatProviderRequest) -> AsyncIterator[ChatStreamEvent]:
+        ...
+
+    async def embed(self, request: EmbeddingRequest) -> EmbeddingResponse:
+        ...
+```
+
+Khi nào dùng native SDKs:
+
+- Provider-specific tool calling.
+- Beta APIs.
+- Fine-grained streaming events.
+- Provider-native safety controls.
+- File/batch APIs.
+
+API key handling:
+
+- Platform-managed keys stored encrypted.
+- BYOK per tenant optional.
+- Key rotation support.
+- Never expose provider keys to frontend.
+- Audit failed provider auth events without logging secret.
+
+---
+
+## 7. Orchestration: LangChain + LangGraph
+
+### LangChain
+
+Dùng cho:
+
+- Prompt templates.
+- Retrievers.
+- Tool wrappers.
+- Basic chains.
+- Integrations.
+
+### LangGraph
+
+Dùng cho:
+
+- Stateful agent workflows.
+- Conditional routing.
+- Retries/checkpoints.
+- Human-in-the-loop nodes.
+- Multi-step workflows with explicit state.
+
+Graph state example:
+
+```json
+{
+  "run_id": "run_123",
+  "user_goal": "research competitors",
+  "plan": ["search web", "summarize", "compare"],
+  "observations": [],
+  "tool_budget_remaining": 10,
+  "requires_human_review": false
+}
+```
+
+<Callout type="warning" title="Không để framework nuốt business logic">
+LangChain/LangGraph nên orchestrate, không nên là nơi duy nhất chứa policy, tenant checks, cost logic hoặc safety decisions. Những thứ đó thuộc platform services có test riêng.
+</Callout>
+
+---
+
+## 8. MCP Stack
+
+MCP giúp chuẩn hóa tool/resource connectivity giữa model/agent và external systems.
+
+Examples MCP servers:
+
+- Database query server.
+- Document/file server.
+- Web search server.
+- GitHub/codebase server.
+- Internal CRM/helpdesk server.
+
+MCP integration requirements:
+
+- Tool schema validation.
+- Per-tenant tool allowlists.
+- Human confirmation for irreversible tools.
+- Tool output sanitization.
+- Audit event for every invocation.
+- Timeout and budget controls.
+
+Tool invocation audit:
+
+```json
+{
+  "tool_call_id": "tool_123",
+  "run_id": "run_456",
+  "tenant_id": "tenant_acme",
+  "tool_name": "web_search",
+  "allowed": true,
+  "arguments_hash": "sha256:...",
+  "latency_ms": 830,
+  "status": "success"
+}
+```
+
+---
+
+## 9. Frontend: React + TypeScript
+
+Frontend pages:
+
+- Chat playground.
+- RAG document upload/ingestion status.
+- Agent run monitor.
+- Prompt/version manager.
+- Cost dashboard.
+- Provider health dashboard.
+- Safety/audit dashboard.
+- Tenant/admin settings.
+- Experiment results.
+
+Frontend concerns:
+
+- SSE streaming UI.
+- Trace ID visible in debug mode.
+- Role-based admin pages.
+- Upload progress and ingestion errors.
+- Safe rendering of markdown/model output.
+- Redaction for sensitive traces.
+
+Acceptance criteria:
+
+- User can copy trace ID from a response.
+- Admin can open trace detail from dashboard.
+- Streaming handles cancellation/retry.
+- Upload UI shows ingestion progress and failures.
+
+---
+
+## 10. Infrastructure: Docker, Kubernetes, GitHub Actions
+
+Local Docker Compose:
+
+```yaml
+services:
+  backend:
+    build: ./backend
+    ports: ["8000:8000"]
+    depends_on: [postgres, redis]
+  frontend:
+    build: ./frontend
+    ports: ["3000:3000"]
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_PASSWORD: postgres
+  redis:
+    image: redis:7
+  prometheus:
+    image: prom/prometheus
+  grafana:
+    image: grafana/grafana
+```
+
+Kubernetes production:
+
+- Backend Deployment.
+- Frontend Deployment.
+- Worker Deployment.
+- Redis/Postgres managed services preferred.
+- Ingress.
+- Secrets management.
+- Horizontal Pod Autoscaler.
+- Readiness/liveness probes.
+- Network policies.
+- Rolling deploy and rollback.
+
+GitHub Actions pipeline:
+
+```text
+pull_request:
+  lint
+  typecheck
+  unit tests
+  integration tests
+  prompt/RAG/safety eval subset
+
+main:
+  build docker images
+  run full eval suite
+  deploy staging
+  smoke tests
+  manual approval
+  deploy production
+```
+
+---
+
+## 11. Monitoring: Langfuse, Prometheus, Grafana
+
+Metrics to define:
+
+| Metric | Why |
+|---|---|
+| Requests per tenant/feature | Capacity and billing |
+| Token usage | Cost tracking |
+| Cost per model/provider | FinOps |
+| Routing distribution | Router behavior |
+| Provider error/fallback rate | Reliability |
+| Latency p50/p95/p99 | SLA |
+| RAG retrieval quality | Grounding |
+| Safety block rate | Safety operations |
+| Red-team pass rate | Release gate |
+| Agent tool calls/run | Cost and autonomy control |
+
+Langfuse traces capture LLM-level details; Prometheus captures service-level metrics; Grafana presents operational dashboards.
+
+---
+
+## 12. Testing and Evaluation Stack
+
+Testing stack:
+
+- `pytest` for unit/integration.
+- Provider mocks for OpenAI/Anthropic/Gemini.
+- Golden prompt datasets.
+- RAG evaluation sets.
+- Red-team adversarial prompt sets.
+- Load tests for streaming/concurrency.
+- DB migration tests.
+- Contract tests for provider adapters.
+
+Eval categories:
+
+| Eval | Gate |
+|---|---|
+| Prompt regression | No critical answer regression |
+| RAG eval | Faithfulness/citation threshold |
+| Safety eval | 0 critical failures |
+| Cost eval | No unexpected cost spike |
+| Latency eval | p95 within target |
+| Tenant isolation | Cross-tenant tests must fail access |
+
+---
+
+## 13. Stack Decision Table
+
+| Layer | Chosen | Why | Alternative |
+|---|---|---|---|
+| Backend | FastAPI | async Python, AI ecosystem | Node/NestJS |
+| Relational DB | PostgreSQL | transactional source of truth | MySQL |
+| Vector search | pgvector first | metadata joins + fewer systems | Qdrant/Pinecone/Chroma |
+| Cache/state | Redis | rate limit, cache, pub/sub | KeyDB/Valkey |
+| LLM gateway | LiteLLM + adapters | multi-provider abstraction | native SDK only |
+| Agent graph | LangGraph | explicit state machine | CrewAI/AutoGen/custom |
+| Frontend | React + TypeScript | dashboard ecosystem | Next.js app/full-stack alternative |
+| Observability | Langfuse + Prometheus/Grafana | LLM + infra visibility | Helicone/Datadog |
+| Infra | Docker + K8s | reproducible deployment | serverless/container apps |
+
+---
+
+## 14. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Dùng managed SaaS cho mọi thứ quá sớm">
+**Triệu chứng:** Platform phụ thuộc nhiều vendor, cost khó kiểm soát, local dev khó chạy.
+
+**Nguyên nhân:** Chọn tool theo convenience, không theo boundary.
+
+**Cách khắc phục:** Bắt đầu với stack có thể chạy local; trừu tượng hóa vendor sau interface.
+</Callout>
+
+<Callout type="danger" title="Pitfall 2: Secrets rò qua frontend hoặc logs">
+**Triệu chứng:** Provider API key xuất hiện trong browser bundle hoặc debug logs.
+
+**Nguyên nhân:** Frontend gọi provider trực tiếp hoặc backend log raw headers/env.
+
+**Cách khắc phục:** Provider calls chỉ từ backend; secrets encrypted; logs redacted; secret scanning trong CI.
+</Callout>
+
+<Callout type="warning" title="Pitfall 3: Docker Compose không giống production">
+**Triệu chứng:** Local chạy ổn nhưng K8s fail vì env/config/health check khác.
+
+**Nguyên nhân:** Local dev bỏ qua readiness probes, workers, migrations, secrets.
+
+**Cách khắc phục:** Local và prod dùng cùng image, config qua env, migrations rõ, health endpoints giống nhau.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Framework lock-in quá sâu">
+**Triệu chứng:** Muốn đổi LangChain/LiteLLM nhưng business logic nằm trong callbacks/chains khó test.
+
+**Nguyên nhân:** Không có service interfaces riêng.
+
+**Cách khắc phục:** Domain services gọi framework adapters; test business logic bằng mocks.
+</Callout>
+
+---
+
+## 15. Cost & Performance Unit Economics
+
+| Stack choice | Cost benefit | Hidden cost |
+|---|---|---|
+| FastAPI async | High concurrency with fewer workers | Need async discipline |
+| pgvector | Fewer systems, easier joins | May need dedicated vector DB later |
+| Redis | Cheap hot state/cache | Memory cost and eviction policy |
+| LiteLLM | Faster multi-provider support | Abstraction may hide provider-specific features |
+| LangGraph | Explicit agent state | Learning curve and framework dependency |
+| K8s | Autoscaling and reliability | Operational complexity |
+| Langfuse traces | LLM debug visibility | Trace storage/privacy overhead |
+
+Stack decisions should be revisited as scale changes. Capstone MVP should optimize learning and correctness first, then scale bottlenecks with evidence.
+
+---
+
+## Practice exercises
+
+1. Viết module layout backend cho Capstone và giải thích từng folder.
+2. Chọn pgvector hay Qdrant cho MVP và viết ADR ngắn.
+3. Thiết kế provider adapter interface cho chat/stream/embed.
+4. Viết Redis key patterns cho rate limit, cache và agent run status.
+5. Thiết kế GitHub Actions pipeline có prompt/RAG/safety eval gates.
+6. Liệt kê 5 metrics Prometheus cần scrape từ backend.
+
+---
+
+## Knowledge check
+
+1. Vì sao FastAPI async phù hợp với AI API platform?
+2. PostgreSQL và Redis đóng vai trò khác nhau thế nào?
+3. Khi nào cần native SDK thay vì LiteLLM abstraction?
+4. Vì sao business logic không nên nằm sâu trong LangChain callbacks?
+5. Langfuse và Prometheus khác nhau ở tín hiệu nào?
+
+---
+
+## Answer key
+
+1. Vì AI APIs thường chờ network/provider calls và streaming; async giúp xử lý concurrency tốt hơn.
+2. PostgreSQL là source of truth transactional; Redis là hot state/cache/rate limit/pub-sub ngắn hạn.
+3. Khi cần provider-specific features như beta APIs, tool use đặc thù, streaming events hoặc file/batch APIs.
+4. Vì khó test, khó thay framework và dễ trộn policy/business logic với orchestration details.
+5. Langfuse tập trung LLM traces/prompts/model calls; Prometheus tập trung metrics hạ tầng/service như latency, error rate, queue length.
+
+---
+
+## Điểm cần nhớ
+
+- Technical stack phải phục vụ architecture requirements, không phải chạy theo tutorial.
+- FastAPI, PostgreSQL+pgvector, Redis, LiteLLM/adapters, LangGraph, React, Docker/K8s và Langfuse/Prometheus/Grafana tạo một stack thực dụng cho Capstone.
+- Provider abstraction, tenant isolation, safety/audit và observability phải có interface rõ.
+- Local dev nên dễ chạy; production deploy nên reproducible.
+- Testing stack phải include prompt, RAG, safety và tenant isolation evals.
+
+## Next chapter bridge
+
+Bạn đã có architecture và stack. Bài cuối sẽ biến chúng thành implementation roadmap: build feature nào trước, acceptance criteria ra sao, demo cuối cùng gồm gì, và làm sao trình bày Capstone như một portfolio-grade AI platform. Chương tiếp theo: **Features to Implement**.

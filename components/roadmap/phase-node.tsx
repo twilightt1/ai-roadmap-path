@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { ChevronDown, Target } from "lucide-react";
 import type { Phase } from "@/lib/types";
 import { accentMap } from "@/lib/theme";
@@ -11,12 +11,13 @@ import { ProjectCard } from "./project-card";
 
 export function PhaseNode({ phase }: { phase: Phase }) {
   const [isOpen, setIsOpen] = useState(false);
+  const reduce = useReducedMotion();
   const a = accentMap[phase.accent];
   const phaseLabel = phase.isCapstone ? "Capstone" : `Phase ${phase.number}`;
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 16 }}
+      initial={reduce ? false : { opacity: 0, y: 16 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "-80px" }}
       transition={{ duration: 0.4 }}
@@ -68,9 +69,7 @@ export function PhaseNode({ phase }: { phase: Phase }) {
             </p>
           </div>
           <ChevronDown
-            className={`h-4 w-4 shrink-0 text-zinc-500 transition-transform duration-300 ${
-              isOpen ? "rotate-180 text-foreground" : ""
-            }`}
+            className={`h-4 w-4 shrink-0 text-zinc-500 transition-transform duration-300 ${isOpen ? "rotate-180 text-foreground" : ""}`}
           />
         </button>
 
@@ -78,9 +77,9 @@ export function PhaseNode({ phase }: { phase: Phase }) {
         <AnimatePresence initial={false}>
           {isOpen && (
             <motion.div
-              initial={{ height: 0, opacity: 0 }}
+              initial={reduce ? false : { height: 0, opacity: 0 }}
               animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
+              exit={reduce ? { height: 0, opacity: 0 } : { height: 0, opacity: 0 }}
               transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
             >
               <div className="border-t border-white/5 px-4 pb-5 pt-4 sm:px-5">

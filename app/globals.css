@@ -47,6 +47,8 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  --section-spacing: 5rem;
+  --section-spacing-mobile: 3rem;
 }
 
 :root {
@@ -125,7 +127,7 @@
   body {
     @apply bg-background text-foreground;
     background-image:
-      radial-gradient(ellipse 60rem 60rem at top, oklch(0.16 0.03 155 / 0.15), transparent 70%),
+      radial-gradient(ellipse 60rem 60rem at top, oklch(0.72 0.16 155 / 0.08), transparent 70%),
       linear-gradient(to right, oklch(1 0 0 / 0.012) 1px, transparent 1px),
       linear-gradient(to bottom, oklch(1 0 0 / 0.012) 1px, transparent 1px);
     background-size: 100% 100%, 48px 48px, 48px 48px;
@@ -134,6 +136,18 @@
   html {
     @apply font-sans;
     scroll-behavior: smooth;
+  }
+  section {
+    scroll-margin-top: 5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
@@ -149,6 +163,15 @@
       linear-gradient(to right, oklch(1 0 0 / 0.02) 1px, transparent 1px),
       linear-gradient(to bottom, oklch(1 0 0 / 0.02) 1px, transparent 1px);
     background-size: 32px 32px;
+  }
+  .shadow-tinted {
+    box-shadow: 0 4px 20px -4px oklch(0.72 0.16 155 / 0.12);
+  }
+  .shadow-tinted-lg {
+    box-shadow: 0 12px 40px -8px oklch(0.72 0.16 155 / 0.15);
+  }
+  .section-spacing {
+    @apply py-20 sm:py-28;
   }
 }
 

@@ -1,0 +1,650 @@
+Bạn đã có overview, component boundaries và stack decisions. Bài cuối của Capstone biến tất cả thành implementation roadmap: build feature nào trước, acceptance criteria ra sao, demo cuối cùng cần chứng minh gì, và làm sao biến project này thành portfolio-grade evidence cho năng lực AI Engineer production.
+
+Đây là backlog chính thức cho Capstone. Nếu hoàn thành phần lớn acceptance criteria dưới đây, bạn không chỉ có một app AI; bạn có một nền tảng có thể trình bày trong interview, demo cho khách hàng hoặc dùng làm foundation cho sản phẩm thật.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Capstone có nhiều code nhưng không demo được production value">
+**Bối cảnh:** Một developer dành 2 tháng xây AI platform. Repo có nhiều endpoints, UI đẹp, vài chain RAG và agent demo.
+
+**Sự cố:** Khi trình bày, project không chứng minh được các năng lực production:
+
+1. Không có acceptance criteria cho từng feature.
+2. Không có demo script end-to-end.
+3. Không có cost dashboard hoặc trace để debug response.
+4. Không chứng minh được tenant isolation.
+5. Không có safety/red-team regression.
+6. Không có deployment hoặc runbook.
+
+**Hậu quả:** Người xem thấy đây là “một app AI nhiều tính năng” nhưng không thấy năng lực platform engineering. Capstone thất bại ở portfolio storytelling, dù code nhiều.
+</Callout>
+
+Bài học rút ra: Capstone cần backlog, acceptance criteria và demo narrative. Production value phải được chứng minh, không chỉ được mô tả.
+
+---
+
+## 2. Architecture Blueprint (Feature Roadmap)
+
+```text
+M1  Multi-tenant Auth
+        │
+        ▼
+M2  Streaming Chat + Memory
+        │
+        ▼
+M3  Multi-LLM Router + Fallback + Cost
+        │
+        ▼
+M4  RAG Engine + Citations + Tenant Isolation
+        │
+        ▼
+M5  Agent Workflows + MCP Tools + Budgets
+        │
+        ▼
+M6  Prompt Registry + A/B Testing
+        │
+        ▼
+M7  Safety / Privacy / Audit Layer
+        │
+        ▼
+M8  Admin Dashboard + Observability
+        │
+        ▼
+M9  CI/CD + Docker/K8s Deploy
+        │
+        ▼
+M10 Final Demo + Portfolio Package
+```
+
+Backlog overview:
+
+| Milestone | Feature | Outcome |
+|---|---|---|
+| M1 | Multi-tenant auth | Users/tenants isolated |
+| M2 | LLM chat + streaming | Usable AI API |
+| M3 | Router + fallback | Cost/reliability control |
+| M4 | RAG engine | Private knowledge Q&A |
+| M5 | Agents + MCP | Tool-using workflows |
+| M6 | Prompt/version/A-B | Experiment control |
+| M7 | Safety/privacy/audit | Responsible AI controls |
+| M8 | Admin dashboard | Operational visibility |
+| M9 | CI/CD deploy | Production readiness |
+| M10 | Portfolio demo | Proof of capability |
+
+---
+
+## 3. Feature 1: Multi-Tenant User Management
+
+Requirements:
+
+- Tenants table.
+- Users belong to tenants.
+- Roles: owner/admin/member/viewer.
+- Tenant settings: allowed providers, budgets, safety policy, data retention.
+- Every request resolves tenant context.
+- Row-level filters or service-level tenant guards.
+
+Acceptance criteria:
+
+| Check | Expected |
+|---|---|
+| User A accesses Tenant B conversation | Denied |
+| Tenant A document retrieval | Only Tenant A chunks returned |
+| Admin usage dashboard | Filterable by tenant |
+| Cache keys | Include tenant ID |
+| Audit logs | Include tenant ID and user ID |
+
+Test cases:
+
+```text
+- create tenant_a and tenant_b
+- upload docs for both
+- login user_a
+- query document from tenant_b by ID
+- assert 403 or no result
+```
+
+---
+
+## 4. Feature 2: Per-User API Key Management
+
+Two modes:
+
+| Mode | Description | Use case |
+|---|---|---|
+| Platform keys | Platform pays provider bills | SaaS model, simpler UX |
+| BYOK | Tenant/user supplies provider key | Enterprise privacy/cost control |
+
+Requirements:
+
+- Encrypted provider keys.
+- Never expose keys to frontend.
+- Key validation endpoint.
+- Rotation support.
+- Disable provider per tenant.
+- Audit failed key usage without logging key.
+
+Acceptance criteria:
+
+- Provider key is encrypted at rest.
+- Frontend never receives raw key.
+- Tenant can revoke key and future calls fail gracefully.
+- Router respects tenant provider allowlist.
+
+---
+
+## 5. Feature 3: Streaming AI Chat with Memory
+
+Requirements:
+
+- `/v1/chat` for non-streaming.
+- `/v1/chat/stream` for SSE streaming.
+- Conversation and messages stored in PostgreSQL.
+- Redis for hot conversation/session state.
+- Long conversation summarization or windowing.
+- Token usage logged per message/model call.
+
+Acceptance criteria:
+
+| Check | Expected |
+|---|---|
+| First token | Streams before full answer completes |
+| Conversation resume | Works by conversation ID |
+| Usage logging | Input/output tokens stored |
+| Cancellation | Client disconnect stops generation or marks run canceled |
+| Trace ID | Visible in response/debug UI |
+
+<Callout type="tip" title="Streaming là UX và observability feature">
+Streaming không chỉ làm chat cảm giác nhanh hơn. Nó buộc bạn xử lý cancellation, partial output moderation, trace IDs và lifecycle events đúng cách.
+</Callout>
+
+---
+
+## 6. Feature 4: Intelligent Model Routing with Cost Optimization
+
+Requirements:
+
+- Model registry with cost/context/capabilities.
+- Task classifier or heuristic router.
+- Tenant provider policies.
+- Token/cost estimate before call.
+- Fallback chains.
+- Circuit breaker for provider failures.
+- Cost log after call.
+
+Routing examples:
+
+| Task | Preferred route |
+|---|---|
+| Simple rewrite | Cheap fast model |
+| Long document analysis | Long-context model |
+| Code explanation | Code-capable model |
+| High-risk answer | Safer model + stricter output checks |
+| Provider outage | Fallback model/provider |
+
+Acceptance criteria:
+
+- Simple tasks route to cheaper model.
+- Long-context tasks avoid models with insufficient context window.
+- Provider outage triggers fallback.
+- Every route decision is logged with reason.
+- Cost per request is visible in dashboard.
+
+---
+
+## 7. Feature 5: RAG Pipeline with Multiple Document Types
+
+Requirements:
+
+- Upload PDF/DOCX/TXT/Markdown/web URL.
+- Parse and normalize text.
+- Chunk documents.
+- Generate embeddings.
+- Store documents/chunks/embeddings with tenant metadata.
+- Retrieve with vector/hybrid search.
+- Return citations.
+- Refuse or ask clarification when evidence is weak.
+
+Acceptance criteria:
+
+| Check | Expected |
+|---|---|
+| Tenant isolation | No cross-tenant chunks |
+| Citation output | Answer includes source IDs/titles |
+| Low evidence | Model abstains or asks clarification |
+| Delete document | Chunks/embeddings removed |
+| RAG eval | Golden Q&A has faithfulness/citation metrics |
+
+RAG golden eval example:
+
+```json
+{
+  "question": "What is the refund window for Pro plan?",
+  "expected_source": "refund_policy_v5.md#section-2.1",
+  "must_contain": ["14 days", "Pro plan"],
+  "must_not_contain": ["30 days"]
+}
+```
+
+---
+
+## 8. Feature 6: Prompt Version Management
+
+Requirements:
+
+- Prompt templates table.
+- Prompt versions immutable.
+- Changelog.
+- Variables schema.
+- Rollout percentage.
+- Rollback without deploy.
+- Every model call stores prompt version.
+
+Acceptance criteria:
+
+- Admin can create new prompt version.
+- Requests log prompt version.
+- Rollback changes behavior without code deploy.
+- A/B experiment can assign traffic between prompt versions.
+
+Prompt version schema:
+
+```json
+{
+  "template_id": "rag_answer",
+  "version": 7,
+  "system_prompt": "Answer with citations. Abstain if evidence is weak.",
+  "variables_schema": ["tenant_policy", "retrieved_context", "user_question"],
+  "changelog": "Added abstention rule for low evidence.",
+  "created_by": "admin_123"
+}
+```
+
+---
+
+## 9. Feature 7: A/B Testing for Prompts and Models
+
+Requirements:
+
+- Experiment config.
+- Traffic split.
+- Assignment persistence.
+- Metrics collection:
+  - latency
+  - cost
+  - user rating
+  - task success
+  - safety blocks
+  - fallback rate
+- Winner decision report.
+
+Acceptance criteria:
+
+- Same user gets stable variant during experiment.
+- Dashboard compares variant metrics.
+- Experiment logs model/prompt version.
+- Safety regression can stop experiment.
+
+<Callout type="warning" title="A/B test không chỉ đo thumbs-up">
+Thumbs-up có thể reward verbosity hoặc sycophancy. Kết hợp user feedback với task metrics, safety, cost và latency.
+</Callout>
+
+---
+
+## 10. Feature 8: Agent Workflows + MCP Tools
+
+Requirements:
+
+- LangGraph-style workflow.
+- MCP tool registry.
+- Tool schema validation.
+- Tenant-specific allowlist.
+- Step/time/cost budgets.
+- Human approval gates.
+- Agent run status endpoint.
+- Tool call audit logs.
+
+Acceptance criteria:
+
+| Check | Expected |
+|---|---|
+| Unauthorized tool | Blocked server-side |
+| Long-running run | Status visible by run ID |
+| Cost budget exceeded | Agent stops with reason |
+| Human approval required | Run pauses and resumes |
+| Tool output injection | Sanitized/treated as untrusted data |
+
+Demo workflow:
+
+```text
+User: Research competitor pricing and draft summary.
+Planner → web_search MCP → document_reader MCP → critic → synthesizer → safety review → final answer
+```
+
+---
+
+## 11. Feature 9: Safety, Privacy, Red-Team Regression
+
+Requirements:
+
+- Input moderation.
+- Prompt injection detection.
+- PII masking before provider/logging.
+- Output moderation.
+- RAG citation/evidence checks.
+- Tool permission enforcement.
+- Safety events table.
+- Red-team test suite in CI.
+
+Acceptance criteria:
+
+- Indirect prompt injection in uploaded doc is detected or neutralized.
+- PII is masked according to policy.
+- Fallback model goes through same safety checks.
+- Critical red-team regression fails CI.
+- Safety event appears in admin dashboard.
+
+Red-team test categories:
+
+- Direct jailbreak.
+- Indirect RAG injection.
+- Tool abuse.
+- Data exfiltration.
+- PII leak.
+- Over-refusal false positive.
+
+---
+
+## 12. Feature 10: Cost Tracking, Usage Limits, Billing
+
+Requirements:
+
+- Model call usage events.
+- Per-provider pricing table.
+- Cost estimate and actual cost.
+- Per-tenant monthly budget.
+- Soft alerts and hard limits.
+- Downgrade route when budget near limit.
+
+Acceptance criteria:
+
+- Dashboard shows cost by tenant/user/feature/model.
+- Budget exceeded blocks or downgrades requests.
+- Cost estimate error is tracked.
+- Heavy users are visible.
+
+Usage event schema:
+
+```json
+{
+  "tenant_id": "tenant_acme",
+  "user_id": "user_123",
+  "feature": "rag_chat",
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "input_tokens": 1800,
+  "output_tokens": 420,
+  "cost_usd": 0.0062,
+  "latency_ms": 1420,
+  "created_at": "2026-06-30T12:00:00Z"
+}
+```
+
+---
+
+## 13. Feature 11: Admin Panel with Full Observability
+
+Admin pages:
+
+- System overview.
+- Tenants/users/API keys.
+- Usage and cost.
+- Provider health.
+- Model routing distribution.
+- Prompt versions and experiments.
+- RAG documents and retrieval quality.
+- Agent runs and tool calls.
+- Safety events and incidents.
+- Audit log explorer.
+- Billing/limits.
+
+Acceptance criteria:
+
+- Every production request has trace ID.
+- Admin can debug bad response from trace → prompt → model → retrieved chunks → safety scores.
+- Dashboards show latency/errors/cost.
+- Safety incidents link to request traces.
+
+---
+
+## 14. Feature 12: CI/CD and Deployment
+
+Requirements:
+
+- Docker build.
+- Unit/integration tests.
+- DB migration tests.
+- Prompt regression tests.
+- RAG evals.
+- Red-team safety tests.
+- Staging deploy.
+- Production release gate.
+- Rollback plan.
+- Health checks.
+
+Acceptance criteria:
+
+- Main branch deploys to staging automatically.
+- Production requires manual approval or release gate.
+- Failed critical safety/eval suite blocks deployment.
+- Rollback path is documented and tested.
+- Kubernetes health endpoints show app/worker readiness.
+
+---
+
+## 15. Final Capstone Demo Script
+
+Demo nên đi theo narrative production, không chỉ click UI.
+
+1. Create tenant and user.
+2. Configure allowed providers and monthly budget.
+3. Upload internal docs.
+4. Ask RAG question and show citations.
+5. Ask simple rewrite and show router chooses cheap model.
+6. Ask long reasoning question and show router chooses stronger/long-context model.
+7. Simulate provider failure and show fallback.
+8. Run agent with MCP web/document tool.
+9. Show streaming response and trace ID.
+10. Show prompt version and A/B experiment.
+11. Trigger prompt injection/safety event and show it blocked/logged.
+12. Show cost dashboard by tenant/model/feature.
+13. Open Langfuse trace for one request.
+14. Show Grafana latency/error dashboard.
+15. Show CI red-team/eval checks.
+16. Show deployment health or K8s status.
+
+<Callout type="tip" title="Demo phải kể một câu chuyện">
+Một demo tốt không phải “đây là 20 màn hình”. Nó là câu chuyện: user request → platform decision → model/RAG/agent execution → safety/cost/trace → admin can debug and govern.
+</Callout>
+
+---
+
+## 16. Final Grading Rubric
+
+| Area | Excellent evidence |
+|---|---|
+| Architecture | Modular boundaries, diagrams, ADRs |
+| Reliability | Retries, fallback, circuit breaker, graceful degradation |
+| Multi-tenancy | Strong isolation across users/docs/costs/cache/vector search |
+| RAG | Citations, tenant filters, eval metrics, delete semantics |
+| Agents | Bounded autonomy, tool permissioning, audit, HITL |
+| Cost | Real tracking, budgets, route optimization, dashboards |
+| Safety | Input/output controls, PII masking, red-team CI, incidents |
+| Observability | Traces, metrics, logs, dashboards, request drill-down |
+| Deployment | Docker/K8s/CI/CD, health checks, rollback |
+| Portfolio | README, diagrams, screenshots, demo video, runbooks |
+
+---
+
+## 17. Project Guide: Multi-LLM AI Platform
+
+Official Capstone project:
+
+```text
+Multi-LLM AI Platform (PrinceSinghAI)
+- Full production multi-LLM platform
+- Auth + multi-tenant, intelligent routing, fallback chains
+- RAG engine + agent orchestrator + MCP
+- Streaming, observability, cost tracking
+- Kubernetes deploy with auto-scaling
+```
+
+MVP deliverables:
+
+1. Backend API with tenant context.
+2. Streaming chat endpoint.
+3. Multi-provider router with fallback.
+4. RAG ingestion/retrieval with citations.
+5. Agent workflow with at least one MCP/tool integration.
+6. Prompt version registry.
+7. Cost tracking by tenant/model/feature.
+8. Safety gateway with PII/injection checks.
+9. Admin dashboard basic pages.
+10. Docker Compose local setup.
+11. CI pipeline with tests/evals.
+12. README with demo script.
+
+Stretch goals:
+
+- BYOK provider keys.
+- A/B testing dashboard.
+- Full HITL review UI.
+- Red-team test generator.
+- Kubernetes Helm chart.
+- Billing integration.
+- Model/system cards generated from config.
+
+---
+
+## 18. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="danger" title="Pitfall 1: Feature breadth without depth">
+**Triệu chứng:** Platform có nhiều menu nhưng mỗi feature chỉ là mock/demo.
+
+**Nguyên nhân:** Build ngang quá rộng, không có vertical slice production-grade.
+
+**Cách khắc phục:** Ưu tiên one complete flow: tenant → chat/RAG → router → safety → cost → trace → admin.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Acceptance criteria không test được">
+**Triệu chứng:** README nói “supports multi-tenancy” nhưng không có test chứng minh.
+
+**Nguyên nhân:** Criteria viết mơ hồ.
+
+**Cách khắc phục:** Mỗi critical claim cần test hoặc demo evidence: cross-tenant access denied, fallback triggered, safety event logged.
+</Callout>
+
+<Callout type="warning" title="Pitfall 3: Dashboard đẹp nhưng không có data thật">
+**Triệu chứng:** Admin UI nhìn tốt nhưng numbers hard-coded hoặc không drill-down được.
+
+**Nguyên nhân:** Frontend build trước observability data model.
+
+**Cách khắc phục:** Instrument backend first. Dashboard phải đọc từ usage_events, model_calls, traces, safety_events.
+</Callout>
+
+<Callout type="danger" title="Pitfall 4: Không có final narrative">
+**Triệu chứng:** Người xem không hiểu vì sao project này khó và đáng giá.
+
+**Nguyên nhân:** Demo thiếu story, README thiếu architecture/decisions/trade-offs.
+
+**Cách khắc phục:** Chuẩn bị demo script, diagrams, ADRs, screenshots và incident story như một portfolio case study.
+</Callout>
+
+---
+
+## 19. Platform Unit Economics
+
+| Feature | Cost driver | Control |
+|---|---|---|
+| Chat | output tokens | max tokens, cheap model route |
+| RAG | embeddings, reranking, context length | batch ingestion, rerank top-k only, context compression |
+| Agents | repeated model/tool calls | step/cost budgets, caching, HITL |
+| Safety | classifiers, judge models, human review | risk-tiered cascade |
+| Observability | trace/log storage | retention, sampling, redaction |
+| Admin analytics | DB query load | rollups/materialized views |
+
+Capstone phải chứng minh unit economics: mỗi feature có cost driver, metric và control.
+
+---
+
+## Practice exercises
+
+1. Chọn 3 features quan trọng nhất cho MVP 2 tuần và giải thích trade-off.
+2. Viết acceptance criteria testable cho model fallback.
+3. Thiết kế demo script 10 phút cho Capstone.
+4. Viết README outline cho portfolio project.
+5. Thiết kế bảng `usage_events` và dashboard cost theo tenant.
+6. Viết red-team regression case cho indirect prompt injection trong uploaded document.
+7. Liệt kê screenshots cần có trong final portfolio.
+
+---
+
+## Knowledge check
+
+1. Feature nào nên build trước: admin dashboard hay trace/usage instrumentation? Vì sao?
+2. Một acceptance criteria tốt cần tính chất gì?
+3. Demo Capstone nên chứng minh những năng lực production nào?
+4. Vì sao vertical slice tốt hơn build nhiều mock features?
+5. Final grading rubric nên bao gồm những areas nào?
+
+---
+
+## Answer key
+
+1. Trace/usage instrumentation trước, vì dashboard cần dữ liệu thật để có giá trị operational.
+2. Cụ thể, testable, gắn với user/system behavior và có expected outcome rõ.
+3. Multi-tenancy, routing/fallback, RAG, agents/tools, cost, safety, observability, deployment và governance.
+4. Vertical slice chứng minh end-to-end production capability; mock breadth chỉ chứng minh UI/intent.
+5. Architecture, reliability, multi-tenancy, RAG, agents, cost, safety, observability, deployment và portfolio readiness.
+
+---
+
+## Điểm cần nhớ
+
+- Capstone cần backlog có acceptance criteria, không chỉ danh sách features.
+- MVP nên chứng minh một vertical slice production-grade trước khi mở rộng.
+- Demo cuối phải kể story từ user request đến platform decision, execution, safety, cost và observability.
+- Portfolio evidence gồm README, diagrams, screenshots, demo video, runbooks, tests và deployment proof.
+- Production value phải được đo và chứng minh bằng traces, dashboards, evals và safety gates.
+
+---
+
+## Tổng kết Capstone (Capstone Wrap-up)
+
+Bạn đã hoàn thành toàn bộ roadmap bằng một project tổng hợp: **Multi-LLM AI Platform**.
+
+Capstone này chứng minh bạn có thể:
+
+1. Thiết kế một AI platform đa tenant thay vì chatbot demo.
+2. Tích hợp nhiều LLM providers qua router, fallback và cost controls.
+3. Xây RAG engine có citations, tenant isolation và evals.
+4. Orchestrate agents với MCP tools, budgets, audit và human approval.
+5. Quản lý prompts, experiments, usage limits và admin dashboards.
+6. Đưa safety, privacy, red-team regression và audit logs vào production path.
+7. Deploy bằng Docker/Kubernetes với CI/CD, tests, metrics và rollback.
+8. Trình bày project như portfolio-grade system design case study.
+
+## Portfolio / Next steps bridge
+
+Roadmap không kết thúc khi build xong code. Hãy đóng gói Capstone thành tài sản nghề nghiệp:
+
+- GitHub README có architecture diagram, setup, screenshots và demo script.
+- Design doc và ADRs giải thích trade-offs.
+- Demo video 5–10 phút theo narrative production.
+- Public case study: problem, architecture, challenges, metrics, lessons learned.
+- Interview talking points: routing, RAG, agents, cost, safety, observability, deployment.
+- Roadmap cải tiến tiếp theo: billing thật, enterprise SSO, advanced evals, custom model serving, plugin marketplace.
+
+Nếu bạn có thể trình bày Capstone này rõ ràng, bạn không chỉ “biết AI”. Bạn đã chứng minh năng lực của một **AI Engineer production-ready**.

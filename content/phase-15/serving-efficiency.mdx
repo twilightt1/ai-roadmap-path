@@ -1,0 +1,544 @@
+Một model tối ưu chỉ tạo ra giá trị khi nó được serve đúng cách. Notebook `model.generate()` có thể đủ cho demo, nhưng production inference cần API ổn định, scheduler thông minh, monitoring rõ ràng, autoscaling, model registry, rollback và benchmark dưới tải thật. Đây là nơi các serving backend như vLLM, TGI, Ollama, llama.cpp, ONNX Runtime và TensorRT-LLM trở thành lựa chọn kiến trúc.
+
+Model Serving Efficiency là bài toán cuối của Phase 15: gom quantization, KV cache, batching, SLMs và distillation vào một hệ thống inference có thể vận hành, đo lường và tối ưu chi phí.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: FastAPI + Transformers làm sập GPU launch day">
+**Bối cảnh:** Một startup deploy CodeLLM nội bộ để hỗ trợ developer. Backend FastAPI gọi trực tiếp `AutoModelForCausalLM.from_pretrained()` rồi chạy `model.generate()` cho từng request.
+
+**Sự cố:** Trong ngày rollout, 300 developer bắt đầu dùng tính năng autocomplete và code explanation. GPU utilization nhìn có vẻ cao, nhưng throughput thấp, latency p95 vượt 20 giây và server thỉnh thoảng OOM.
+
+1. Mỗi request chạy riêng, không có continuous batching.
+2. KV cache bị cấp phát thiếu hiệu quả.
+3. Model switching giữa code model và chat model gây cold start.
+4. Không có metric TTFT/TPOT, chỉ log tổng thời gian request.
+5. Không có fallback pool khi một inference worker chết.
+
+**Hậu quả:** Team có model tốt nhưng serving stack không đủ production-grade. Người dùng mất niềm tin vì trải nghiệm chậm hơn cả gọi API bên ngoài.
+</Callout>
+
+Bài học rút ra: Serving backend quyết định model có trở thành sản phẩm hay chỉ là demo. Production AI cần inference engine chuyên dụng, không phải vòng lặp generate thủ công.
+
+---
+
+## 2. Architecture Blueprint (Production Inference Stack)
+
+Một inference stack thực tế thường có nhiều lớp:
+
+```text
+[ Client / Product API ]
+          │
+          ▼
+[ API Gateway / Auth / Rate Limit ]
+          │
+          ▼
+[ Model Router ]
+  - chọn SLM / LLM lớn
+  - chọn quantized variant
+  - fallback provider
+          │
+          ▼
+[ Inference Server Pool ]
+  ├── vLLM replicas: high-throughput GPU serving
+  ├── TGI replicas: HuggingFace model serving
+  ├── Ollama/llama.cpp: local/dev/edge models
+  └── TensorRT-LLM: NVIDIA-optimized path
+          │
+          ▼
+[ Observability ]
+  - Prometheus metrics
+  - Grafana dashboards
+  - structured logs/traces
+  - cost per request
+          │
+          ▼
+[ Model Registry / Config Store ]
+  - model version
+  - quantization format
+  - max context
+  - rollout/rollback policy
+```
+
+Mục tiêu không chỉ là “trả lời được”. Mục tiêu là trả lời nhanh, ổn định, đo được, rollback được và có cost/request hợp lý.
+
+---
+
+## 3. Serving Backend Landscape
+
+| Backend | Điểm mạnh | Khi dùng | Cẩn trọng |
+|---|---|---|---|
+| vLLM | PagedAttention, continuous batching, OpenAI-compatible API | High-throughput LLM serving trên GPU | Cần cấu hình VRAM/context/concurrency kỹ |
+| TGI | Hugging Face ecosystem, production server, streaming tốt | Deploy HF models, tích hợp HF stack | Feature/support có thể khác vLLM theo model |
+| Ollama | Local/dev workflow cực dễ, quản lý model đơn giản | PoC, desktop, internal tools, local chat | Không tối ưu concurrency như vLLM |
+| llama.cpp | GGUF, CPU/Mac/edge mạnh | Local/offline/edge, quantized GGUF | Throughput GPU server không phải mục tiêu chính |
+| ONNX Runtime | Cross-platform optimized inference | Encoder/classifier, smaller models, edge/server | LLM generation stack có thể cần nhiều glue code |
+| TensorRT-LLM | Tối ưu NVIDIA sâu, throughput cao | Large-scale NVIDIA production | Build/compile/config phức tạp |
+
+Không có backend duy nhất cho mọi workload. Một công ty có thể dùng Ollama cho developer local, vLLM cho production chat, ONNX Runtime cho classifier nhỏ và TensorRT-LLM cho workload GPU quy mô lớn.
+
+---
+
+## 4. vLLM: PagedAttention và Continuous Batching
+
+vLLM phổ biến vì nó giải quyết hai bottleneck lớn của LLM serving:
+
+1. **PagedAttention:** quản lý KV cache theo block/page, giảm lãng phí VRAM và fragmentation.
+2. **Continuous batching:** thêm request mới vào batch khi các sequence cũ hoàn tất, tăng GPU utilization.
+
+```text
+Naive serving:
+  request A -> generate riêng
+  request B -> generate riêng
+  request C -> chờ hoặc chạy cạnh tranh kém hiệu quả
+
+vLLM serving:
+  scheduler gom A/B/C theo từng iteration
+  sequence nào xong thì giải phóng KV blocks
+  request mới được chèn vào batch liên tục
+```
+
+vLLM cũng cung cấp OpenAI-compatible API, giúp backend đang dùng OpenAI SDK chuyển sang self-hosted model bằng cách đổi `base_url`.
+
+```bash
+docker run --runtime nvidia --gpus all \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -p 8000:8000 \
+  --ipc=host \
+  vllm/vllm-openai:latest \
+  --model meta-llama/Meta-Llama-3-8B-Instruct \
+  --dtype auto \
+  --max-model-len 4096 \
+  --gpu-memory-utilization 0.85 \
+  --api-key local-secret
+```
+
+<Callout type="tip" title="OpenAI-compatible API là một lợi thế vận hành">
+Nếu app của bạn gọi qua OpenAI SDK hoặc LLM Gateway, bạn có thể chuyển traffic giữa OpenAI, vLLM self-hosted và fallback provider mà ít sửa code hơn. Đây là pattern đã học ở Phase 7 và Phase 13.
+</Callout>
+
+---
+
+## 5. TGI: Text Generation Inference
+
+TGI (Text Generation Inference) là serving stack từ Hugging Face, thường phù hợp khi model, tokenizer và deployment workflow đã nằm trong Hugging Face ecosystem.
+
+Điểm mạnh:
+
+- Streaming response.
+- Tensor parallel support cho một số model.
+- Tích hợp tốt với Hugging Face Hub.
+- Production server thay vì script generate thủ công.
+
+Ví dụ chạy TGI:
+
+```bash
+docker run --gpus all --shm-size 1g -p 8080:80 \
+  -v ~/.cache/huggingface:/data \
+  ghcr.io/huggingface/text-generation-inference:latest \
+  --model-id mistralai/Mistral-7B-Instruct-v0.3 \
+  --max-input-tokens 4096 \
+  --max-total-tokens 8192
+```
+
+Khi chọn TGI thay vì vLLM, hãy kiểm tra:
+
+- Model architecture có được hỗ trợ tốt không?
+- Quantization format có tương thích không?
+- Metrics/observability có phù hợp dashboard hiện tại không?
+- Throughput với concurrency production so với vLLM ra sao?
+
+---
+
+## 6. Ollama, llama.cpp và GGUF
+
+Ollama và llama.cpp rất mạnh cho local/dev/edge workflows.
+
+### Ollama
+
+Ollama đóng gói trải nghiệm local model rất tiện:
+
+```bash
+ollama pull llama3.1:8b
+ollama pull qwen2.5:3b
+ollama run qwen2.5:3b
+```
+
+Phù hợp cho:
+
+- Developer prototype.
+- Internal tool nhỏ.
+- Local chatbot.
+- Benchmark SLM nhanh.
+- Demo offline.
+
+### llama.cpp
+
+llama.cpp nổi bật với GGUF và khả năng chạy quantized model trên CPU/Mac/edge.
+
+```bash
+./llama-cli \
+  -m models/qwen2.5-3b-instruct-q4_k_m.gguf \
+  -p "Giải thích GGUF trong 3 câu" \
+  -n 256
+```
+
+Phù hợp cho:
+
+- On-device AI.
+- CPU-only fallback.
+- Privacy/offline workloads.
+- Sản phẩm cần phân phối model xuống thiết bị.
+
+<Callout type="warning" title="Local runtime không tự động là production server">
+Ollama/llama.cpp rất tuyệt cho local và edge, nhưng nếu bạn cần hàng trăm concurrent users trên GPU server, hãy benchmark nghiêm túc với vLLM/TGI/TensorRT-LLM trước khi chọn.
+</Callout>
+
+---
+
+## 7. ONNX Runtime và TensorRT-LLM
+
+### ONNX Runtime
+
+ONNX Runtime phù hợp khi bạn cần inference tối ưu cross-platform cho các model nhỏ hơn như encoder, classifier, reranker hoặc extractor.
+
+Use cases:
+
+- Intent classifier.
+- Embedding/reranking model.
+- Safety classifier.
+- Edge/server hybrid deployment.
+- CPU/GPU execution provider linh hoạt.
+
+Nó không phải luôn là lựa chọn đơn giản nhất cho LLM generation lớn, nhưng rất đáng dùng cho các component xung quanh LLM.
+
+### TensorRT-LLM
+
+TensorRT-LLM là hướng tối ưu sâu cho NVIDIA GPUs.
+
+Phù hợp khi:
+
+- Bạn có team platform đủ mạnh.
+- Workload đủ lớn để justify effort.
+- Cần vắt tối đa throughput/latency trên NVIDIA fleet.
+- Model/config tương đối ổn định để compile/optimize.
+
+Trade-off:
+
+- Build pipeline phức tạp.
+- Debug khó hơn runtime cấp cao.
+- Cần hiểu CUDA/NVIDIA stack tốt hơn.
+
+---
+
+## 8. Production Architecture Patterns
+
+### Pattern 1: Router + multi-backend pool
+
+```text
+[ Request ]
+    │
+    ▼
+[ Router ]
+    ├── intent/extraction ──> ONNX/SLM pool
+    ├── chat general ──────> vLLM 8B/14B pool
+    ├── local/private ─────> Ollama/llama.cpp edge
+    └── hard reasoning ────> frontier API fallback
+```
+
+Pattern này kết hợp bài học SLM, distillation và model routing.
+
+### Pattern 2: Separate pools by workload
+
+```text
+Interactive Chat Pool:
+  - ưu tiên TTFT thấp
+  - max batch tokens vừa phải
+  - p95/p99 latency nghiêm ngặt
+
+Batch Summarization Pool:
+  - ưu tiên throughput
+  - batch lớn hơn
+  - latency mềm hơn
+```
+
+Đừng để batch job dài làm nghẽn interactive chat.
+
+### Pattern 3: Model registry + rollout
+
+```text
+model_name: support-router
+version: v12
+base_model: qwen2.5-3b-instruct
+quantization: awq-int4
+runtime: vllm
+max_model_len: 4096
+traffic_split:
+  stable: 90%
+  candidate: 10%
+rollback_if:
+  p95_latency_ms > 1200
+  error_rate > 1%
+  quality_score_drop > 3%
+```
+
+Model serving cần rollout/rollback giống software deployment.
+
+---
+
+## 9. Observability: Metrics cần đo
+
+Serving efficiency không thể tối ưu nếu không đo.
+
+| Metric | Vì sao quan trọng |
+|---|---|
+| TTFT | Người dùng thấy app phản hồi nhanh hay chậm |
+| TPOT | Streaming mượt hay giật |
+| End-to-end latency | SLA tổng thể |
+| Queue time | Scheduler/pool có quá tải không |
+| Tokens/sec/GPU | Throughput kinh tế |
+| Requests/sec | Capacity theo API |
+| GPU memory utilization | Weights + KV cache có gần OOM không |
+| GPU compute utilization | GPU có bị underutilized không |
+| Error/retry rate | Stability và hidden cost |
+| Cost/request | Unit economics cuối cùng |
+
+Prometheus/Grafana dashboard nên tách:
+
+- per model
+- per model version
+- per tenant/plan nếu cần
+- per route/workload type
+- per GPU node
+
+<Callout type="info" title="Average latency là metric nguy hiểm">
+Average latency có thể đẹp trong khi p99 rất xấu. Enterprise user thường cảm nhận tail latency, không cảm nhận trung bình. Luôn theo dõi p50/p95/p99.
+</Callout>
+
+---
+
+## 10. Benchmark Plan
+
+Benchmark serving phải mô phỏng traffic thật.
+
+```text
+Benchmark dimensions:
+
+1. Prompt length
+   - short chat: 100–300 tokens
+   - RAG: 4K–8K tokens
+   - long-context: 16K+
+
+2. Output length
+   - classification: <50 tokens
+   - chat: 200–800 tokens
+   - summarization: 1000+ tokens
+
+3. Concurrency
+   - 1, 10, 50, 100, 500 users
+
+4. Model variants
+   - FP16 baseline
+   - INT8
+   - INT4 GPTQ/AWQ/GGUF
+   - SLM vs larger model
+
+5. Serving backend
+   - naive Transformers
+   - vLLM
+   - TGI
+   - local runtime if relevant
+```
+
+Kết quả nên xuất thành bảng:
+
+| Backend | Model | Concurrency | TTFT p95 | TPOT p95 | RPS | Tokens/sec/GPU | Peak VRAM | Error rate |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Transformers | 8B FP16 | 10 | đo | đo | đo | đo | đo | đo |
+| vLLM | 8B FP16 | 50 | đo | đo | đo | đo | đo | đo |
+| vLLM | 8B AWQ | 100 | đo | đo | đo | đo | đo | đo |
+
+Mục tiêu của benchmark không phải chọn backend “ngầu nhất”, mà là tìm cấu hình đạt SLA với cost/request thấp nhất.
+
+---
+
+## 11. Implementation Playbook (Thực thi)
+
+Ví dụ dưới đây gọi một vLLM OpenAI-compatible server và chạy nhiều request đồng thời để đo latency cơ bản. Đây là skeleton cho project **High-Throughput Inference Server**.
+
+```python
+import asyncio
+import statistics
+import time
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI(
+    api_key="local-secret",
+    base_url="http://localhost:8000/v1",
+)
+
+MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
+PROMPT = "Giải thích continuous batching trong LLM serving bằng 5 gạch đầu dòng."
+
+
+async def one_request(i: int):
+    start = time.perf_counter()
+    first_token = None
+    chunks = 0
+
+    stream = await client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": PROMPT}],
+        temperature=0.0,
+        max_tokens=256,
+        stream=True,
+    )
+
+    async for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            chunks += 1
+            if first_token is None:
+                first_token = time.perf_counter()
+
+    end = time.perf_counter()
+    return {
+        "request_id": i,
+        "ttft": (first_token - start) if first_token else None,
+        "total": end - start,
+        "chunks": chunks,
+    }
+
+
+async def run_benchmark(concurrency: int):
+    tasks = [one_request(i) for i in range(concurrency)]
+    results = await asyncio.gather(*tasks)
+
+    totals = [r["total"] for r in results]
+    ttfts = [r["ttft"] for r in results if r["ttft"] is not None]
+
+    def p95(values):
+        return statistics.quantiles(values, n=20)[18] if len(values) >= 20 else max(values)
+
+    print({
+        "concurrency": concurrency,
+        "total_p50": round(statistics.median(totals), 3),
+        "total_p95": round(p95(totals), 3),
+        "ttft_p50": round(statistics.median(ttfts), 3),
+        "ttft_p95": round(p95(ttfts), 3),
+    })
+
+
+for concurrency in [1, 10, 50, 100]:
+    asyncio.run(run_benchmark(concurrency))
+```
+
+Trong production, hãy thêm:
+
+- prompt length variations
+- output token estimates
+- error/retry tracking
+- GPU metrics scrape
+- per-model version tags
+- cost/request calculation
+
+---
+
+## 12. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: gpu-memory-utilization đặt quá cao">
+**Triệu chứng:** Server khởi động được nhưng OOM khi traffic tăng nhẹ.
+
+**Nguyên nhân:** Runtime giữ quá nhiều VRAM cho KV cache hoặc không còn headroom cho CUDA workspace, fragmentation và spikes.
+
+**Cách khắc phục:** Giảm `--gpu-memory-utilization`, đặt `max_model_len` thực tế, benchmark concurrency và theo dõi peak VRAM dưới tải.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Max context quá dài cho mọi user">
+**Triệu chứng:** GPU memory bị chiếm lớn dù phần lớn request chỉ cần context ngắn.
+
+**Nguyên nhân:** Cấu hình max context theo worst case 32K/128K cho toàn bộ pool.
+
+**Cách khắc phục:** Tách pool theo context length: chat ngắn, RAG medium, long-context premium. Dùng router và quota để tránh long-context làm nghẽn mọi traffic.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Model switching gây cold start">
+**Triệu chứng:** Request đầu tiên sau khi đổi model mất hàng chục giây hoặc timeout.
+
+**Nguyên nhân:** Server phải unload/load weights lớn, warm up kernels và cấp phát KV cache.
+
+**Cách khắc phục:** Tránh dynamic model switching trong cùng process cho hot path. Dùng pool riêng cho từng model quan trọng, warm replicas trước rollout, và route traffic bằng gateway.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Benchmark thiếu concurrency">
+**Triệu chứng:** Demo single-user rất nhanh, production multi-user rất chậm.
+
+**Nguyên nhân:** Benchmark chỉ đo một request, không đo scheduler, queue time, batching và KV cache pressure.
+
+**Cách khắc phục:** Benchmark theo concurrency ladder: 1, 10, 50, 100, 500 users. Đo p95/p99, error rate và GPU metrics.
+</Callout>
+
+<Callout type="danger" title="Pitfall 5: Không tách interactive và batch workloads">
+**Triệu chứng:** Người dùng chat realtime bị chậm mỗi khi batch summarization chạy.
+
+**Nguyên nhân:** Cả hai workload dùng chung inference pool, scheduler ưu tiên throughput nhưng không bảo vệ latency interactive.
+
+**Cách khắc phục:** Tách pool hoặc queue priority. Batch jobs dùng pool throughput-optimized; chat dùng pool latency-optimized với SLA riêng.
+</Callout>
+
+---
+
+## 13. Cost & Performance Unit Economics
+
+| Quyết định | Tác động latency | Tác động chi phí | Trade-off |
+|---|---|---|---|
+| Dùng vLLM/TGI thay naive generate | Giảm queue/TPOT dưới concurrency | Tăng tokens/sec/GPU | Cần vận hành server riêng |
+| Quantized model serving | Có thể giảm TPOT/VRAM | GPU nhỏ hơn hoặc concurrency cao hơn | Quality/compatibility risk |
+| SLM pool | Latency thấp cho task hẹp | Giảm request sang model lớn | Cần router/fallback |
+| Tách workload pools | Bảo vệ p95/p99 | Có thể tăng idle capacity | Vận hành nhiều pool hơn |
+| TensorRT-LLM | Tối ưu sâu | Tốt ở scale lớn | Engineering cost cao |
+| Autoscaling GPU | Bảo vệ burst traffic | Tránh overprovision lâu dài | Cold start và capacity availability |
+
+Công thức cuối cùng của Phase 15:
+
+```text
+Sustainable AI serving = quality đủ tốt
+                         + latency đạt SLA
+                         + throughput cao
+                         + cost/request thấp
+                         + observability rõ
+                         + rollback được
+```
+
+Nếu thiếu một trong các yếu tố này, hệ thống có thể demo tốt nhưng production sẽ đau.
+
+---
+
+## Điểm cần nhớ
+
+- Không nên serve production LLM bằng vòng lặp `model.generate()` thủ công nếu có concurrency thật.
+- vLLM và TGI giải quyết nhiều vấn đề production như continuous batching, KV cache management và streaming API.
+- Ollama/llama.cpp/GGUF rất mạnh cho local/dev/edge, nhưng cần benchmark trước khi dùng cho high-concurrency server.
+- ONNX Runtime và TensorRT-LLM phù hợp cho các mức tối ưu khác nhau: cross-platform components vs NVIDIA-scale production.
+- Serving efficiency phải đo TTFT, TPOT, queue time, p95/p99 latency, GPU utilization, throughput và cost/request.
+- Tách pool theo workload/model/context length giúp bảo vệ SLA và giảm blast radius.
+
+---
+
+## Tổng kết Phase 15 (Phase 15 Wrap-up)
+
+Bạn vừa hoàn thành chuyên đề **Quantization, Optimization & Efficiency**:
+
+1. **Model Quantization:** giảm precision từ FP16/BF16 xuống INT8/INT4, hiểu GPTQ, AWQ, GGUF và bitsandbytes để giảm VRAM/cost.
+2. **Inference Optimization:** tối ưu prefill, decode, KV cache, continuous batching, speculative decoding, Flash Attention và parallelism.
+3. **Small Language Models (SLMs):** chọn model nhỏ đúng workload để thắng về latency, privacy và unit economics.
+4. **Knowledge Distillation:** chuyển hành vi từ teacher model lớn sang student model nhỏ để giảm chi phí production.
+5. **Model Serving Efficiency:** đóng gói model tối ưu vào serving backend, benchmark, observe, autoscale và rollback như một hệ thống production.
+
+Phase 15 là cầu nối giữa “model thông minh” và “dịch vụ AI bền vững về kinh tế”. Bạn không chỉ biết model nào tốt, mà còn biết làm sao chạy nó nhanh, rẻ và đáng tin cậy.
+
+## Next phase bridge
+
+Khi mô hình đã được serve hiệu quả, câu hỏi tiếp theo không chỉ là “làm sao chạy nhanh hơn?” mà là “làm sao làm cho hành vi của model tốt hơn theo mục tiêu con người?”. Đây là lúc chúng ta bước vào học tăng cường và alignment. Chương tiếp theo: **Phase 16 - Reinforcement Learning for AI Engineers** — nơi bạn học MDPs, Q-learning, policy gradients, RLHF, PPO và DPO ở mức đủ thực dụng để hiểu cách các hệ thống AI hiện đại được tối ưu hành vi.

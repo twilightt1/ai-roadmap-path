@@ -1,19 +1,12 @@
 import Link from "next/link";
-import {
-  ArrowRight,
-  Sparkles,
-  Rocket,
-  Brain,
-  GitBranch,
-  Trophy,
-  BookOpen,
-} from "lucide-react";
+import { ArrowRight, Sparkles, Rocket, GitBranch, Brain, Trophy, BookOpen } from "lucide-react";
 import { phases, learningPaths, stats } from "@/lib/roadmap-data";
 import { accentMap } from "@/lib/theme";
 import { PhaseIcon } from "@/components/shared/phase-icon";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { HeroPreview } from "@/components/roadmap/hero-preview";
+import { LogoWall } from "@/components/shared/logo-wall";
+import { Reveal } from "@/components/shared/reveal";
 
 const statCards = [
   { label: "Phases", value: stats.phases, icon: GitBranch },
@@ -24,8 +17,8 @@ const statCards = [
 
 export default function HomePage() {
   return (
-    <div className="space-y-16 py-8 sm:py-12">
-      {/* Hero & Interactive Preview */}
+    <div className="space-y-24 py-8 sm:py-12">
+      {/* Hero */}
       <section className="relative overflow-hidden">
         <div className="grid-bg pointer-events-none absolute inset-0 opacity-20 [mask-image:radial-gradient(ellipse_at_top,black,transparent_70%)]" />
         <div className="relative mx-auto max-w-6xl px-4 sm:px-6">
@@ -41,9 +34,11 @@ export default function HomePage() {
                 <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
               </Link>
 
-              <h1 className="text-balance text-5xl font-extrabold tracking-tighter leading-none sm:text-7xl">
-                Từ <span className="text-gradient">Zero</span> đến <br />
-                Production-Grade <br />
+              <h1 className="text-5xl font-extrabold tracking-tighter leading-[1.05] sm:text-7xl">
+                Từ <span className="text-gradient">Zero</span> đến
+                <br />
+                Production-Grade
+                <br />
                 <span className="text-gradient">AI Systems</span>
               </h1>
 
@@ -68,34 +63,32 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* Right Column: Visual Mockup */}
+            {/* Right Column: Visual */}
             <div className="hidden lg:block">
               <HeroPreview />
             </div>
           </div>
-
-          {/* Stats Row */}
-          <div className="mx-auto mt-16 grid grid-cols-2 gap-px border border-white/5 bg-white/[0.01] p-1 rounded-2xl sm:grid-cols-4 backdrop-blur-sm">
-            {statCards.map((s) => (
-              <div
-                key={s.label}
-                className="bg-zinc-950/40 p-6 text-center"
-              >
-                <s.icon className="mx-auto mb-2 h-4 w-4 text-emerald-400" />
-                <div className="text-3xl font-bold tracking-tight tabular-nums text-zinc-100">{s.value}</div>
-                <div className="mt-1 text-xs font-mono uppercase tracking-wider text-zinc-500">{s.label}</div>
-              </div>
-            ))}
-          </div>
         </div>
       </section>
 
-      {/* Phase Overview Grid (Asymmetrical Layout) */}
+      {/* Stats */}
+      <Reveal className="mx-auto max-w-6xl px-4 sm:px-6">
+        <div className="grid grid-cols-2 gap-px border border-white/5 bg-white/[0.01] p-1 rounded-2xl sm:grid-cols-4 backdrop-blur-sm">
+          {statCards.map((s) => (
+            <div key={s.label} className="bg-zinc-950/40 p-6 text-center">
+              <s.icon className="mx-auto mb-2 h-4 w-4 text-emerald-400" />
+              <div className="text-3xl font-bold tracking-tight tabular-nums text-zinc-100">{s.value}</div>
+              <div className="mt-1 text-xs font-mono uppercase tracking-wider text-zinc-500">{s.label}</div>
+            </div>
+          ))}
+        </div>
+      </Reveal>
+
+      {/* Phase Grid */}
       <section className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="mb-10 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div>
-            <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-emerald-400">Roadmap Index</span>
-            <h2 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">
+            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">
               17 Phases & Capstone Projects
             </h2>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -113,52 +106,50 @@ export default function HomePage() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {phases.map((phase, i) => {
             const a = accentMap[phase.accent];
-            const isFeatured = i === 0 || i === 4 || i === 8 || i === 12; // Design rhythm
+            const isFeatured = i === 0 || i === 4 || i === 8 || i === 12;
             return (
-              <Link
-                key={phase.slug}
-                href={`/phase/${phase.slug}`}
-                className={`group relative overflow-hidden rounded-2xl border ${a.border} bg-card/30 p-6 transition-all hover:-translate-y-0.5 hover:border-primary/30 ${
-                  isFeatured ? "lg:col-span-2" : ""
-                }`}
-              >
-                <div
-                  className={`absolute -right-8 -top-8 h-24 w-24 rounded-full ${a.bgSoft} blur-3xl opacity-40 transition-opacity group-hover:opacity-60`}
-                />
-                <div className="relative flex items-start gap-4">
-                  <span
-                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${a.gradient} text-white shadow`}
-                  >
-                    <PhaseIcon name={phase.icon} className="h-5 w-5" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-[10px] font-mono uppercase tracking-wider ${a.text}`}>
-                        {phase.isCapstone ? "Capstone" : `Phase ${phase.number}`}
-                      </span>
-                      <span className="text-[10px] text-zinc-500">
-                        · {phase.topics.length} chủ đề
-                      </span>
+              <Reveal key={phase.slug} delay={i % 3 * 0.05} className={isFeatured ? "lg:col-span-2" : ""}>
+                <Link
+                  href={`/phase/${phase.slug}`}
+                  className={`group relative flex h-full overflow-hidden rounded-2xl border ${a.border} bg-card/30 p-6 transition-all hover:-translate-y-0.5 hover:border-primary/30`}
+                >
+                  <div
+                    className={`absolute -right-8 -top-8 h-24 w-24 rounded-full ${a.bgSoft} blur-3xl opacity-40 transition-opacity group-hover:opacity-60`}
+                  />
+                  <div className="relative flex items-start gap-4">
+                    <span
+                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${a.gradient} text-white shadow`}
+                    >
+                      <PhaseIcon name={phase.icon} className="h-5 w-5" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-mono uppercase tracking-wider ${a.text}`}>
+                          {phase.isCapstone ? "Capstone" : `Phase ${phase.number}`}
+                        </span>
+                        <span className="text-[10px] text-zinc-500">
+                          · {phase.topics.length} chủ đề
+                        </span>
+                      </div>
+                      <h3 className="mt-1 font-bold text-base leading-snug text-zinc-200 group-hover:text-foreground transition-colors">
+                        {phase.title}
+                      </h3>
+                      <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground leading-relaxed">
+                        {phase.summary}
+                      </p>
                     </div>
-                    <h3 className="mt-1 font-bold text-base leading-snug text-zinc-200 group-hover:text-foreground transition-colors">
-                      {phase.title}
-                    </h3>
-                    <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground leading-relaxed">
-                      {phase.summary}
-                    </p>
                   </div>
-                </div>
-              </Link>
+                </Link>
+              </Reveal>
             );
           })}
         </div>
       </section>
 
-      {/* Learning Paths (Cardless Horizontal Split Columns) */}
+      {/* Learning Paths */}
       <section className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="mb-10">
-          <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-emerald-400">Tailored Paths</span>
-          <h2 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">
+          <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">
             Chọn con đường phù hợp
           </h2>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -170,19 +161,16 @@ export default function HomePage() {
           {learningPaths.map((path, idx) => {
             const a = accentMap[path.accent];
             return (
-              <div
-                key={path.id}
-                className={`group relative pt-6 sm:pt-0 ${idx > 0 ? "lg:pl-8" : ""}`}
-              >
+              <Reveal key={path.id} delay={idx * 0.08} className={`group relative pt-6 sm:pt-0 ${idx > 0 ? "lg:pl-8" : ""}`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className={`text-xs font-mono uppercase tracking-wider ${a.text}`}>
                       Lộ trình {path.id}
                     </span>
                   </div>
-                  <Badge variant="outline" className={`${a.border} ${a.text} bg-transparent text-[10px] px-2 py-0`}>
+                  <span className={`inline-flex items-center rounded-full ${a.bgSoft} ${a.text} px-2 py-0.5 text-[10px] font-medium`}>
                     {path.timeline}
-                  </Badge>
+                  </span>
                 </div>
                 <h3 className="mt-3 text-base font-bold text-zinc-200 group-hover:text-primary transition-colors">
                   {path.name}
@@ -195,11 +183,16 @@ export default function HomePage() {
                   <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
                 </div>
                 <Link href="/paths" className="absolute inset-0" />
-              </div>
+              </Reveal>
             );
           })}
         </div>
       </section>
+
+      {/* Logo Wall */}
+      <Reveal>
+        <LogoWall />
+      </Reveal>
 
       {/* CTA Section */}
       <section className="mx-auto max-w-6xl px-4 sm:px-6">

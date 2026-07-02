@@ -1,0 +1,500 @@
+Value-based methods học “action này đáng giá bao nhiêu?”. Policy-based methods đi thẳng vào câu hỏi quan trọng hơn trong nhiều AI systems: **policy nên tăng hay giảm xác suất chọn action nào?** Với LLM, đây chính là bài toán tự nhiên: model là một policy sinh token, và training alignment là quá trình điều chỉnh phân phối xác suất đó theo preference/reward.
+
+Bài này đưa bạn từ REINFORCE cơ bản đến Actor-Critic, PPO và GRPO — các ý tưởng cốt lõi để hiểu RLHF, reasoning-model training và preference optimization hiện đại.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Policy update quá mạnh làm model collapse">
+**Bối cảnh:** Một team huấn luyện assistant nội bộ bằng reward model. Họ muốn model trả lời ngắn gọn, chính xác và không bịa. Sau vài epoch policy optimization, reward score tăng rất nhanh.
+
+**Sự cố:** Khi test thủ công, model bắt đầu trả lời bằng một template lặp lại: “Tôi không đủ thông tin để trả lời an toàn.” Reward model vẫn cho điểm cao vì câu trả lời ngắn và ít hallucination.
+
+1. Policy bị update quá xa khỏi SFT/reference model.
+2. Entropy giảm mạnh, output diversity collapse.
+3. Reward model bị exploit: model học câu trả lời an toàn quá mức để lấy điểm.
+4. Không có KL constraint hoặc early stopping đủ mạnh.
+
+**Hậu quả:** Reward tăng, nhưng model kém hữu ích hơn. Đây là lý do PPO và KL regularization trở thành kỹ thuật quan trọng trong RLHF.
+</Callout>
+
+Bài học rút ra: Khi tối ưu policy trực tiếp, update quá mạnh có thể phá vỡ hành vi ngôn ngữ đã học. Policy optimization cần ràng buộc, baseline, advantage và evaluation nghiêm túc.
+
+---
+
+## 2. Architecture Blueprint (Policy Optimization Loop)
+
+Policy-based RL tối ưu trực tiếp tham số của policy `πθ`:
+
+```text
+[ Policy πθ ]
+  quan sát state s
+  sample action a ~ πθ(a|s)
+        │
+        ▼
+[ Environment / Evaluator ]
+  trả reward r, next_state s'
+        │
+        ▼
+[ Return / Advantage Estimation ]
+  G_t hoặc A_t
+        │
+        ▼
+[ Policy Gradient Update ]
+  tăng log-prob của action tốt
+  giảm log-prob của action tệ
+        │
+        ▼
+[ New Policy πθ_new ]
+  cần giới hạn update để tránh collapse
+```
+
+Với LLM:
+
+```text
+state = prompt + generated prefix
+policy = language model distribution over next token
+action = sampled token hoặc full response
+reward = reward model / human preference / evaluator
+constraint = KL với reference/SFT model
+```
+
+---
+
+## 3. Why Policy-Based Methods?
+
+Value-based methods phù hợp khi action space nhỏ/rời rạc. Nhưng nhiều AI problems có action space rất lớn hoặc cần stochastic policy.
+
+| Tình huống | Vì sao policy-based phù hợp |
+|---|---|
+| Continuous control | Action là số thực, `argmax Q` khó |
+| LLM token generation | Vocabulary hàng chục nghìn token, sequence dài |
+| Need stochastic behavior | Agent cần exploration/diversity |
+| Direct preference optimization | Muốn tăng xác suất responses được chọn |
+| RLHF/PPO | Cần ràng buộc policy gần reference model |
+
+Trong language modeling, model đã là một policy:
+
+```text
+πθ(next_token | prompt, generated_prefix)
+```
+
+Do đó policy gradient là ngôn ngữ tự nhiên để nói về việc tăng/giảm xác suất token/response dựa trên reward.
+
+---
+
+## 4. Objective Function: Expected Return
+
+Mục tiêu của policy optimization là tối đa hóa expected return:
+
+```text
+J(θ) = E_{τ ~ πθ} [G(τ)]
+```
+
+Trong đó:
+
+| Ký hiệu | Ý nghĩa |
+|---|---|
+| `θ` | Tham số policy/model |
+| `τ` | Trajectory: chuỗi state/action/reward |
+| `πθ` | Policy sinh trajectory |
+| `G(τ)` | Tổng discounted reward của trajectory |
+
+Vấn đề: `J(θ)` phụ thuộc vào data mà chính policy sinh ra. Khi policy thay đổi, distribution của trajectories cũng thay đổi. Đây là lý do RL khó hơn supervised learning.
+
+---
+
+## 5. REINFORCE / Policy Gradient
+
+Policy gradient dùng một trực giác rất đơn giản:
+
+```text
+Nếu một action dẫn đến return cao:
+  tăng log probability của action đó.
+Nếu một action dẫn đến return thấp:
+  giảm log probability của action đó.
+```
+
+Công thức REINFORCE:
+
+```text
+∇θ J(θ) = E[ ∇θ log πθ(a_t | s_t) * G_t ]
+```
+
+Ý nghĩa:
+
+- `log πθ(a_t | s_t)`: log probability của action đã chọn.
+- `∇θ log πθ(...)`: hướng thay đổi weights để action đó có xác suất cao hơn.
+- `G_t`: return đóng vai trò “trọng số”. Return càng cao, update càng tăng xác suất action.
+
+Pseudo-code:
+
+```text
+for each episode:
+    collect states, actions, rewards using current policy
+    compute returns G_t
+    for each timestep t:
+        loss += -log_prob(action_t) * G_t
+    update policy by minimizing loss
+```
+
+Dấu trừ xuất hiện vì optimizer thường minimize loss, còn ta muốn maximize return.
+
+<Callout type="warning" title="REINFORCE high variance">
+REINFORCE dùng Monte Carlo return của cả episode nên update rất nhiễu. Hai episode gần giống nhau có thể nhận reward rất khác, khiến gradient dao động mạnh. Đây là lý do ta cần baseline, advantage và actor-critic.
+</Callout>
+
+---
+
+## 6. Baselines và Advantage
+
+Thay vì nhân gradient với return thô `G_t`, ta có thể trừ baseline `b(s_t)`:
+
+```text
+∇θ J(θ) = E[ ∇θ log πθ(a_t | s_t) * (G_t - b(s_t)) ]
+```
+
+Nếu baseline không phụ thuộc vào action, nó không làm bias gradient nhưng giảm variance.
+
+Baseline phổ biến nhất là value function:
+
+```text
+b(s_t) = V(s_t)
+```
+
+Khi đó:
+
+```text
+A(s_t, a_t) = G_t - V(s_t)
+```
+
+Advantage trả lời câu hỏi:
+
+```text
+Action này tốt hơn kỳ vọng bình thường của state này bao nhiêu?
+```
+
+- `A > 0`: tăng xác suất action.
+- `A < 0`: giảm xác suất action.
+- `A ≈ 0`: không update mạnh.
+
+Đây là ý tưởng trung tâm của PPO và RLHF.
+
+---
+
+## 7. Actor-Critic
+
+Actor-Critic kết hợp hai thành phần:
+
+| Thành phần | Vai trò |
+|---|---|
+| Actor | Policy `πθ(a|s)`, chọn action |
+| Critic | Value function `Vφ(s)`, đánh giá state |
+
+```text
+[ Actor πθ ] -- chọn action --> [ Environment ] -- reward/state --> [ Critic Vφ ]
+      ▲                                                              │
+      └──────────── policy update bằng advantage estimate ───────────┘
+```
+
+Critic giúp ước lượng baseline/advantage thay vì chờ full episode return.
+
+Một TD advantage đơn giản:
+
+```text
+A_t ≈ r_t + γ V(s_{t+1}) - V(s_t)
+```
+
+Actor loss:
+
+```text
+L_actor = -log πθ(a_t|s_t) * A_t
+```
+
+Critic loss:
+
+```text
+L_critic = (target_value - Vφ(s_t))²
+```
+
+### GAE intuition
+
+Generalized Advantage Estimation (GAE) cân bằng bias/variance bằng cách trộn nhiều TD errors qua thời gian.
+
+```text
+GAE λ thấp  -> bias cao hơn, variance thấp hơn
+GAE λ cao   -> bias thấp hơn, variance cao hơn
+```
+
+Bạn không cần tự derive GAE để dùng PPO, nhưng cần hiểu nó là cách làm advantage estimate ổn định hơn.
+
+---
+
+## 8. PPO: Proximal Policy Optimization
+
+PPO giải quyết một vấn đề lớn: policy update quá mạnh có thể phá vỡ model.
+
+Thay vì cho policy mới thay đổi tùy ý, PPO giới hạn update bằng probability ratio:
+
+```text
+r_t(θ) = πθ(a_t|s_t) / πθ_old(a_t|s_t)
+```
+
+Nếu `r_t = 1.0`, policy mới gán xác suất action giống policy cũ. Nếu `r_t = 1.5`, policy mới tăng xác suất action lên 50%.
+
+PPO clipped objective:
+
+```text
+L_clip(θ) = E[ min(
+    r_t(θ) * A_t,
+    clip(r_t(θ), 1-ε, 1+ε) * A_t
+) ]
+```
+
+Intuition:
+
+- Nếu advantage dương, PPO muốn tăng xác suất action, nhưng không quá `1+ε`.
+- Nếu advantage âm, PPO muốn giảm xác suất action, nhưng không quá `1-ε`.
+- Clipping làm update “gần” policy cũ hơn.
+
+PPO thường có thêm:
+
+| Thành phần | Vai trò |
+|---|---|
+| Policy loss | Tăng xác suất action có advantage dương |
+| Value loss | Train critic dự đoán return |
+| Entropy bonus | Tránh policy collapse quá sớm |
+| KL monitoring | Dừng nếu policy drift quá xa |
+
+<Callout type="info" title="PPO phổ biến vì thực dụng">
+PPO không phải thuật toán tối ưu nhất trên mọi benchmark, nhưng nó ổn định, dễ triển khai hơn nhiều thuật toán policy optimization khác và từng là lựa chọn mặc định cho nhiều pipeline RLHF.
+</Callout>
+
+---
+
+## 9. PPO Hyperparameters
+
+PPO rất nhạy với hyperparameters.
+
+| Hyperparameter | Ý nghĩa | Nếu sai thì sao? |
+|---|---|---|
+| Learning rate | Mức update weights | Quá cao gây KL explosion/collapse |
+| Rollout length | Số steps collect trước update | Quá ngắn noisy, quá dài tốn memory/time |
+| Batch size | Mini-batch train | Quá nhỏ gradient noisy |
+| PPO epochs | Số lần reuse rollout data | Quá nhiều overfit rollout cũ |
+| Clip range `ε` | Giới hạn update ratio | Quá rộng update mạnh, quá hẹp học chậm |
+| Entropy coefficient | Khuyến khích exploration | Quá thấp collapse, quá cao random |
+| Value loss coefficient | Trọng số critic loss | Critic yếu làm advantage kém |
+| Target KL | Ngưỡng policy drift | Không monitor dễ phá policy |
+
+Với LLM RLHF, thêm các tham số:
+
+- KL coefficient với reference model.
+- Reward normalization.
+- Generation temperature.
+- Max response length.
+- Batch prompts vs batch tokens.
+
+---
+
+## 10. Implementation Playbook: PPO trên CartPole
+
+Dùng `stable-baselines3` để train PPO trên `CartPole-v1`, sau đó so sánh với Q-learning/DQN từ bài trước.
+
+```python
+import gymnasium as gym
+from stable_baselines3 import PPO
+from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.monitor import Monitor
+
+train_env = Monitor(gym.make("CartPole-v1"))
+
+def make_model(seed: int = 42):
+    return PPO(
+        policy="MlpPolicy",
+        env=train_env,
+        learning_rate=3e-4,
+        n_steps=2048,
+        batch_size=64,
+        n_epochs=10,
+        gamma=0.99,
+        gae_lambda=0.95,
+        clip_range=0.2,
+        ent_coef=0.0,
+        seed=seed,
+        verbose=1,
+    )
+
+model = make_model(seed=42)
+model.learn(total_timesteps=100_000)
+
+# Evaluation tách riêng, deterministic policy
+mean_reward, std_reward = evaluate_policy(
+    model,
+    gym.make("CartPole-v1"),
+    n_eval_episodes=20,
+    deterministic=True,
+)
+
+print(f"Mean eval reward: {mean_reward:.1f} +/- {std_reward:.1f}")
+model.save("ppo_cartpole")
+```
+
+Bảng so sánh project:
+
+| Method | Observation handling | Convergence speed | Stability across seeds | Notes |
+|---|---|---:|---:|---|
+| Q-learning discretized | Manual bins | Chậm/vừa | Nhạy bins | Tốt để học nền tảng |
+| DQN | Neural Q | Vừa | Nhạy replay/LR | Value-based scalable hơn |
+| PPO | Policy gradient + critic | Nhanh với CartPole | Thường ổn | Cầu nối tới RLHF |
+
+---
+
+## 11. GRPO: Group Relative Policy Optimization
+
+GRPO (Group Relative Policy Optimization) được nhắc nhiều trong bối cảnh reasoning models như DeepSeek R1. Ý tưởng thực dụng: thay vì train một critic/value model riêng như PPO, ta sample nhiều outputs cho cùng một prompt/problem, chấm reward từng output, rồi chuẩn hóa reward tương đối trong group.
+
+```text
+Prompt x
+  ├── response y1 -> reward r1
+  ├── response y2 -> reward r2
+  ├── response y3 -> reward r3
+  └── response y4 -> reward r4
+
+Group-relative advantage:
+  A_i = (r_i - mean(group_rewards)) / std(group_rewards)
+```
+
+So sánh PPO và GRPO ở mức khái niệm:
+
+| Khía cạnh | PPO | GRPO |
+|---|---|---|
+| Critic/value model | Thường cần | Có thể giảm/loại bỏ |
+| Advantage | Dựa vào value estimates | Dựa vào reward tương đối trong group |
+| Phù hợp | General RL/RLHF | Reasoning tasks với nhiều sampled solutions |
+| Trade-off | Critic training phức tạp | Cần sample nhiều outputs per prompt |
+
+<Callout type="tip" title="GRPO không phải phép màu">
+GRPO vẫn phụ thuộc mạnh vào reward/evaluator. Nếu reward model chấm sai hoặc chỉ thưởng verbosity, group-relative advantage vẫn tối ưu sai mục tiêu.
+</Callout>
+
+---
+
+## 12. From PPO to RLHF
+
+Trong LLM RLHF:
+
+| PPO concept | LLM equivalent |
+|---|---|
+| State | Prompt + generated prefix |
+| Action | Token hoặc response segment |
+| Policy | Current language model |
+| Old policy | Policy trước update |
+| Critic/value | Value head dự đoán reward tương lai |
+| Reward | Reward model score + penalties |
+| KL constraint | Giữ policy gần reference/SFT model |
+
+PPO cho LLM thường thêm KL penalty:
+
+```text
+final_reward = reward_model_score - β * KL(policy || reference_model)
+```
+
+Lý do: nếu chỉ tối đa reward model, policy có thể drift khỏi language distribution tốt, exploit reward model hoặc collapse output.
+
+---
+
+## 13. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="danger" title="Pitfall 1: Reward hacking">
+**Triệu chứng:** Reward tăng nhanh nhưng output kém hữu ích, lặp template hoặc né trách nhiệm.
+
+**Nguyên nhân:** Policy tìm shortcut để lấy điểm reward thay vì giải quyết task thật.
+
+**Cách khắc phục:** Dùng held-out eval, human review, adversarial prompts, KL constraint, reward model audit và monitor nhiều metrics ngoài reward.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Entropy collapse">
+**Triệu chứng:** Policy mất diversity, luôn chọn một vài action/phrasing giống nhau.
+
+**Nguyên nhân:** Update quá mạnh, entropy coefficient quá thấp, reward quá hẹp.
+
+**Cách khắc phục:** Tăng entropy bonus, giảm learning rate, giảm PPO epochs, theo dõi entropy và response diversity.
+</Callout>
+
+<Callout type="warning" title="Pitfall 3: KL explosion">
+**Triệu chứng:** Policy drift xa khỏi model ban đầu, output style thay đổi mạnh hoặc language quality giảm.
+
+**Nguyên nhân:** Learning rate/clip range quá cao, thiếu KL penalty/early stopping.
+
+**Cách khắc phục:** Theo dõi KL mỗi batch, dùng target KL, tăng KL coefficient hoặc rollback checkpoint.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Bad reward scale">
+**Triệu chứng:** Advantage quá lớn/nhỏ, training dao động hoặc không học.
+
+**Nguyên nhân:** Reward chưa normalize, reward components khác thang đo, outlier reward.
+
+**Cách khắc phục:** Normalize reward/advantage, clip outliers, log từng reward component riêng.
+</Callout>
+
+---
+
+## 14. Cost & Training Unit Economics
+
+| Chi phí | PPO/Policy RL | LLM RLHF |
+|---|---|---|
+| Rollout generation | Chạy env nhiều steps | Sinh responses từ model hiện tại |
+| Reward computation | Env reward | Reward model/LLM judge/human feedback |
+| Critic/value training | Train value network | Train value head hoặc reward/value models |
+| KL/eval | Ít trong toy tasks | Bắt buộc để tránh drift/collapse |
+| Multiple samples | Tăng stability | Tốn tokens/GPU nhiều hơn |
+
+Policy optimization có thể rất đắt vì mỗi update cần data mới từ policy hiện tại. Với LLMs, data mới nghĩa là sinh nhiều tokens, chấm reward, tính logprobs và backprop qua model lớn. Đây là lý do DPO và offline preference optimization hấp dẫn với nhiều team.
+
+---
+
+## Practice exercises
+
+1. Giải thích REINFORCE bằng một câu: action reward cao thì xác suất thay đổi thế nào?
+2. Vì sao baseline không làm bias policy gradient?
+3. Actor và critic khác nhau ra sao?
+4. PPO clipping bảo vệ policy khỏi điều gì?
+5. Tại sao KL constraint quan trọng trong RLHF?
+6. So sánh PPO và GRPO ở mức trực giác.
+
+---
+
+## Knowledge check
+
+1. Objective `J(θ)` trong policy gradient là gì?
+2. Advantage dương làm policy update theo hướng nào?
+3. `r_t(θ)` trong PPO là gì?
+4. Entropy bonus dùng để làm gì?
+5. GRPO dùng group rewards để ước lượng gì?
+
+---
+
+## Answer key
+
+1. Expected return của trajectories sinh bởi policy `πθ`.
+2. Tăng log probability/xác suất của action đó.
+3. Tỷ lệ xác suất action dưới policy mới so với policy cũ: `πθ(a|s) / πθ_old(a|s)`.
+4. Khuyến khích policy giữ diversity/exploration, tránh collapse quá sớm.
+5. Advantage tương đối của mỗi response so với nhóm responses cùng prompt.
+
+---
+
+## Điểm cần nhớ
+
+- Policy-based methods tối ưu trực tiếp xác suất chọn action.
+- REINFORCE đơn giản nhưng high variance; baseline và advantage giúp ổn định.
+- Actor-Critic dùng actor để chọn action và critic để ước lượng value/advantage.
+- PPO giới hạn update bằng clipped objective và thường theo dõi KL để tránh policy collapse.
+- GRPO dùng reward tương đối trong group, hữu ích trong một số setup reasoning-model training.
+- Các lỗi như reward hacking, entropy collapse và KL explosion là trung tâm của RLHF production.
+
+## Next chapter bridge
+
+Bạn đã hiểu cách tối ưu policy bằng advantage, PPO và KL constraints. Bây giờ ta áp dụng trực tiếp vào LLMs: reward model được train từ preference data ra sao, PPO RLHF hoạt động thế nào, vì sao DPO đơn giản hơn, và PRM/ORM liên quan gì tới reasoning models. Chương tiếp theo: **RL for LLMs (RLHF & Beyond)**.

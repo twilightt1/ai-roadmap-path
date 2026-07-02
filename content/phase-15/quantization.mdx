@@ -1,0 +1,385 @@
+Sau Phase 14, bạn đã biết cách đo chi phí, latency và usage ở tầng dữ liệu. Nhưng đo lường chỉ là nửa đầu của bài toán. Khi bảng `model_calls` cho thấy một feature đang tiêu tốn quá nhiều GPU hoặc API tokens, câu hỏi tiếp theo là: làm sao chạy cùng năng lực mô hình với ít VRAM hơn, ít băng thông bộ nhớ hơn và chi phí thấp hơn?
+
+Quantization (lượng hóa) là một trong những kỹ thuật thực dụng nhất để biến một mô hình lớn từ “chạy được trong notebook” thành “serve được trong production”. Nó không làm mô hình thông minh hơn, nhưng có thể làm mô hình nhẹ hơn, rẻ hơn và khả thi hơn trên phần cứng thật.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Model tốt nhưng không thể deploy vì VRAM">
+**Bối cảnh:** Một team AI fine-tune mô hình 13B cho tác vụ phân tích hợp đồng. Trên notebook nghiên cứu, model FP16 chạy tốt trên một GPU A100 80GB. Product team muốn deploy model đó cho 20 khách hàng enterprise với SLA phản hồi dưới 2 giây.
+
+**Sự cố:** Khi chuyển sang serving, mỗi request RAG có context dài 6,000 tokens. Model weights đã chiếm khoảng 26GB VRAM ở FP16, nhưng KV cache và batch concurrency làm VRAM tăng nhanh.
+
+1. Batch size chỉ cần tăng lên 8 là GPU bắt đầu OOM.
+2. Thuê thêm A100 làm cost/request vượt xa giá bán subscription.
+3. Giảm context làm chất lượng câu trả lời pháp lý tụt rõ rệt.
+
+**Hậu quả:** Model có chất lượng tốt trên benchmark, nhưng không có unit economics để chạy production. Team buộc phải chọn giữa giảm chất lượng, tăng giá, hoặc tối ưu mô hình.
+</Callout>
+
+Bài học rút ra: Chất lượng model chỉ có giá trị khi bạn có thể serve nó trong ràng buộc phần cứng, latency và chi phí. Quantization là một đòn bẩy lớn trong tam giác đó.
+
+---
+
+## 2. Architecture Blueprint (Vị trí của Quantization trong Inference Stack)
+
+Quantization nằm giữa model training/fine-tuning và inference serving:
+
+```text
+[ Base / Fine-tuned Model FP16/BF16 ]
+              │
+              ▼
+[ Quantization Step ]
+  - PTQ: quantize sau training
+  - QAT: training có mô phỏng quantization
+  - GPTQ / AWQ / bitsandbytes / GGUF
+              │
+              ▼
+[ Quantized Artifact ]
+  - INT8 / INT4 weights
+  - scales / zero-points
+  - metadata về format/kernel
+              │
+              ▼
+[ Inference Runtime ]
+  - Transformers + bitsandbytes
+  - vLLM / TGI với quantized weights
+  - llama.cpp với GGUF
+              │
+              ▼
+[ Production Metrics ]
+  - VRAM per replica
+  - TTFT / TPOT
+  - throughput
+  - quality regression
+  - cost per request
+```
+
+Quantization không phải bước “nén file” đơn giản. Nó là một thay đổi ở cách số học của model được biểu diễn và thực thi.
+
+---
+
+## 3. Precision Ladder: FP32 → FP16 → BF16 → INT8 → INT4
+
+Các neural networks ban đầu thường được train ở FP32 hoặc mixed precision. Nhưng inference không nhất thiết cần độ chính xác số học cao như training.
+
+| Precision | Kích thước mỗi tham số | Vai trò thường gặp | Trade-off |
+|---|---:|---|---|
+| FP32 | 4 bytes | Training truyền thống, baseline chính xác cao | Rất tốn memory, hiếm khi cần cho LLM inference |
+| FP16 | 2 bytes | Inference/fine-tuning phổ biến trên GPU | Nhanh, nhẹ hơn FP32, nhưng có thể underflow |
+| BF16 | 2 bytes | Training/inference ổn định hơn FP16 trên phần cứng mới | Cần GPU hỗ trợ tốt |
+| INT8 | 1 byte | Quantized inference an toàn hơn INT4 | Giảm memory nhiều, quality drop thường nhỏ |
+| INT4 | 0.5 byte | LLM local/edge/high-density serving | Tiết kiệm mạnh nhưng dễ giảm chất lượng hơn |
+
+Một 7B model ở FP16 cần khoảng 14GB chỉ cho weights. Ở INT4, phần weights có thể giảm xuống quanh 3.5GB cộng overhead scales/metadata. Điều này mở ra khả năng chạy model trên GPU nhỏ hơn hoặc thậm chí CPU/local runtime.
+
+<Callout type="info" title="Memory không chỉ là weights">
+VRAM production còn bị chiếm bởi KV cache, activations tạm, CUDA workspace, batch buffers và fragmentation. Quantization giảm footprint weights, nhưng không tự động xóa mọi nguyên nhân OOM.
+</Callout>
+
+---
+
+## 4. Quantization thật sự thay đổi gì?
+
+Ý tưởng cốt lõi: thay vì lưu một weight như số thực FP16/FP32, ta ánh xạ nó về một số nguyên nhỏ hơn kèm thông tin scale.
+
+```text
+Floating-point weight:
+  w = 0.1372
+
+Quantized representation:
+  q = round(w / scale) + zero_point
+
+Dequantization khi tính toán:
+  w_approx = (q - zero_point) * scale
+```
+
+Các runtime hiện đại không nhất thiết “dequantize toàn bộ model” về FP16 rồi mới chạy. Chúng dùng kernel tối ưu để đọc weights dạng INT8/INT4 và tính toán hiệu quả hơn.
+
+Điều quantization tác động mạnh nhất:
+
+- **Model size:** weights nhỏ hơn.
+- **Memory bandwidth:** đọc ít byte hơn từ VRAM.
+- **GPU residency:** cùng một GPU chứa được model lớn hơn hoặc nhiều replica hơn.
+- **Latency:** có thể giảm nếu bottleneck là memory bandwidth.
+- **Quality:** có thể giảm nếu lượng hóa quá mạnh hoặc calibration kém.
+
+<Callout type="tip" title="LLM inference thường memory-bandwidth bound">
+Trong quá trình decode từng token, GPU liên tục đọc weights khổng lồ để sinh token tiếp theo. Vì vậy giảm kích thước weights có thể cải thiện tốc độ, không chỉ giảm VRAM.
+</Callout>
+
+---
+
+## 5. PTQ vs QAT
+
+Có hai hướng lớn:
+
+| Kỹ thuật | Cách làm | Khi dùng |
+|---|---|---|
+| PTQ (Post-Training Quantization) | Train/fine-tune xong rồi quantize model | Phổ biến nhất cho AI engineers cần deploy nhanh |
+| QAT (Quantization-Aware Training) | Trong training, mô phỏng lỗi lượng hóa để model thích nghi | Khi cần chất lượng cao sau quantization và có quyền train lại |
+
+PTQ phù hợp khi:
+
+- Bạn có model đã train/fine-tune.
+- Bạn cần thử nhiều mức INT8/INT4 nhanh.
+- Bạn có bộ evaluation prompts để đo quality regression.
+- Bạn không muốn chi phí train lại toàn bộ model.
+
+QAT phù hợp khi:
+
+- Model nhỏ/medium, task quan trọng, chất lượng sau quantization cần tối đa.
+- Bạn kiểm soát training pipeline.
+- Có dữ liệu và budget để train thêm.
+
+Trong workflow production LLM hiện nay, nhiều team bắt đầu bằng PTQ, sau đó chỉ cân nhắc QAT nếu quality drop không thể chấp nhận.
+
+---
+
+## 6. LLM Quantization Methods
+
+### bitsandbytes
+
+`bitsandbytes` thường được dùng trong Hugging Face ecosystem để load model 8-bit hoặc 4-bit.
+
+- 8-bit: thường an toàn hơn, quality drop nhỏ.
+- 4-bit NF4: phổ biến trong QLoRA/fine-tuning tiết kiệm VRAM.
+- Dễ tích hợp với `transformers`.
+
+### GPTQ
+
+GPTQ là phương pháp post-training quantization phổ biến cho LLM, tối ưu weights theo hướng giảm lỗi tái tạo output layer-by-layer.
+
+- Thường dùng cho INT4 inference.
+- Có nhiều model đã quantize sẵn trên Hugging Face.
+- Cần runtime/kernel hỗ trợ đúng format.
+
+### AWQ
+
+AWQ (Activation-aware Weight Quantization) cố gắng bảo vệ các weights quan trọng dựa trên activation statistics.
+
+- Thường cho chất lượng tốt ở INT4.
+- Phù hợp với serving runtime hỗ trợ AWQ.
+- Cần kiểm tra compatibility với vLLM/TGI/runtime bạn dùng.
+
+### GGUF
+
+GGUF là format phổ biến trong `llama.cpp` ecosystem.
+
+- Rất mạnh cho local/CPU/Mac/edge inference.
+- Có nhiều mức lượng hóa như Q4, Q5, Q8.
+- Dễ dùng qua llama.cpp, Ollama và nhiều local tools.
+
+| Method/Format | Điểm mạnh | Cẩn trọng |
+|---|---|---|
+| bitsandbytes | Dễ thử nghiệm trong Python/HF | Không phải serving runtime nào cũng tối ưu như nhau |
+| GPTQ | INT4 phổ biến, nhiều artifact sẵn | Format/kernel compatibility quan trọng |
+| AWQ | Chất lượng INT4 tốt trong nhiều case | Cần calibration/eval nghiêm túc |
+| GGUF | Local/CPU/edge rất tiện | Không phải format chính cho mọi GPU serving stack |
+
+---
+
+## 7. Quality Evaluation After Quantization
+
+Quantization phải được đánh giá như một thay đổi production, không phải chỉ nhìn model load được hay không.
+
+```text
+Evaluation matrix:
+
+[ Baseline FP16/BF16 ]
+       │
+       ├── Quality: task accuracy, win-rate, hallucination rate
+       ├── Latency: TTFT, TPOT, end-to-end latency
+       ├── Memory: peak VRAM, model residency
+       └── Cost: GPU-hour / requests per second
+
+[ INT8 candidate ]
+       └── So sánh với baseline
+
+[ INT4 candidate ]
+       └── So sánh với baseline và INT8
+```
+
+Metrics nên có:
+
+- Exact match/F1 cho extraction/classification.
+- Human hoặc LLM-as-judge win-rate cho generation.
+- Regression prompts cho domain nhạy cảm.
+- Hallucination/error rate trên eval set thật.
+- TTFT/TPOT với context length production.
+- Peak VRAM và concurrency tối đa trước khi OOM.
+
+<Callout type="warning" title="Đừng chỉ benchmark prompt ngắn">
+Một model INT4 có thể trông rất tốt với prompt 50 tokens, nhưng giảm chất lượng hoặc latency khác hẳn với RAG context 6,000 tokens. Benchmark phải phản ánh workload production.
+</Callout>
+
+---
+
+## 8. Implementation Playbook (Thực thi)
+
+Ví dụ dưới đây load model 4-bit bằng `transformers` + `bitsandbytes` và đo latency cơ bản. Đây là skeleton cho project **Model Quantization Comparison**.
+
+```python
+import time
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+MODEL_ID = "microsoft/Phi-3-mini-4k-instruct"
+
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_use_double_quant=True,
+)
+
+tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_ID,
+    quantization_config=bnb_config,
+    device_map="auto",
+)
+
+prompt = "Giải thích vì sao quantization giúp giảm chi phí inference LLM trong 5 gạch đầu dòng."
+inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+
+if torch.cuda.is_available():
+    torch.cuda.reset_peak_memory_stats()
+
+start = time.perf_counter()
+with torch.inference_mode():
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=256,
+        do_sample=False,
+    )
+end = time.perf_counter()
+
+text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+new_tokens = outputs.shape[1] - inputs["input_ids"].shape[1]
+latency = end - start
+
+print(text)
+print(f"Generated tokens: {new_tokens}")
+print(f"Latency: {latency:.2f}s")
+print(f"Tokens/sec: {new_tokens / latency:.2f}")
+
+if torch.cuda.is_available():
+    peak_gb = torch.cuda.max_memory_allocated() / 1024**3
+    print(f"Peak allocated VRAM: {peak_gb:.2f} GB")
+```
+
+Một bảng benchmark tối thiểu nên có:
+
+| Variant | Peak VRAM | TTFT | Tokens/sec | Quality score | Ghi chú |
+|---|---:|---:|---:|---:|---|
+| FP16 | baseline | baseline | baseline | 100% | Chất lượng gốc |
+| INT8 | giảm | đo lại | đo lại | gần baseline | Candidate an toàn |
+| INT4 NF4/GPTQ/AWQ | giảm mạnh | đo lại | đo lại | cần kiểm tra | Candidate tiết kiệm nhất |
+
+---
+
+## 9. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Quality drop âm thầm">
+**Triệu chứng:** Benchmark latency tốt, nhưng user bắt đầu phàn nàn câu trả lời thiếu chi tiết hoặc sai ở edge cases.
+
+**Nguyên nhân:** Eval set quá dễ hoặc chỉ đo similarity bề mặt. Quantization làm giảm khả năng xử lý reasoning dài, số liệu, code hoặc domain terms.
+
+**Cách khắc phục:** Dùng regression set từ production incidents, đo theo từng feature/domain, và so sánh với baseline FP16 bằng cả metric tự động lẫn review thủ công.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: INT4 không luôn nhanh hơn INT8">
+**Triệu chứng:** Model INT4 dùng ít VRAM hơn nhưng tốc độ sinh token không tăng, thậm chí chậm hơn.
+
+**Nguyên nhân:** Runtime phải dequantize hoặc dùng kernel chưa tối ưu cho GPU hiện tại. Bottleneck chuyển từ memory bandwidth sang compute/kernel overhead.
+
+**Cách khắc phục:** Benchmark trên đúng phần cứng production. Đừng chọn precision chỉ vì file nhỏ hơn; chọn theo latency, throughput và quality thực đo.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Format quantized không tương thích serving runtime">
+**Triệu chứng:** Model chạy trong notebook nhưng không load được trong vLLM/TGI/llama.cpp production.
+
+**Nguyên nhân:** Artifact GPTQ/AWQ/GGUF/bitsandbytes không tương thích với runtime, kernel hoặc model architecture bạn chọn.
+
+**Cách khắc phục:** Chọn runtime trước khi chốt format quantization. Kiểm tra support matrix, version CUDA, GPU architecture và model family.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Quên tính KV cache">
+**Triệu chứng:** Weights INT4 rất nhỏ nhưng server vẫn OOM khi context dài hoặc concurrency cao.
+
+**Nguyên nhân:** KV cache thường vẫn dùng FP16/BF16 hoặc format riêng, tăng theo batch size và context length.
+
+**Cách khắc phục:** Tính budget VRAM gồm weights + KV cache + overhead. Nếu context dài là bottleneck, cần tối ưu KV cache, max context, batching hoặc dùng inference engine như vLLM.
+</Callout>
+
+---
+
+## 10. Cost & Performance Unit Economics
+
+| Đòn bẩy | Tác động chi phí | Trade-off |
+|---|---|---|
+| FP16 → INT8 | Giảm VRAM weights khoảng 2 lần | Quality thường ổn, nhưng cần kernel/runtime hỗ trợ |
+| FP16 → INT4 | Giảm VRAM weights khoảng 4 lần | Quality regression và compatibility rủi ro hơn |
+| GGUF local | Chạy được trên CPU/Mac/edge | Throughput concurrency hạn chế hơn GPU serving |
+| AWQ/GPTQ serving | High-density GPU inference | Cần chọn đúng runtime và benchmark kỹ |
+| Quantized SLM | Rẻ và nhanh cho task hẹp | Không thay thế frontier model cho reasoning khó |
+
+Công thức tư duy:
+
+```text
+Cost per request ≈ GPU cost per hour / successful requests per hour
+
+Quantization cải thiện mẫu số bằng cách:
+- tăng số replica/model vừa trong một GPU,
+- tăng concurrency trước khi OOM,
+- giảm memory bandwidth per generated token,
+- cho phép dùng GPU rẻ hơn.
+```
+
+Nhưng nếu quality giảm làm user retry nhiều hơn hoặc fallback sang model lớn thường xuyên hơn, chi phí thực tế có thể tăng. Luôn đo quality và cost cùng nhau.
+
+---
+
+## Practice exercises
+
+1. Cho một model 7B ở FP16, ước tính VRAM cần thiết nếu quantize sang INT4 (chỉ tính weights). Giải thích vì sao con số thực tế cao hơn.
+2. Viết pseudo-code Python (bitsandbytes) để load một LLM 7B ở INT4 với `load_in_4bit=True`, và ghi nhận `model.get_memory_footprint()` trước/sau.
+3. Thiết kế một benchmark plan so sánh INT8 vs INT4 cho một chatbot RAG, liệt kê 5 metric cần đo (quality + latency + cost) và workload mẫu.
+4. Giải thích vì sao GPTQ/AWQ có thể giữ quality tốt hơn PTQ naive khi quantize INT4. Nêu 2 điểm khác biệt kỹ thuật.
+5. Một team quantize model sang INT4 và thấy perplexity tăng 40%. Đề xuất 3 bước troubleshooting để chẩn đoán và có thể phục hồi quality.
+
+---
+
+## Knowledge check
+
+1. Vì sao giảm precision từ FP16 sang INT4 không chỉ giảm VRAM mà còn có thể tăng throughput?
+2. Khác biệt chính giữa PTQ và QAT là gì? Khi nào QAT được ưu tiên?
+3. GGUF và GPTQ phục vụ hai use case khác nhau thế nào? Vì sao GGUF phổ biến với llama.cpp?
+4. Vì sao cần benchmark trên workload thật (không chỉ perplexity) trước khi quyết định quantize?
+5. `load_in_4bit` của bitsandbytes khác gì với `load_in_8bit` về chất lượng và VRAM?
+
+---
+
+## Answer key
+
+1. INT4 giảm VRAM ~4 lần so với FP16, cho phép batch lớn hơn, tăng concurrency và giảm memory bandwidth per token; tốc độ có thể tăng do ít memory pressure.
+2. PTQ áp dụng quantization sau khi train xong, QAT mô phỏng quantization trong training để model thích nghi; QAT ưu tiên khi cần giữ quality cao ở precision thấp.
+3. GPTQ tối ưu cho GPU inference (NVIDIA), GGUF tối ưu cho CPU/Mac/edge với llama.cpp; GGUF hỗ trợ k-quant linh hoạt và dễ chạy local.
+4. Perplexity chỉ đo quality tổng, không phản ánh latency tail, throughput thực tế, memory spike và cost/request trên traffic thật.
+5. `load_in_4bit` tiết kiệm VRAM hơn (~4x) nhưng có thể giảm quality hơn; `load_in_8bit` cân bằng hơn, chất lượng gần FP16, phù hợp khi VRAM đủ.
+
+---
+
+## Điểm cần nhớ
+
+- Quantization giảm precision của weights để giảm memory footprint và có thể cải thiện latency/throughput.
+- FP16/BF16 phổ biến cho inference chất lượng cao; INT8/INT4 là đòn bẩy tiết kiệm mạnh cho deployment.
+- PTQ là workflow thực dụng nhất khi bạn đã có model; QAT phù hợp khi cần tối ưu chất lượng sau lượng hóa.
+- GPTQ, AWQ, GGUF và bitsandbytes không chỉ là “format”; chúng gắn với runtime/kernel cụ thể.
+- Benchmark quantization phải đo cả quality, VRAM, TTFT, TPOT, throughput và cost/request trên workload thật.
+
+## Next chapter bridge
+
+Quantization giúp model nhẹ hơn, nhưng inference production còn nhiều bottleneck khác: prefill prompt dài, decode từng token, KV cache phình to và nhiều request cạnh tranh GPU cùng lúc. Chương tiếp theo: **Inference Optimization** — nơi chúng ta học cách tối ưu vòng đời sinh token bằng KV Cache, continuous batching, speculative decoding, Flash Attention và parallelism.

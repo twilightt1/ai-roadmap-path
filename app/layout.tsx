@@ -21,7 +21,7 @@ const siteUrl = "https://ai-roadmap.local";
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: "AI Engineer Roadmap 2026 — Zero to Production AI",
+    default: "AI Engineer Roadmap 2026 · Zero to Production AI",
     template: "%s · AI Engineer Roadmap",
   },
   description:
@@ -40,7 +40,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "vi_VN",
-    title: "AI Engineer Roadmap 2026 — Zero to Production AI",
+    title: "AI Engineer Roadmap 2026 · Zero to Production AI",
     description:
       "17 phases + 51 projects · từ Python cơ bản đến kiến trúc hệ thống Multi-LLM production-grade.",
     siteName: "AI Engineer Roadmap",

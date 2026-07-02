@@ -1,0 +1,521 @@
+Một AI platform production hiếm khi chỉ dùng một database. PostgreSQL là source of truth rất mạnh, nhưng nếu bạn bắt nó xử lý mọi thứ — session nóng, cache, rate limit, streaming events, queue tạm, raw AI artifacts — bạn sẽ biến database quan hệ thành nút cổ chai đắt đỏ.
+
+NoSQL trong AI không phải là “thay SQL”. Nó là nghệ thuật đặt đúng loại dữ liệu vào đúng hệ thống: Redis cho hot path, MongoDB cho document linh hoạt, DynamoDB cho event workload serverless, và PostgreSQL cho consistency/audit/billing.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: PostgreSQL bị dùng như cache, queue và rate limiter">
+**Bối cảnh:** Một startup xây AI copilot. Ban đầu, mọi thứ lưu trong PostgreSQL để đơn giản: conversation history, session state, exact prompt cache, rate limit counters, streaming chunks và realtime event logs.
+
+**Sự cố:** Khi traffic tăng, bảng `ai_events` nhận hàng nghìn insert mỗi giây, bảng `rate_limits` bị update liên tục, còn exact cache query mỗi request. PostgreSQL vừa phục vụ API đọc conversation, vừa bị write-heavy workload đập liên tục.
+
+1. Lock contention xuất hiện ở các dòng rate limit counters.
+2. Cache table phình to vì thiếu TTL cleanup hiệu quả.
+3. Streaming chunks tạo quá nhiều row nhỏ.
+4. Dashboard billing chậm vì primary DB bị hot path chiếm tài nguyên.
+
+**Hậu quả:** P99 latency của chat tăng mạnh, dù model provider vẫn ổn. Root cause không nằm ở LLM mà nằm ở việc dùng sai database cho sai workload.
+</Callout>
+
+Bài học rút ra: PostgreSQL nên là nguồn sự thật, không phải thùng chứa mọi trạng thái tạm thời của hệ thống AI.
+
+---
+
+## 2. Architecture Blueprint (Polyglot Persistence for AI)
+
+Kiến trúc dữ liệu thực tế thường là polyglot persistence:
+
+```text
+                       [ AI Application / Gateway ]
+                                  │
+          ┌───────────────────────┼───────────────────────┐
+          ▼                       ▼                       ▼
+[ PostgreSQL + pgvector ]     [ Redis ]              [ Event Store ]
+ Source of truth              Hot path                DynamoDB/Kafka/etc.
+ - users/tenants              - sessions              - click/events
+ - conversations              - exact cache           - audit stream
+ - prompt versions            - rate limit            - async ingestion
+ - model_calls/billing        - pub/sub               - high write throughput
+ - documents/chunks           - short-lived memory
+
+          ▼
+[ MongoDB / Document DB ]
+ Flexible AI artifacts
+ - variable JSON outputs
+ - generated reports
+ - tool traces with changing shape
+```
+
+Vai trò cốt lõi:
+
+| System | Nên dùng cho | Không nên dùng cho |
+|---|---|---|
+| PostgreSQL | Transaction, billing, audit, relational queries | High-frequency counters/cache tạm thời |
+| pgvector | Embeddings gần metadata quan hệ | Vector workload quá lớn cần scale độc lập |
+| Redis | Cache, session, rate limit, pub/sub, TTL state | Source of truth dài hạn |
+| MongoDB | Document linh hoạt, AI artifacts thay đổi shape | Billing consistency phức tạp |
+| DynamoDB | Serverless high-throughput key-value/event workloads | Ad-hoc relational analytics |
+
+---
+
+## 3. Redis for AI Systems
+
+Redis là lựa chọn mạnh cho dữ liệu nóng, ngắn hạn và truy cập cực nhanh.
+
+```text
+Redis key patterns:
+
+session:{tenant_id}:{user_id}              -> UI/session state
+prompt_cache:{tenant_id}:{hash}            -> exact LLM response cache
+semantic_cache:{tenant_id}:{intent_hash}   -> pointer tới response/chunk ids
+rate:{tenant_id}:{user_id}:{minute}        -> token bucket counter
+task:{task_id}:status                      -> async job status
+stream:{conversation_id}                   -> pub/sub streaming channel
+```
+
+Các use case phổ biến:
+
+- **Session state:** trạng thái UI, active conversation, temporary auth context.
+- **Exact prompt cache:** hash prompt + model config để trả lại response cũ.
+- **Semantic cache pointers:** lưu ID của response/chunk tương tự, còn source of truth vẫn trong DB chính.
+- **Rate limiting:** token bucket theo user/tenant/API key.
+- **Pub/Sub streaming:** phát token chunks hoặc job progress cho websocket/SSE layer.
+- **Short-lived memory:** context tạm trong vài phút/giờ.
+
+Ví dụ token bucket rate limit:
+
+```python
+import time
+
+MAX_TOKENS_PER_MINUTE = 100_000
+WINDOW_SECONDS = 60
+
+async def allow_request(redis, tenant_id: str, user_id: str, estimated_tokens: int) -> bool:
+    minute = int(time.time() // WINDOW_SECONDS)
+    key = f"rate:{tenant_id}:{user_id}:{minute}"
+
+    used = await redis.incrby(key, estimated_tokens)
+    if used == estimated_tokens:
+        await redis.expire(key, WINDOW_SECONDS * 2)
+
+    return used <= MAX_TOKENS_PER_MINUTE
+```
+
+<Callout type="warning" title="Redis key phải có tenant boundary">
+Một cache key như `prompt_cache:{hash}` có thể làm lộ response giữa hai khách hàng có prompt giống nhau. Với multi-tenant AI, key nên bao gồm `tenant_id`, policy visibility và đôi khi cả user/role.
+</Callout>
+
+---
+
+## 4. Cache Strategy for AI Workloads
+
+AI caching khác web caching truyền thống vì response có thể phụ thuộc vào prompt, model, temperature, retrieved context, user memory và quyền truy cập.
+
+```text
+Cache key = hash(
+  tenant_id,
+  user_or_role_scope,
+  feature,
+  model,
+  model_config,
+  prompt_version_id,
+  rendered_prompt,
+  retrieved_context_ids,
+  memory_version
+)
+```
+
+Exact cache flow:
+
+```python
+import hashlib
+import json
+
+
+def build_cache_key(payload: dict) -> str:
+    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"prompt_cache:{payload['tenant_id']}:{digest}"
+```
+
+TTL strategy:
+
+| Dữ liệu | TTL gợi ý | Lý do |
+|---|---:|---|
+| Exact prompt cache cho docs ít đổi | Vài giờ đến vài ngày | Tiết kiệm token cost |
+| Session state | Vài phút đến vài giờ | Tránh stale UI state |
+| Rate limit counters | Theo window | Tự dọn dẹp |
+| Job status tạm | Vài giờ | User có thể refresh trang |
+| Security-sensitive response | Rất ngắn hoặc không cache | Giảm rủi ro leak |
+
+---
+
+## 5. MongoDB for Flexible AI Outputs
+
+Một số output AI có cấu trúc thay đổi liên tục: report sinh tự động, extraction result theo từng domain, tool traces từ agent, hoặc artifact JSON người dùng chỉnh sửa.
+
+MongoDB/document DB phù hợp khi:
+
+- Mỗi record là một document tự nhiên.
+- Shape thay đổi nhanh theo feature.
+- Bạn cần lưu nested JSON lớn và đọc theo document ID.
+- Query chủ yếu theo key/index đơn giản, không cần join quan hệ phức tạp.
+
+Ví dụ document AI artifact:
+
+```json
+{
+  "tenant_id": "tenant_123",
+  "user_id": "user_456",
+  "artifact_type": "contract_analysis",
+  "prompt_version": 17,
+  "model": "gpt-4o",
+  "status": "completed",
+  "sections": [
+    { "title": "Risk Summary", "risk_score": 0.82 },
+    { "title": "Payment Terms", "findings": ["late fee missing"] }
+  ],
+  "tool_traces": [
+    { "name": "clause_lookup", "latency_ms": 120 }
+  ],
+  "created_at": "2026-06-30T12:00:00Z"
+}
+```
+
+<Callout type="tip" title="Document DB không miễn phí khỏi schema design">
+MongoDB linh hoạt không có nghĩa là không cần schema. Bạn vẫn cần version field, indexes, retention policy và migration strategy cho documents cũ.
+</Callout>
+
+---
+
+## 6. DynamoDB for Serverless AI Events
+
+DynamoDB phù hợp cho high-throughput, serverless, key-value/event workloads với access pattern rõ ràng.
+
+Ví dụ event table cho AI gateway:
+
+```text
+Table: ai_gateway_events
+
+PK = tenant_id#YYYYMMDD
+SK = timestamp#request_id
+
+Attributes:
+  user_id
+  feature
+  provider
+  model
+  status
+  estimated_tokens
+  cost_usd
+  ttl
+```
+
+Access patterns nên được thiết kế trước:
+
+- Lấy events của tenant trong một ngày.
+- Ghi nhiều events với latency ổn định.
+- TTL tự xóa raw events sau retention window.
+- Stream events sang analytics/warehouse.
+
+Rủi ro phổ biến:
+
+| Rủi ro | Nguyên nhân | Cách giảm |
+|---|---|---|
+| Hot partition | Tất cả traffic ghi vào cùng một partition key | Thêm shard suffix hoặc bucket theo tenant/time |
+| Query thiếu access pattern | Muốn ad-hoc analytics như SQL | Đẩy sang warehouse/Postgres rollup |
+| Cost tăng bất ngờ | Write/read capacity tăng theo traffic | Theo dõi WCU/RCU, TTL, compression |
+| Duplicate events | Retry producer không idempotent | Dùng request id/idempotency key |
+
+---
+
+## 7. SQL vs NoSQL Decision Matrix
+
+Khi chọn database, hãy bắt đầu từ câu hỏi về consistency, query pattern và lifecycle dữ liệu.
+
+| Câu hỏi | Nghiêng về SQL | Nghiêng về NoSQL |
+|---|---|---|
+| Cần transaction nhiều bảng? | PostgreSQL | Không phù hợp hoặc cần design phức tạp |
+| Cần ad-hoc analytics? | SQL rất mạnh | Thường phải ETL sang hệ khác |
+| Dữ liệu có TTL ngắn? | Có thể nhưng không tối ưu | Redis/DynamoDB rất hợp |
+| Workload là counter/cache hot path? | Dễ gây lock/load | Redis hợp hơn |
+| Shape dữ liệu thay đổi liên tục? | JSONB hoặc migration | MongoDB/document DB hợp hơn |
+| Cần source of truth/audit? | PostgreSQL | Chỉ khi thiết kế consistency rất kỹ |
+| Traffic serverless bursty? | Cần scale DB/pool | DynamoDB hợp nếu access pattern rõ |
+
+Không có database “tốt nhất”. Chỉ có database phù hợp với workload, đội vận hành và ràng buộc sản phẩm.
+
+---
+
+## 8. Hybrid Patterns for AI Products
+
+### Pattern 1: PostgreSQL + Redis cho conversation
+
+```text
+Write path:
+User message -> PostgreSQL messages -> enqueue AI task -> Redis task status
+
+Read path:
+UI loads conversation -> PostgreSQL
+UI receives streaming tokens -> Redis pub/sub hoặc websocket broker
+Final assistant message -> PostgreSQL
+```
+
+Redis tăng tốc hot state, nhưng transcript cuối cùng vẫn lưu trong PostgreSQL.
+
+### Pattern 2: PostgreSQL + pgvector cho semantic search
+
+```text
+Documents/chunks/metadata/embeddings cùng nằm trong PostgreSQL.
+Query = tenant filter + metadata filter + vector ORDER BY.
+```
+
+Pattern này giảm nguy cơ metadata drift và rất phù hợp cho team nhỏ đến trung bình.
+
+### Pattern 3: DynamoDB/Kafka events + PostgreSQL rollups
+
+```text
+AI Gateway emits raw events -> DynamoDB/Kafka
+Batch/stream job aggregates -> PostgreSQL usage_daily
+Dashboard reads usage_daily -> nhanh và rẻ
+```
+
+Raw event workload write-heavy không làm nghẽn primary transactional database.
+
+### Pattern 4: MongoDB artifacts + PostgreSQL index
+
+```text
+MongoDB stores large flexible artifact JSON.
+PostgreSQL stores artifact_id, tenant_id, user_id, status, cost, created_at.
+```
+
+PostgreSQL vẫn là nơi query quyền truy cập và dashboard; MongoDB giữ payload linh hoạt.
+
+---
+
+## 9. Implementation Playbook (Thực thi)
+
+Một flow AI request dùng polyglot persistence có thể như sau:
+
+```python
+async def handle_ai_request(request, user, postgres, redis, llm):
+    # 1. Rate limit bằng Redis hot counter
+    allowed = await allow_request(
+        redis,
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        estimated_tokens=request.estimated_tokens,
+    )
+    if not allowed:
+        return {"status": 429, "message": "Rate limit exceeded"}
+
+    # 2. Exact cache key có tenant boundary
+    cache_payload = {
+        "tenant_id": user.tenant_id,
+        "user_scope": user.role,
+        "feature": request.feature,
+        "model": request.model,
+        "prompt_version_id": request.prompt_version_id,
+        "rendered_prompt": request.rendered_prompt,
+        "retrieved_context_ids": request.context_ids,
+    }
+    cache_key = build_cache_key(cache_payload)
+
+    if cached := await redis.get(cache_key):
+        return {"status": 200, "cached": True, "output": cached}
+
+    # 3. Gọi LLM và lưu source of truth trong PostgreSQL
+    result = await llm.generate(request.rendered_prompt)
+
+    async with postgres.transaction():
+        model_call_id = await postgres.insert_model_call(
+            tenant_id=user.tenant_id,
+            user_id=user.id,
+            provider=result.provider,
+            model=result.model,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cost_usd=result.cost_usd,
+            status=result.status,
+        )
+        await postgres.insert_message(
+            tenant_id=user.tenant_id,
+            conversation_id=request.conversation_id,
+            role="assistant",
+            content=result.text,
+            metadata={"model_call_id": model_call_id},
+        )
+
+    # 4. Cache chỉ là bản sao ngắn hạn
+    await redis.set(cache_key, result.text, ex=3600)
+
+    return {"status": 200, "cached": False, "output": result.text}
+```
+
+Điểm mấu chốt: Redis giúp nhanh và rẻ, nhưng PostgreSQL vẫn lưu record kiểm toán cuối cùng.
+
+---
+
+## Project Guide: Complete Database Architecture for AI Platform (Phase 14 Hard)
+
+Mục tiêu project: thiết kế và triển khai database layer hoàn chỉnh cho một AI platform multi-tenant có chat, RAG, usage billing, prompt versioning, A/B tests và Redis hot path.
+
+### Requirements
+
+- PostgreSQL schema cho `tenants`, `users`, `conversations`, `messages`, `prompt_templates`, `prompt_versions`, `prompt_runs`, `model_calls`, `documents`, `chunks`, `embeddings`, `ab_tests`, `feedback`.
+- pgvector semantic search có metadata filtering theo tenant/visibility.
+- Redis cho session state, exact prompt cache, rate limiting và async task status.
+- Alembic migrations có thứ tự rõ ràng, có rollback note và không lock bảng lớn quá lâu.
+- Indexes theo access patterns: conversation loading, usage dashboard, billing by user/feature, retrieval, error debugging.
+- Retention policy cho raw traces, cache, events và generated artifacts.
+
+### Suggested architecture
+
+```text
+[ API Gateway ]
+      │
+      ├── Redis
+      │     - rate limits
+      │     - prompt cache
+      │     - task status
+      │
+      ├── PostgreSQL
+      │     - tenants/users/conversations/messages
+      │     - prompt versions/model_calls/billing
+      │     - documents/chunks/feedback/A-B tests
+      │
+      └── pgvector extension
+            - embeddings
+            - tenant-safe semantic search
+
+[ Alembic ] -> versioned migrations -> staging validation -> production rollout
+```
+
+### Deliverables
+
+- ERD hoặc diagram thể hiện quan hệ giữa các bảng chính.
+- Migration scripts tạo schema, constraints và indexes.
+- Seed script tạo 2 tenants, vài users, conversations, prompt versions, documents, embeddings giả lập và model calls.
+- API hoặc CLI demo 4 flows: create conversation, run prompt, semantic search, usage report.
+- Runbook mô tả backup/restore, migration rollout, cache invalidation và incident response cho data leak.
+
+### Acceptance criteria
+
+- Mọi bảng product-critical đều có `tenant_id` hoặc quan hệ rõ tới tenant.
+- Có test chứng minh tenant isolation cho conversation, RAG search và usage dashboard.
+- Có ít nhất một migration backfill chạy theo batch có checkpoint.
+- Có query `EXPLAIN` cho 3 access patterns chính và giải thích index được dùng.
+- Có tài liệu phân biệt source of truth trong PostgreSQL với dữ liệu tạm trong Redis.
+
+Stretch goal: thêm Row-Level Security cho các bảng enterprise-critical và benchmark trước/sau khi bật RLS.
+
+---
+
+## 10. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Cache invalidation làm AI trả lời dữ liệu cũ">
+**Triệu chứng:** User đã cập nhật document nhưng chatbot vẫn trả lời theo nội dung cũ.
+
+**Nguyên nhân:** Cache key không bao gồm document version/checksum hoặc không xóa cache khi ingestion hoàn tất.
+
+**Cách khắc phục:** Đưa `document_version`, `retrieved_context_ids` hoặc `knowledge_base_version` vào cache key. Với dữ liệu nhạy cảm, dùng TTL ngắn và explicit invalidation.
+</Callout>
+
+<Callout type="danger" title="Pitfall 2: Shared cache key gây data leak">
+**Triệu chứng:** Hai tenant hỏi cùng một câu và nhận response có thông tin của nhau.
+
+**Nguyên nhân:** Cache key chỉ hash prompt text, không bao gồm tenant, role, memory/context scope.
+
+**Cách khắc phục:** Cache key phải encode security boundary. Nếu không chứng minh được response an toàn để share, mặc định cache theo tenant/user scope.
+</Callout>
+
+<Callout type="warning" title="Pitfall 3: Eventual consistency làm dashboard lệch tạm thời">
+**Triệu chứng:** User vừa dùng AI xong nhưng dashboard usage chưa cập nhật.
+
+**Nguyên nhân:** Raw events đi qua queue/DynamoDB rồi mới aggregate sang PostgreSQL, có độ trễ.
+
+**Cách khắc phục:** Ghi rõ freshness SLA trên dashboard. Với billing nghiêm ngặt, dùng bảng transactional `model_calls` làm source of truth và event pipeline làm analytics phụ trợ.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Hot keys và hot partitions">
+**Triệu chứng:** Một tenant lớn làm Redis/DynamoDB chậm cho toàn hệ thống.
+
+**Nguyên nhân:** Tất cả counter/event ghi vào cùng một key hoặc partition.
+
+**Cách khắc phục:** Shard hot keys theo time bucket/random suffix, tách quota enterprise, và theo dõi per-tenant load để giới hạn blast radius.
+</Callout>
+
+---
+
+## 11. Cost & Performance Unit Economics
+
+| Thành phần | Đơn vị chi phí | Tối ưu |
+|---|---|---|
+| Redis | Memory GB, throughput, managed HA | TTL nghiêm ngặt, không lưu payload lớn lâu dài |
+| MongoDB | Storage, index size, cluster tier | Index đúng field, archive artifacts cũ |
+| DynamoDB | Read/write capacity, storage, streams | Thiết kế partition key tốt, TTL raw events |
+| PostgreSQL | CPU/IO/storage/connection | Không để cache/counter hot path đập vào primary |
+| Multi-database architecture | Operational overhead | Chỉ thêm database khi workload thật sự cần |
+
+Polyglot persistence có thể cứu latency và scale, nhưng cũng tăng độ phức tạp vận hành. Mỗi database mới cần backup, monitoring, access control, migration story và incident playbook riêng.
+
+---
+
+## Practice exercises
+
+1. Thiết kế Redis key cho exact prompt cache có đủ tenant, role scope, model config, prompt version và context version.
+2. Viết pseudo-code token bucket rate limit theo tenant/user với TTL tự dọn dẹp.
+3. Chọn SQL, Redis, MongoDB hoặc DynamoDB cho 6 workload: billing, session, cache, generated report, event stream, conversation history.
+4. Vẽ flow PostgreSQL + Redis cho chat streaming: user message, task status, token chunks và final assistant message.
+5. Viết checklist vận hành khi thêm một database mới vào AI platform.
+
+---
+
+## Knowledge check
+
+1. Vì sao NoSQL không nên được hiểu là thay thế hoàn toàn cho SQL trong AI platform?
+2. Redis phù hợp với loại dữ liệu nào và không phù hợp với loại dữ liệu nào?
+3. Cache key thiếu tenant boundary có thể gây sự cố gì?
+4. DynamoDB yêu cầu bạn thiết kế gì trước khi tạo bảng production?
+5. Khi nào nên chấp nhận polyglot persistence dù vận hành phức tạp hơn?
+
+---
+
+## Answer key
+
+1. SQL vẫn rất mạnh cho transaction, billing, audit và relational analytics; NoSQL bổ sung cho hot path, TTL state, document linh hoạt hoặc event throughput cao.
+2. Redis hợp cache/session/rate limit/pub-sub ngắn hạn; không nên là source of truth dài hạn cho billing, audit hoặc transcript cuối cùng.
+3. Hai tenant/user có prompt giống nhau có thể nhận response của nhau, gây data leak nghiêm trọng.
+4. Cần thiết kế access patterns, partition/sort key, TTL, throughput/capacity và idempotency cho writes.
+5. Khi workload thật sự khác biệt: counter/cache quá nóng cho PostgreSQL, event writes quá lớn, payload document quá linh hoạt hoặc latency yêu cầu hot storage riêng.
+
+---
+
+## Điểm cần nhớ
+
+- NoSQL không thay thế SQL; nó bổ sung cho các workload mà SQL không tối ưu như cache, hot counters, TTL state và high-throughput events.
+- PostgreSQL nên giữ source of truth: users, conversations, prompt versions, billing, audit và relational analytics.
+- Redis rất mạnh cho AI hot path, nhưng cache key phải encode tenant/user/security boundary.
+- MongoDB phù hợp cho AI artifacts linh hoạt, nhưng vẫn cần schema version và indexes.
+- DynamoDB phù hợp cho serverless event workloads nếu access pattern được thiết kế trước.
+- Mỗi database mới là một chi phí vận hành mới; đừng polyglot chỉ vì thời thượng.
+
+---
+
+## Tổng kết Phase 14 (Phase 14 Wrap-up)
+
+Bạn vừa hoàn thành chuyên đề **SQL & Databases for AI Engineers**:
+
+1. **Core SQL:** đọc, filter, join và aggregate usage logs để xây dashboard cost/reliability.
+2. **Advanced SQL:** dùng CTEs, window functions và recursive queries để phân tích trend, anomaly và conversation tree.
+3. **AI-Specific SQL Patterns:** tạo feature bằng SQL, sampling eval data, dùng JSONB và pgvector cho semantic search.
+4. **Database Design for AI Applications:** thiết kế schema cho conversations, prompt versions, token usage, RAG, memory và audit.
+5. **NoSQL for AI:** biết khi nào dùng Redis, MongoDB, DynamoDB và cách kết hợp chúng với PostgreSQL an toàn.
+
+Nếu Phase 13 giúp bạn thiết kế hệ thống AI quy mô lớn, Phase 14 giúp bạn xây tầng dữ liệu đủ chắc để hệ thống đó có thể được quan sát, kiểm toán, tối ưu và mở rộng.
+
+## Next phase bridge
+
+Khi database và architecture đã vững, câu hỏi tiếp theo là làm sao chạy model nhanh hơn, rẻ hơn và hiệu quả hơn. Chúng ta sẽ đi từ tối ưu dữ liệu sang tối ưu suy luận: giảm precision, tăng throughput, tận dụng KV cache, batch request và chọn model nhỏ thông minh hơn. Chương tiếp theo: **Phase 15 - Quantization, Optimization & Efficiency** — nơi bạn học cách biến một mô hình đắt đỏ thành một dịch vụ AI có unit economics bền vững.

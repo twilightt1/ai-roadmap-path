@@ -1,136 +1,313 @@
-Mặc dù bạn có thể tự thiết lập hạ tầng Kubernetes cục bộ (On-premise) hoặc tự thuê máy chủ (Bare-metal) tại một trung tâm dữ liệu, việc đó đi kèm với một cái giá khổng lồ về mặt nhân sự vận hành (SRE/DevOps). Các nhà cung cấp đám mây (Cloud Providers) như AWS, Google Cloud (GCP) và Microsoft Azure cung cấp một hệ sinh thái các dịch vụ được quản lý toàn diện (Fully-managed services), giúp các nhóm AI tập trung vào việc tinh chỉnh mô hình và viết logic nghiệp vụ thay vì phải thức đêm cắm lại cáp mạng hay thay ổ cứng bị hỏng.
+Bạn đã có Docker image và hiểu Kubernetes. Nhưng production AI thường không chạy trong phòng máy tự dựng. Team cần GPU quota, object storage, managed databases, IAM, secret manager, logging, autoscaling và region compliance. Đây là lúc cloud trở thành một phần của kiến trúc AI.
+
+**Cloud Deployment** không chỉ là chọn AWS/GCP/Azure theo sở thích. Với AI systems, cloud decision ảnh hưởng trực tiếp đến latency, data residency, GPU availability, egress cost, security boundary và khả năng scale khi sản phẩm tăng trưởng.
 
 ---
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: Dữ liệu bay ra ngoài lãnh thổ (Data Sovereignty Breach)">
-**Bối cảnh:** Một công ty Fintech tại châu Âu phát triển một tính năng Chăm sóc khách hàng tự động bằng RAG. Nhóm phát triển (Dev) nhanh chóng thiết lập một đường ống MLOps trên Google Cloud. Họ dùng GCS để lưu trữ dữ liệu, Vertex AI để huấn luyện, và triển khai API trên Cloud Run.
+<Callout type="danger" title="Báo cáo sự cố: Dữ liệu khách hàng EU bị gửi sang region Mỹ">
+**Bối cảnh:** Một công ty fintech châu Âu deploy chatbot RAG trên cloud. Backend chạy ở `us-central1`, object storage chứa hợp đồng khách hàng cũng ở Mỹ vì engineer chọn default region. LLM provider endpoint cũng route qua US.
 
-**Sự cố:** Sáu tháng sau, đội ngũ kiểm toán độc lập (Compliance/Legal) phát hiện rằng toàn bộ dữ liệu hợp đồng khách hàng (chứa thông tin cá nhân PII) đã được lưu ở Region `us-central1` (Mỹ), và dịch vụ LLM API đang gửi request tới máy chủ đặt tại châu Mỹ. Điều này vi phạm nghiêm trọng **Đạo luật bảo vệ dữ liệu chung (GDPR)** của Liên minh châu Âu (Dữ liệu của công dân EU không được phép rời khỏi lãnh thổ).
+**Sự cố:** Audit GDPR phát hiện dữ liệu PII của công dân EU rời khỏi khu vực cho phép. Không chỉ file storage sai region, logs và traces cũng chứa prompt có PII và được lưu ở vendor SaaS ngoài EU.
 
-**Hậu quả:** Công ty bị phạt hàng triệu Euro, buộc phải đập bỏ toàn bộ hệ thống cũ, di dời (migrate) hạ tầng sang khu vực `europe-west3` và mất hơn 1 tháng để thiết lập lại.
+1. Không có region policy trước khi deploy.
+2. Không phân loại dữ liệu PII vs non-PII.
+3. Không kiểm tra data residency của LLM provider/observability vendor.
+4. Infrastructure được tạo thủ công, không có review compliance.
+
+**Hậu quả:** Hệ thống bị dừng, phải migrate sang EU region, xóa logs nhạy cảm và trải qua security review kéo dài.
 </Callout>
 
-Bài học rút ra: Lựa chọn nền tảng đám mây và khu vực (Region) không chỉ là quyết định kỹ thuật hay chi phí, mà còn là quyết định pháp lý sống còn của doanh nghiệp.
+Bài học rút ra: cloud deployment là quyết định kỹ thuật và pháp lý. AI request thường chứa dữ liệu nhạy cảm; region, logging và provider routing phải được thiết kế ngay từ đầu.
 
 ---
 
-## 2. Architecture Blueprint (Kiến trúc giải pháp)
+## 2. Architecture Blueprint (Cloud AI Landing Zone)
 
-Trong môi trường Cloud MLOps, một vòng đời phát triển AI hoàn chỉnh (End-to-End AI Lifecycle) được ánh xạ (map) trực tiếp vào các dịch vụ đám mây chuyên biệt. Dưới đây là kiến trúc tham chiếu tiêu chuẩn trên AWS (Tương tự với GCP và Azure):
+Một cloud deployment production cần landing zone có mạng, IAM, storage, compute và observability.
 
 ```text
-[ Data / Feature Engineering ]        [ Model Training / Tuning ]         [ Serving / Deployment ]
-             │                                     │                                  │
-             ▼                                     ▼                                  ▼
-      [ Amazon S3 ] ── (Data) ──> [ Amazon SageMaker Training Job ] ── (Model) ──> [ Amazon ECR ]
-    (Data Lake / DVC)                (Cấp phát cụm GPU tạm thời)              (Docker Image Registry)
-                                                   │                                  │
-                                                   ▼ (Metrics/Logs)                   ▼
-                                           [ Amazon CloudWatch ]        [ Amazon Elastic Kubernetes Service (EKS) ]
-                                          (Giám sát tài nguyên)           hoặc [ SageMaker Real-time Endpoint ]
+[ Users ]
+   │
+   ▼
+[ CDN / Load Balancer / API Gateway ]
+   - TLS
+   - WAF
+   - auth
+   - rate limit
+   │
+   ▼
+[ App runtime ]
+   - Cloud Run / ECS / EKS / GKE / AKS
+   - FastAPI gateway
+   - workers
+   │
+   ├────────► [ Managed AI / LLM APIs ]
+   │           OpenAI / Azure OpenAI / Bedrock / Vertex AI
+   │
+   ├────────► [ GPU inference endpoints ]
+   │           SageMaker / Vertex Endpoint / self-host vLLM
+   │
+   ├────────► [ Data layer ]
+   │           S3/GCS/Blob, Postgres, Redis, Vector DB
+   │
+   └────────► [ Observability + Security ]
+               logs, traces, metrics, secrets, IAM, audit
 ```
 
-### Tại sao không dùng máy ảo thông thường (EC2/GCE)?
-Nếu bạn chỉ thuê một máy ảo EC2 có GPU và dùng lệnh `docker run`, bạn sẽ phải tự mình cấu hình cân bằng tải (Load Balancer), tự theo dõi sức khỏe ứng dụng (Health check), và bạn sẽ bị tính phí GPU 24/7 ngay cả khi không có ai truy cập.
-
-Các nền tảng ML Platform (SageMaker, Vertex AI, Azure ML) cho phép bạn khởi chạy các **Công việc vô thường (Ephemeral Jobs)**. Khi script huấn luyện chạy xong, máy chủ GPU lập tức tự hủy (Scale to Zero), tiết kiệm được 80% chi phí tài nguyên.
+Mục tiêu: không deploy app đơn lẻ; deploy một hệ sinh thái có boundary rõ ràng, có least privilege và có cost visibility.
 
 ---
 
-## 3. Tooling Landscape (Ma trận nền tảng Đám mây)
+## 3. AWS vs GCP vs Azure for AI Workloads
 
-| Nhà cung cấp | Nền tảng AI cốt lõi | Ưu điểm (SRE Use-case) | Nhược điểm (Cons) |
-|---|---|---|---|
-| **AWS (Amazon Web Services)** | Amazon SageMaker | Lâu đời, thị phần lớn nhất, hệ sinh thái cực kỳ đồ sộ. Tính ổn định (reliability) rất cao. Hỗ trợ đa dạng các loại chip (Nvidia, AWS Trainium/Inferentia). | Bảng điều khiển (UI) quá phức tạp và chắp vá. Đường cong học tập dốc (Steep learning curve). |
-| **GCP (Google Cloud Platform)** | Vertex AI | Trải nghiệm phát triển mượt mà nhất. Tích hợp sâu với TensorFlow, JAX và hệ sinh thái Kubernetes (GKE) hoàn hảo. | Hay thay đổi cấu trúc API (Deprecation). Hệ sinh thái mở rộng không đa dạng bằng AWS. |
-| **Azure (Microsoft Cloud)** | Azure Machine Learning | Tích hợp độc quyền với **Azure OpenAI Service**. Đảm bảo bảo mật cấp độ doanh nghiệp (Enterprise compliance). | Quá phụ thuộc vào hệ sinh thái Windows/Microsoft. Chi phí thường đắt đỏ hơn. |
-
----
-
-## 4. Implementation Playbook (Thực thi)
-
-Hãy cùng thiết lập một quy trình triển khai mô hình (Model Deployment) lên môi trường Serverless của GCP (Cloud Run) để đạt được kiến trúc "Scale to Zero" (Chi phí bằng 0 khi không có người dùng).
-
-### Bước 1: Chuẩn bị Container và Đẩy lên Cloud Registry
-Môi trường Cloud cần truy cập vào Docker Image của bạn thông qua một kho lưu trữ tập trung.
-
-```bash
-# 1. Định danh (Tag) Image nội bộ với tên miền của Google Container Registry (GCR/Artifact Registry)
-# Giả định PROJECT_ID của bạn trên Google Cloud là 'my-ai-startup'
-docker tag my-llm-api:latest gcr.io/my-ai-startup/my-llm-api:v1.0
-
-# 2. Đăng nhập vào GCP bằng công cụ dòng lệnh (Yêu cầu cài đặt gcloud CLI)
-gcloud auth configure-docker
-
-# 3. Đẩy (Push) Image lên đám mây
-docker push gcr.io/my-ai-startup/my-llm-api:v1.0
-```
-
-### Bước 2: Triển khai lên Cloud Run bằng CLI
-Thay vì phải cài đặt cụm Kubernetes phức tạp, Cloud Run nhận trực tiếp Docker Image và tự động cung cấp HTTPS Endpoint với khả năng Scale tự động.
-
-```bash
-gcloud run deploy llm-inference-service \
-  --image gcr.io/my-ai-startup/my-llm-api:v1.0 \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --memory 8Gi \
-  --cpu 4 \
-  --min-instances 0 \
-  --max-instances 10
-```
-
-<Callout type="warning" title="Khởi động lạnh (Cold Start)">
-Tham số `--min-instances 0` mang lại khả năng "Scale to Zero" - tiết kiệm chi phí tối đa. Nhưng khi request đầu tiên tới, Cloud Run phải kéo Docker Image (có thể nặng vài GB) và khởi động model vào RAM, mất từ 10 - 30 giây (Được gọi là Cold Start). Để giải quyết vấn đề độ trễ này, các hệ thống Production thường thiết lập `--min-instances 1` (giữ tối thiểu 1 máy chủ luôn chạy 24/7).
-</Callout>
-
----
-
-## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
-
-Dưới đây là các tình huống dở khóc dở cười mà kỹ sư Cloud MLOps thường gặp:
-
-<Callout type="danger" title="Pitfall 1: Bẫy cấu hình Spot/Preemptible Instances">
-**Triệu chứng:** Pipeline Training thường xuyên bị sập ngẫu nhiên khi chạy khoảng 80% tiến trình mà không có bất kỳ log lỗi nào.
-**Nguyên nhân:** Kỹ sư thiết lập cấu hình chạy máy chủ giá rẻ (Spot Instances trên AWS hoặc Preemptible VMs trên GCP để giảm 70% giá). Nhà cung cấp cloud sẽ thu hồi máy ảo một cách đột ngột để bán cho người trả giá cao hơn (Interrupt/Preempt).
-**Cách khắc phục (Fix):** Đừng bao giờ dùng máy Spot cho các công việc (Jobs) không hỗ trợ phục hồi điểm nhớ (Checkpointing). Luôn đảm bảo script của bạn sử dụng cờ `--resume_from_checkpoint` của HuggingFace, và Mount (gắn) bộ nhớ lưu trữ mạng (EFS/Filestore) để dữ liệu không bị bốc hơi cùng với máy ảo.
-</Callout>
-
-<Callout type="warning" title="Pitfall 2: API Gateway bị ngắt kết nối (Timeout Disconnects)">
-**Triệu chứng:** Quá trình sinh văn bản của LLM chạy qua API Gateway của đám mây mất 35 giây. API báo lỗi HTTP 504 (Gateway Timeout), mặc dù máy chủ Inference bên dưới vẫn đang sinh tiếp phần còn lại của văn bản.
-**Nguyên nhân:** Rất nhiều dịch vụ Load Balancer (AWS ALB, GCP API Gateway) có một "Hard Limit" (Giới hạn cứng) ngắt các kết nối kéo dài quá 30 giây.
-**Cách khắc phục (Fix):** Chuyển từ cơ chế phản hồi đồng bộ sang **Server-Sent Events (SSE)** hoặc **WebSockets** (Tính năng Streaming). Load Balancer sẽ không ngắt kết nối nếu dữ liệu (các tokens) liên tục được truyền về một cách đều đặn.
-</Callout>
-
-<Callout type="warning" title="Pitfall 3: Cạn kiệt Quota (Giới hạn tài nguyên đám mây)">
-**Triệu chứng:** Lệnh khởi tạo cụm Kubernetes thất bại với thông báo `Insufficient Quota: GPUs`.
-**Nguyên nhân:** Mặc dù bạn có thẻ tín dụng đủ hạn mức, các nhà cung cấp Cloud mặc định giới hạn số lượng GPU A100/H100 cấp cho mỗi tài khoản là **0** để tránh gian lận đào tiền ảo (Crypto mining).
-**Cách khắc phục (Fix):** Bạn phải mở Ticket Yêu cầu hỗ trợ (Support Ticket) giải trình rõ ràng mục đích, kiến trúc hệ thống và chờ vài ngày đến vài tuần để được nhân viên Cloud cấp phát Quota sử dụng GPU.
-</Callout>
-
----
-
-## 6. Cost & Performance Unit Economics
-
-Hóa đơn điện toán đám mây là nỗi ám ảnh của mọi Startup AI. Hãy theo dõi các chi phí vận hành (OpEx) sau:
-
-| Loại chi phí Đám mây | Phân tích SRE (Ý nghĩa kinh tế) | Tối ưu hóa (Optimization) |
+| Cloud | Điểm mạnh | Khi phù hợp |
 |---|---|---|
-| **Egress (Data Transfer Out)** | Chi phí tải dữ liệu từ Đám mây ra Internet cực kỳ đắt ($0.09/GB). Nếu bạn host mô hình trên AWS nhưng lại để máy chủ Backend trên Vultr hoặc DigitalOcean, việc luân chuyển dữ liệu liên tục sẽ tạo ra hóa đơn khổng lồ. | Giữ mọi thứ nằm trong cùng một Khu vực đám mây (Same Cloud, Same Region). Cấu hình mạng VPC Peering. |
-| **Model Hosting (GPU 24/7)** | Cắm cố định 1 mô hình trên AWS SageMaker (Real-time endpoint) ngốn hàng ngàn đô la mỗi tháng bất kể có ai gọi hay không. | Sử dụng **SageMaker Serverless Inference** hoặc chia sẻ một máy chủ GPU cho đa mô hình (Multi-model endpoint) với thư viện Nvidia Triton Server. |
-| **S3 API Calls (Read/Write)** | Lưu trữ 1 triệu ảnh trên S3 rất rẻ (vài USD). Nhưng nếu script Dataloader của bạn tải (GET) từng bức ảnh một với 10 triệu Epochs, bạn sẽ bị tính phí cho số lượng "API Requests". | Đóng gói hàng ngàn file nhỏ thành các file nén `.tar`, `.tfrecord`, hoặc `.parquet` lớn trước khi lưu trữ để giảm thiểu tối đa số lần gọi API S3. |
+| AWS | SageMaker, Bedrock, EKS, S3, IAM mạnh, GPU instance đa dạng | doanh nghiệp lớn, hạ tầng phức tạp, cần nhiều dịch vụ |
+| GCP | Vertex AI, GKE, BigQuery, Cloud Run, TPU/JAX ecosystem | data/analytics mạnh, Kubernetes mượt, serverless tốt |
+| Azure | Azure OpenAI, enterprise compliance, Microsoft ecosystem | công ty dùng Microsoft, cần private Azure OpenAI/data residency |
+| Multi-cloud | tránh lock-in, chọn provider theo model | team đủ mạnh để chịu complexity |
+
+Lựa chọn thực dụng:
+
+- Nếu công ty đã chuẩn hóa cloud nào, bắt đầu ở cloud đó.
+- Nếu cần OpenAI với enterprise/data controls, Azure OpenAI thường là lựa chọn phổ biến.
+- Nếu team nhỏ, serverless/container managed có thể tốt hơn tự vận hành EKS/GKE.
+
+---
+
+## 4. Deployment Options: Serverless, Managed Endpoints, Kubernetes
+
+| Option | Ví dụ | Ưu điểm | Giới hạn |
+|---|---|---|---|
+| Serverless containers | Cloud Run, AWS App Runner, Azure Container Apps | đơn giản, scale to zero, ít DevOps | cold start, GPU hạn chế tùy platform |
+| Managed ML endpoint | SageMaker Endpoint, Vertex AI Endpoint, Azure ML | tích hợp model registry, autoscaling | cost cao, platform-specific |
+| Kubernetes | EKS/GKE/AKS | linh hoạt, GPU scheduling, ecosystem mạnh | vận hành phức tạp |
+| API provider | OpenAI/Anthropic/Gemini | không quản GPU, model mạnh | cost/token, rate limit, data controls |
+| Hybrid | gateway self-host + provider fallback | cân bằng cost/reliability | routing và observability khó hơn |
+
+Không cần Kubernetes cho mọi app. Một internal chatbot nhỏ có thể chạy tốt trên Cloud Run + managed API. Một platform nhiều model/tenant có thể cần K8s.
+
+---
+
+## 5. IAM, Secrets và Network Boundaries
+
+Cloud AI system thường hỏng vì quyền quá rộng.
+
+Bad pattern:
+
+```text
+App service account:
+  s3:* on *
+  secrets:* on *
+  cloudwatch:* on *
+```
+
+Better pattern:
+
+```text
+ai-api-prod service account:
+  read secret: openai_api_key_prod
+  read/write bucket: s3://ai-prod-logs/tenant-scoped/*
+  read bucket: s3://ai-prod-models/customer-support/v12/*
+  no permission to raw PII bucket
+```
+
+Network boundary cần:
+
+- private subnets cho database/vector DB,
+- VPC endpoint/private link đến storage nếu có,
+- egress allowlist đến LLM providers,
+- no public bucket,
+- secrets trong Secret Manager, không trong env file commit,
+- audit logs cho IAM changes.
+
+---
+
+## Implementation Playbook: Deploy AI API to Cloud Run
+
+Ví dụ này phù hợp cho API nhỏ/medium dùng managed LLM provider hoặc model nhẹ CPU.
+
+### Bước 1: Build và push image
+
+```bash
+PROJECT_ID="my-ai-platform"
+REGION="asia-southeast1"
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/ai/ai-api:1.0.0"
+
+gcloud auth configure-docker ${REGION}-docker.pkg.dev
+
+docker build -t "$IMAGE" .
+docker push "$IMAGE"
+```
+
+### Bước 2: Tạo secret
+
+```bash
+echo -n "$OPENAI_API_KEY" | gcloud secrets create openai-api-key \
+  --data-file=- \
+  --replication-policy="automatic"
+```
+
+### Bước 3: Deploy service
+
+```bash
+gcloud run deploy ai-api \
+  --image "$IMAGE" \
+  --region "$REGION" \
+  --service-account ai-api-prod@${PROJECT_ID}.iam.gserviceaccount.com \
+  --set-secrets OPENAI_API_KEY=openai-api-key:latest \
+  --set-env-vars MODEL_NAME=gpt-4o-mini,APP_ENV=prod \
+  --memory 2Gi \
+  --cpu 2 \
+  --min-instances 1 \
+  --max-instances 20 \
+  --allow-unauthenticated=false
+```
+
+### Bước 4: Production checklist
+
+- `--allow-unauthenticated=false` nếu không phải public API.
+- Region đúng policy dữ liệu.
+- Logs không chứa raw PII.
+- Service account least privilege.
+- Alert cho 5xx, latency, cost spikes.
+- Budget alert ở project/account level.
+
+---
+
+## 6. Data Residency and Compliance Checklist
+
+Trước khi deploy AI workload, trả lời:
+
+| Câu hỏi | Vì sao quan trọng |
+|---|---|
+| User data đến từ quốc gia nào? | GDPR, PDPA, HIPAA, local laws |
+| Prompt/log có chứa PII không? | observability vendor có thể thành nơi rò rỉ |
+| LLM provider xử lý request ở region nào? | data transfer và compliance |
+| Storage bucket có public không? | tránh breach cơ bản |
+| Backup và replicas nằm region nào? | dữ liệu có thể rời khỏi boundary |
+| Ai có quyền đọc raw data? | least privilege |
+| Retention policy bao lâu? | quyền xóa dữ liệu và cost |
+
+AI logging đặc biệt nguy hiểm vì prompt có thể chứa nội dung người dùng gõ tự do. Mặc định mask hoặc không log raw payload cho domain nhạy cảm.
+
+---
+
+## 7. Cloud Cost Controls
+
+Cloud bill cho AI thường tăng từ các nguồn không rõ ràng:
+
+- GPU endpoint chạy 24/7,
+- egress giữa regions/clouds,
+- object storage API calls cho nhiều file nhỏ,
+- logs/traces lưu raw payload quá lớn,
+- vector DB overprovision,
+- autoscaling không có max cap,
+- retry storm gọi LLM API.
+
+Thiết lập tối thiểu:
+
+```text
+Budget alert:
+  50% monthly budget -> Slack
+  80% -> email + ticket
+  100% -> page owner
+
+Quota:
+  max instances per service
+  max tokens per tenant/day
+  max concurrent jobs
+
+Labels/tags:
+  project=ai-platform
+  env=prod
+  owner=ml-platform
+  feature=rag-chat
+```
+
+Không có labels/tags, bạn sẽ không biết tính năng nào đang đốt tiền.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Cold start làm request đầu tiên timeout">
+**Triệu chứng:** Service serverless scale to zero, request đầu tiên mất 20-60 giây.
+
+**Fix:** `min-instances=1`, giảm image size, lazy load phần không critical, hoặc dùng managed endpoint luôn warm cho latency-sensitive API.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Cloud quota GPU mặc định bằng 0">
+**Triệu chứng:** Tạo GPU endpoint fail dù tài khoản có billing.
+
+**Fix:** Request quota sớm, chuẩn bị justification, có fallback provider/region và capacity plan trước launch.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Egress cost do app và data ở khác region">
+**Triệu chứng:** Bill tăng dù compute không tăng.
+
+**Fix:** Co-locate app, storage, vector DB và model endpoint cùng region; dùng private networking; tránh loop dữ liệu qua nhiều cloud.
+</Callout>
+
+---
+
+## Cost / Region / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Scale to zero | tiết kiệm idle cost | cold start |
+| Multi-region active-active | latency thấp, HA cao | replication, consistency, cost cao |
+| Managed endpoints | ít vận hành | giá cao và lock-in |
+| Kubernetes tự quản | linh hoạt | cần SRE và security hardening |
+| Same-region architecture | giảm latency/egress | phụ thuộc capacity region |
+| Cross-cloud fallback | resilience vendor | egress, routing, observability phức tạp |
+
+Cloud architecture tốt tối ưu tổng chi phí sở hữu, không chỉ giá mỗi GPU/giờ.
+
+---
+
+## Practice exercises
+
+1. Chọn cloud deployment option cho một chatbot nội bộ 500 người dùng và giải thích.
+2. Thiết kế IAM policy tối thiểu cho service đọc model artifact và secret API key.
+3. Lập checklist data residency cho user EU.
+4. Tính rủi ro cold start khi model load mất 30 giây và request timeout 15 giây.
+5. Liệt kê 5 nguồn cloud cost ẩn trong AI system.
+
+---
+
+## Knowledge check
+
+1. Vì sao region là quyết định pháp lý, không chỉ kỹ thuật?
+2. Khi nào serverless container phù hợp hơn Kubernetes?
+3. Least privilege trong cloud AI nghĩa là gì?
+4. Egress cost là gì?
+5. Vì sao logs/traces của LLM có thể vi phạm privacy?
+
+---
+
+## Answer key
+
+1. Dữ liệu người dùng có thể bị luật như GDPR/PDPA giới hạn nơi lưu và xử lý.
+2. Khi workload đơn giản, team nhỏ, traffic vừa phải và không cần GPU orchestration phức tạp.
+3. Service chỉ có quyền đúng tài nguyên cần thiết, không quyền wildcard rộng.
+4. Chi phí chuyển dữ liệu ra khỏi cloud/region/network boundary.
+5. Prompt/output có thể chứa PII, secrets hoặc dữ liệu nhạy cảm do user nhập tự do.
 
 ---
 
 ## Điểm cần nhớ
 
-- Việc dịch chuyển hệ thống AI lên đám mây đòi hỏi sự phân tách rạch ròi giữa quá trình Data, Training và Deployment thay vì chạy tất cả trên một máy chủ cục bộ.
-- Chọn mô hình Serverless / Scale to Zero giúp tối ưu chi phí nhưng phải đối mặt với bài toán khởi động lạnh (Cold Start) khi file trọng số (Weights) lên tới hàng chục GB.
-- Phải đặc biệt cẩn trọng đến vùng lãnh thổ địa lý (Region) khi triển khai, do dữ liệu người dùng gửi vào API tuân thủ nghiêm ngặt các bộ luật bảo vệ thông tin cá nhân.
-- Spot Instances là con dao hai lưỡi: Tiết kiệm ngân sách khổng lồ nhưng đòi hỏi kiến trúc hệ thống có tính chịu lỗi cực cao (Fault-tolerant) và cơ chế lưu trạng thái liên tục (Frequent Checkpointing).
+- Cloud deployment cho AI phải xét region, IAM, network, observability và cost cùng lúc.
+- Managed services giảm DevOps nhưng có trade-off về cost và lock-in.
+- Serverless tốt cho đơn giản/scale-to-zero, Kubernetes tốt cho platform nhiều workload.
+- Prompt/log có thể là dữ liệu nhạy cảm; data residency áp dụng cả logs và traces.
+- Budget alerts, quotas và labels là guardrails tài chính bắt buộc.
+
+---
 
 ## Next chapter bridge
 
-Mô hình của bạn đã vận hành mượt mà trên nền tảng đám mây khổng lồ. Nhưng làm thế nào để bạn biết mô hình có đang phản hồi những thông tin sai lệch hay không? Làm sao để phát hiện một người dùng độc hại đang gửi các Prompt Injection để bẻ khóa (Jailbreak) hệ thống? Triển khai (Deploy) chỉ là vạch xuất phát. Chương tiếp theo: **Monitoring & Logging** — nơi chúng ta sẽ biến chiếc hộp đen LLM trở nên trong suốt, phân tích từ độ trễ của từng token (Latency per token) cho đến việc truy vết lại chi phí vận hành chi tiết đến từng người dùng (Token cost tracing) thông qua các nền tảng LLMOps như Langfuse, LangSmith và Helicone.
+Service đã chạy trên cloud, nhưng deploy chỉ là vạch xuất phát. Bạn cần biết nó đang trả lời gì, tốn bao nhiêu token, chậm ở đâu, có hallucinate không và user nào đang gây cost spike. Chương tiếp theo: **Monitoring & Logging** — nơi chúng ta xây observability cho LLM/RAG/Agent systems thay vì chỉ nhìn HTTP 200.

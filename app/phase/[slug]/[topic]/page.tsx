@@ -11,6 +11,7 @@ import { accentMap } from "@/lib/theme";
 import { PhaseIcon } from "@/components/shared/phase-icon";
 import { MdxContent } from "@/components/roadmap/mdx-content";
 import { TocSidebar } from "@/components/roadmap/toc-sidebar";
+import { Reveal } from "@/components/shared/reveal";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2 } from "lucide-react";
 
@@ -69,56 +70,58 @@ export default async function TopicPage({ params }: Props) {
       </nav>
 
       {/* Header */}
-      <header className={`mb-8 rounded-2xl border ${a.border} bg-card/35 p-6 sm:p-8 relative overflow-hidden`}>
-        <div
-          className={`absolute -right-8 -top-8 h-24 w-24 rounded-full ${a.bgSoft} blur-3xl opacity-40`}
-        />
-        <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start">
-          <span
-            className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br ${a.gradient} text-white shadow`}
-          >
-            <PhaseIcon name={phase.icon} className="h-6 w-6" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge className={`${a.bg} border-0 text-primary-foreground font-mono font-bold text-[10px]`}>{t.code}</Badge>
-              <span className="text-xs text-zinc-500 font-mono">
-                {phaseLabel} · {phase.title}
-              </span>
-              <span className="text-xs text-zinc-500 font-mono">
-                · BÀI {index + 1}/{phase.topics.length}
-              </span>
+      <Reveal>
+        <header className={`mb-8 rounded-2xl border ${a.border} bg-card/35 p-6 sm:p-8 relative overflow-hidden`}>
+          <div
+            className={`absolute -right-8 -top-8 h-24 w-24 rounded-full ${a.bgSoft} blur-3xl opacity-40`}
+          />
+          <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start">
+            <span
+              className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br ${a.gradient} text-white shadow`}
+            >
+              <PhaseIcon name={phase.icon} className="h-6 w-6" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className={`${a.bg} border-0 text-primary-foreground font-mono font-bold text-[10px]`}>{t.code}</Badge>
+                <span className="text-xs text-zinc-500 font-mono">
+                  {phaseLabel} · {phase.title}
+                </span>
+                <span className="text-xs text-zinc-500 font-mono">
+                  · BÀI {index + 1}/{phase.topics.length}
+                </span>
+              </div>
+              <h1 className="mt-2 text-2xl font-extrabold tracking-tight sm:text-3xl text-zinc-100">
+                {t.title}
+              </h1>
+              {t.description && (
+                <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
+                  {t.description}
+                </p>
+              )}
             </div>
-            <h1 className="mt-2 text-2xl font-extrabold tracking-tight sm:text-3xl text-zinc-100">
-              {t.title}
-            </h1>
-            {t.description && (
-              <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
-                {t.description}
-              </p>
-            )}
           </div>
-        </div>
 
-        {/* Learning objectives */}
-        <div className="mt-6 relative rounded-xl border border-white/5 bg-zinc-950/20 p-4">
-          <p className="mb-3 flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-400">
-            <CheckCircle2 className={`h-3.5 w-3.5 ${a.text} opacity-80`} />
-            Bạn sẽ học gì
-          </p>
-          <ul className="grid gap-2 sm:grid-cols-2">
-            {t.items.map((item) => (
-              <li
-                key={item}
-                className="flex items-start gap-2 text-xs text-muted-foreground leading-relaxed"
-              >
-                <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${a.dot}`} />
-                {item}
-              </li>
-            ))}
-          </ul>
-        </div>
-      </header>
+          {/* Learning objectives */}
+          <div className="mt-6 relative rounded-xl border border-white/5 bg-zinc-950/20 p-4">
+            <p className="mb-3 flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-400">
+              <CheckCircle2 className={`h-3.5 w-3.5 ${a.text} opacity-80`} />
+              Bạn sẽ học gì
+            </p>
+            <ul className="grid gap-2 sm:grid-cols-2">
+              {t.items.map((item) => (
+                <li
+                  key={item}
+                  className="flex items-start gap-2 text-xs text-muted-foreground leading-relaxed"
+                >
+                  <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${a.dot}`} />
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </header>
+      </Reveal>
 
       {/* Body: TOC + content */}
       {hasContent ? (
@@ -181,7 +184,7 @@ export default async function TopicPage({ params }: Props) {
             <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
               <ArrowLeft className="h-3 w-3" /> Quay lại phase
             </div>
-            <div className="mt-1 text-sm font-bold text-zinc-300 group-hover:text-primary transition-colors">{phaseLabel} — {phase.title}</div>
+            <div className="mt-1 text-sm font-bold text-zinc-300 group-hover:text-primary transition-colors">{phaseLabel} · {phase.title}</div>
           </Link>
         )}
         {nextTopic ? (

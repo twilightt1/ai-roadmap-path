@@ -10,7 +10,7 @@ export function Timeline() {
     <div className="relative">
       {/* Đường dọc */}
       <div
-        className="absolute bottom-0 left-[22px] top-2 w-px border-l border-dashed border-white/10 sm:left-[30px]"
+        className="absolute bottom-0 left-[22px] top-2 w-px bg-gradient-to-b from-emerald-500/40 via-white/5 to-transparent sm:left-[30px]"
         aria-hidden
       />
 

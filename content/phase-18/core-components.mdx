@@ -1,0 +1,543 @@
+System Overview đã định nghĩa Capstone như một AI platform production-grade. Bây giờ ta bóc tách từng component: component nào sở hữu trách nhiệm gì, không sở hữu gì, data flow đi qua đâu, failure modes là gì và acceptance criteria để biết bạn đã build đúng chưa.
+
+Một platform tốt không phải là nhiều service ngẫu nhiên ghép lại. Nó là tập các boundaries rõ ràng: gateway không quyết định model bằng logic rối; router không làm auth; RAG không bypass tenant policy; agent không tự ý gọi tool; observability không bị thêm sau cùng.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Một request đi qua 6 service nhưng không ai sở hữu policy">
+**Bối cảnh:** Team xây Multi-LLM platform với nhiều module: auth, router, RAG, agent, cost tracker, safety filter. Ban đầu mọi thứ chạy được trong demo.
+
+**Sự cố:** Một tenant enterprise yêu cầu chỉ dùng Claude vì policy dữ liệu. Nhưng một request RAG bị route sang provider khác qua fallback path. Investigation cho thấy:
+
+1. Tenant policy được check ở API Gateway nhưng không truyền xuống Router.
+2. RAG Engine gọi embedding provider mặc định mà không hỏi policy.
+3. Agent fallback gọi model trực tiếp, bypass Router.
+4. Audit log chỉ ghi final provider, không ghi decision path.
+
+**Hậu quả:** Platform vi phạm policy khách hàng dù từng component “đúng” theo test riêng. Root cause là ownership boundary và policy propagation không rõ.
+</Callout>
+
+Bài học rút ra: Core components phải có contract rõ: input, output, owner, dependencies, policy enforcement và audit events. Không component nào được tự ý bypass control plane.
+
+---
+
+## 2. Architecture Blueprint (Component Map)
+
+```text
+[ API Gateway ]
+  owns: auth, tenant context, rate limits, request validation
+  calls: Safety Gateway, AI Control Plane
+        │
+        ▼
+[ AI Control Plane ]
+  owns: policies, model/prompt registry, routing decisions, cost budgets
+        │
+        ├── [ Multi-LLM Router ]
+        ├── [ RAG Engine ]
+        ├── [ Agent Orchestrator ]
+        └── [ MCP Tool Layer ]
+        │
+        ▼
+[ Safety / Governance Layer ]
+  owns: input/output safety, PII, audit, red-team gates
+        │
+        ▼
+[ Observability + Admin ]
+  owns: traces, metrics, dashboards, incident review
+```
+
+Component ownership table:
+
+| Component | Owns | Does not own |
+|---|---|---|
+| API Gateway | Auth, tenant context, rate limits, request validation | Model choice internals |
+| Multi-LLM Router | Provider/model choice, fallback, circuit breakers | User authentication |
+| RAG Engine | Ingestion, retrieval, citations, tenant metadata filters | Global safety policy |
+| Agent Orchestrator | Workflow state, tool sequence, step budgets | Raw tool authorization policy |
+| MCP Layer | Tool schemas, tool connectivity, invocation logging | Unconstrained execution |
+| Safety Layer | PII, injection, moderation, policy decisions, audit | Product business logic |
+| Observability | Traces, metrics, logs, dashboards | Making product decisions |
+| Admin Dashboard | Visibility and controls | Core inference execution |
+| CI/CD | Tests, eval gates, deploy/rollback | Runtime routing decisions |
+
+---
+
+## 3. API Gateway
+
+API Gateway là entry point của platform. Nó đảm bảo mọi request có identity, tenant context, quota, trace ID và policy envelope trước khi vào AI control plane.
+
+Responsibilities:
+
+- Authentication / session validation.
+- Tenant resolution.
+- Role-based access control.
+- Rate limiting per user/tenant/API key.
+- Request schema validation.
+- Idempotency keys cho long-running tasks.
+- SSE streaming proxy.
+- Correlation ID / trace ID generation.
+- Backend-only provider key protection.
+
+Suggested endpoints:
+
+```text
+POST /v1/chat
+POST /v1/chat/stream
+POST /v1/documents
+POST /v1/documents/{document_id}/ingest
+POST /v1/agents/run
+GET  /v1/runs/{run_id}
+GET  /v1/admin/usage
+GET  /v1/admin/audit/{request_id}
+```
+
+Tenant context object:
+
+```json
+{
+  "request_id": "req_123",
+  "tenant_id": "tenant_acme",
+  "user_id": "user_456",
+  "role": "tenant_admin",
+  "plan": "enterprise",
+  "allowed_providers": ["anthropic", "openai"],
+  "monthly_budget_usd": 5000,
+  "safety_policy": "enterprise-strict-v2"
+}
+```
+
+Acceptance criteria:
+
+- Mọi downstream service nhận tenant context typed, không tự parse token.
+- Request thiếu tenant context bị reject.
+- Rate limit key include tenant + user/API key.
+- Streaming response vẫn giữ trace ID và audit event.
+
+---
+
+## 4. Multi-LLM Router
+
+Router chọn provider/model theo task, cost, latency, reliability, context length, tenant policy và safety tier.
+
+Router lifecycle:
+
+```text
+Request
+  → classify task and risk
+  → check tenant provider policy
+  → estimate input/output tokens
+  → filter candidate models
+  → rank by cost/latency/quality
+  → call provider adapter
+  → validate output
+  → fallback if needed
+  → log usage/cost/latency
+```
+
+Model registry example:
+
+```json
+{
+  "model_id": "claude-3-5-sonnet",
+  "provider": "anthropic",
+  "capabilities": ["chat", "long_context", "tool_use", "reasoning"],
+  "context_window": 200000,
+  "input_cost_per_1m": 3.0,
+  "output_cost_per_1m": 15.0,
+  "latency_tier": "medium",
+  "safety_tier": "high",
+  "allowed_tenants": ["enterprise"],
+  "fallbacks": ["gpt-4o", "gemini-1.5-pro"]
+}
+```
+
+Routing strategies:
+
+| Strategy | Example |
+|---|---|
+| Task-based | Code → CodeLLM/Mistral; long legal doc → Claude/Gemini |
+| Cost-based | Simple summarize → cheap model |
+| Latency-based | Autocomplete → low-latency SLM |
+| Reliability-based | Provider error spike → circuit breaker fallback |
+| Compliance-based | Tenant policy only allows certain providers/regions |
+| Safety-based | High-risk domain → safer model + stricter output checks |
+
+<Callout type="warning" title="Router không được bypass safety policy">
+Nếu fallback path gọi provider trực tiếp mà không đi qua output safety/audit, bạn sẽ có inconsistent safety. Router phải trả mọi response qua cùng validation pipeline.
+</Callout>
+
+---
+
+## 5. RAG Engine
+
+RAG Engine biến private knowledge thành grounded answers có citations, tenant isolation và quality eval.
+
+Subcomponents:
+
+```text
+[ Ingestion ]
+  - parse PDF/DOCX/TXT/web
+  - extract metadata
+  - PII scan optional
+  - chunking
+        │
+        ▼
+[ Embedding ]
+  - embedding provider policy
+  - batch jobs
+  - version embeddings
+        │
+        ▼
+[ Storage ]
+  - documents
+  - chunks
+  - embeddings
+  - ACL/tenant metadata
+        │
+        ▼
+[ Retrieval ]
+  - vector search
+  - keyword search
+  - hybrid search
+  - reranking
+  - contextual compression
+        │
+        ▼
+[ Grounded Answer ]
+  - citations
+  - evidence threshold
+  - abstention if weak context
+```
+
+RAG contract:
+
+```json
+{
+  "tenant_id": "tenant_acme",
+  "query": "What is the refund policy?",
+  "filters": {"document_type": "policy", "language": "vi"},
+  "top_k": 8,
+  "require_citations": true,
+  "min_evidence_score": 0.72
+}
+```
+
+Acceptance criteria:
+
+- Every retrieval query filters by `tenant_id` and ACL.
+- Answer includes source IDs/citations.
+- Low-evidence queries abstain or ask clarification.
+- Document deletion removes chunks and embeddings.
+- RAG eval tracks context precision, faithfulness and citation accuracy.
+
+---
+
+## 6. Agent Orchestrator
+
+Agent Orchestrator chạy workflows nhiều bước: planner, tool caller, critic, synthesizer, safety review.
+
+Reference graph:
+
+```text
+[ User Goal ]
+      │
+      ▼
+[ Planner ]
+      │
+      ├── needs docs ─────> [ RAG Retriever ]
+      ├── needs action ───> [ MCP Tool Caller ]
+      ├── needs code ─────> [ Sandbox Runner ]
+      │
+      ▼
+[ Critic / Verifier ]
+      │
+      ▼
+[ Synthesizer ]
+      │
+      ▼
+[ Safety Review ]
+      │
+      ▼
+[ Final Answer ]
+```
+
+Controls:
+
+- Max steps per run.
+- Max token/tool budget.
+- Tool allowlist per tenant/feature.
+- Human approval for irreversible actions.
+- Timeout per tool call.
+- Run state stored and resumable.
+- Full audit trail for each step.
+
+Agent run state example:
+
+```json
+{
+  "run_id": "run_123",
+  "tenant_id": "tenant_acme",
+  "status": "waiting_for_human_approval",
+  "current_node": "tool_caller",
+  "steps_completed": 5,
+  "max_steps": 12,
+  "cost_so_far_usd": 0.42,
+  "tool_calls": [
+    {"name": "search_docs", "allowed": true},
+    {"name": "send_email", "allowed": false, "reason": "requires_approval"}
+  ]
+}
+```
+
+---
+
+## 7. MCP Integration
+
+MCP Layer chuẩn hóa tool connectivity. Nhưng tool connectivity phải đi cùng permissioning.
+
+MCP responsibilities:
+
+- Discover available tools/resources.
+- Validate tool schemas.
+- Enforce tenant-specific allowlists.
+- Sanitize tool outputs before returning to LLM.
+- Log every tool invocation.
+- Apply sandbox boundaries.
+
+Tool policy example:
+
+```json
+{
+  "tenant_id": "tenant_acme",
+  "feature": "research_agent",
+  "allowed_tools": ["web_search", "read_document", "create_draft"],
+  "blocked_tools": ["delete_file", "send_external_email"],
+  "requires_human_confirmation": ["update_crm", "send_email"],
+  "max_tool_calls_per_run": 20
+}
+```
+
+<Callout type="danger" title="MCP mở rộng capability và blast radius cùng lúc">
+Kết nối tool càng mạnh, hậu quả của prompt injection càng lớn. MCP tool execution phải có authorization server-side, không chỉ dựa vào model tự chọn đúng.
+</Callout>
+
+---
+
+## 8. Safety and Governance Layer
+
+Safety/Governance là component xuyên suốt, không phải middleware cuối cùng.
+
+Input controls:
+
+- Prompt injection detection.
+- Harmful request moderation.
+- PII/secrets masking.
+- High-risk domain classifier.
+- Tenant policy checks.
+
+Output controls:
+
+- Toxicity/harmful content scan.
+- PII/secrets leakage detection.
+- Schema validation.
+- RAG evidence/citation check.
+- Refusal/abstention policy.
+
+Governance artifacts:
+
+- Safety policy version.
+- Red-team regression suite.
+- Incident response runbook.
+- Audit log schema.
+- Model/system cards.
+
+Acceptance criteria:
+
+- Fallback model cannot bypass safety.
+- Safety events visible in admin dashboard.
+- Red-team critical failures block deployment.
+- Every high-risk response stores safety decision.
+
+---
+
+## 9. Observability Stack
+
+Observability phải trả lời được: request này đi đâu, tốn bao nhiêu, chậm ở đâu, dùng model nào, retrieve gì, tool nào, safety quyết định gì?
+
+| Layer | Tool | Signals |
+|---|---|---|
+| LLM traces | Langfuse | prompts, outputs, token usage, costs, user feedback |
+| Infra metrics | Prometheus | latency, error rate, provider health, queue length |
+| Dashboards | Grafana | p95, cost, routing distribution, incidents |
+| Logs | Structured JSON | request ID, tenant ID, run ID, policy decisions |
+| Audit DB | PostgreSQL | immutable-ish event history for incidents |
+
+Trace fields:
+
+```json
+{
+  "request_id": "req_123",
+  "tenant_id": "tenant_acme",
+  "feature": "rag_chat",
+  "model": "gpt-4o-mini",
+  "prompt_version": "rag-answer-v5",
+  "input_tokens": 2200,
+  "output_tokens": 380,
+  "cost_usd": 0.0062,
+  "latency_ms": 1420,
+  "fallback_used": false,
+  "retrieved_chunks": ["doc1#c4", "doc2#c1"],
+  "safety_policy": "standard-v3"
+}
+```
+
+---
+
+## 10. Admin Dashboard
+
+Admin Dashboard là control tower của platform.
+
+Pages nên có:
+
+- System overview.
+- Tenants/users/API keys.
+- Usage and cost.
+- Provider health.
+- Model routing distribution.
+- Prompt versions and experiments.
+- RAG documents and retrieval quality.
+- Agent runs and tool calls.
+- Safety events and incidents.
+- Audit log explorer.
+- Billing/limits.
+
+Acceptance criteria:
+
+- Admin debug được bad response từ trace ID.
+- Admin thấy cost by tenant/user/feature/model.
+- Admin thấy provider outage và fallback rate.
+- Admin thấy safety incidents và linked request traces.
+
+---
+
+## 11. CI/CD Pipeline
+
+CI/CD cho AI platform không chỉ chạy unit tests.
+
+Release gates:
+
+```text
+1. Lint + typecheck
+2. Unit tests
+3. Integration tests with provider mocks
+4. DB migration tests
+5. Prompt regression tests
+6. RAG evals on golden questions
+7. Red-team safety tests
+8. Docker build
+9. Staging deploy
+10. Smoke tests
+11. Manual approval for production
+```
+
+<Callout type="tip" title="Golden datasets là tài sản production">
+Prompt/RAG/safety regression datasets nên được versioned như code. Mỗi incident quan trọng nên thêm một test case để lỗi không tái phát.
+</Callout>
+
+---
+
+## 12. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Component ownership mơ hồ">
+**Triệu chứng:** Auth, routing, safety và cost logic nằm rải rác trong nhiều service.
+
+**Nguyên nhân:** Không có component contract rõ.
+
+**Cách khắc phục:** Viết interface/ownership doc. Mỗi policy decision chỉ có một owner chính và audit event rõ.
+</Callout>
+
+<Callout type="danger" title="Pitfall 2: RAG bypass tenant policy">
+**Triệu chứng:** Retrieval trả chunk cross-tenant.
+
+**Nguyên nhân:** Vector query thiếu metadata filter hoặc namespace tenant.
+
+**Cách khắc phục:** Tenant filter bắt buộc trong retrieval service; thêm integration test cross-tenant leak.
+</Callout>
+
+<Callout type="warning" title="Pitfall 3: Agent không có budget stop">
+**Triệu chứng:** Agent loop nhiều bước, tool/API cost tăng mạnh.
+
+**Nguyên nhân:** Không có max steps, max cost, timeout hoặc termination policy.
+
+**Cách khắc phục:** Mọi agent run phải có step/time/cost budget và stop reason logged.
+</Callout>
+
+<Callout type="danger" title="Pitfall 4: Admin dashboard chỉ là vanity metrics">
+**Triệu chứng:** Dashboard có tổng request nhưng không debug được incident.
+
+**Nguyên nhân:** Không có trace drill-down từ tenant → request → model → prompt → chunks → safety → output.
+
+**Cách khắc phục:** Dashboard phải ưu tiên operational questions, không chỉ charts đẹp.
+</Callout>
+
+---
+
+## 13. Platform Unit Economics
+
+| Component | Cost driver | Optimization |
+|---|---|---|
+| Router | Provider/model choice | route simple tasks to cheap models |
+| RAG | embedding + vector search + rerank | batch ingestion, cache retrieval, rerank only top candidates |
+| Agent | multi-step model/tool calls | step budgets, tool caching, early stopping |
+| Safety | classifiers/guard models/human review | cascade cheap-first, sample high-risk |
+| Observability | trace/log storage | retention tiers, redaction, sampling for low-risk |
+| Admin | dashboard queries | pre-aggregate usage and cost metrics |
+
+Cost tracking must be per tenant, user, feature and model. If cost is only global, you cannot run a multi-tenant platform profitably.
+
+---
+
+## Practice exercises
+
+1. Viết component contract cho Multi-LLM Router: input, output, owner, audit events.
+2. Thiết kế RAG retrieval request schema có tenant filter và ACL.
+3. Tạo tool policy JSON cho agent có quyền đọc docs nhưng không gửi email.
+4. Liệt kê 10 fields cần có trong Langfuse trace/audit event.
+5. Thiết kế CI release gate cho prompt regression và red-team tests.
+6. Vẽ admin dashboard drill-down cho một bad RAG answer.
+
+---
+
+## Knowledge check
+
+1. API Gateway sở hữu gì và không nên sở hữu gì?
+2. Vì sao Router cần model registry?
+3. RAG Engine cần acceptance criteria nào để chứng minh tenant isolation?
+4. Agent Orchestrator cần những budget controls nào?
+5. Observability stack cần trả lời câu hỏi production nào?
+
+---
+
+## Answer key
+
+1. Gateway sở hữu auth, tenant context, rate limits, validation, trace ID; không nên nhúng logic chọn model chi tiết.
+2. Để biết capabilities, cost, context window, latency, safety tier, allowed tenants và fallback chain của từng model.
+3. Mọi retrieval query filter theo tenant/ACL, integration test cross-tenant không retrieve được, audit source IDs theo tenant.
+4. Max steps, timeout, max cost/tokens, max tool calls và human approval cho irreversible actions.
+5. Request đi đâu, dùng model/prompt/chunks/tool nào, tốn bao nhiêu, chậm ở đâu, lỗi gì và safety decision là gì.
+
+---
+
+## Điểm cần nhớ
+
+- Core components phải có ownership boundary rõ, nếu không policy sẽ bị bypass.
+- API Gateway tạo tenant context; Router chọn model; RAG retrieve evidence; Agent orchestrates tools; Safety layer kiểm soát risk.
+- MCP/tool integration cần server-side authorization và audit.
+- Observability phải được thiết kế từ đầu để debug incidents.
+- CI/CD cho AI phải include prompt/RAG/safety regression, không chỉ unit tests.
+
+## Next chapter bridge
+
+Bạn đã hiểu các component và boundaries. Bước tiếp theo là chọn stack kỹ thuật để triển khai chúng một cách reproducible: FastAPI, PostgreSQL + pgvector, Redis, LiteLLM, LangGraph, MCP, React, Docker, Kubernetes, Langfuse, Prometheus và Grafana. Chương tiếp theo: **Technical Stack** — nơi chúng ta biến architecture thành engineering decisions.

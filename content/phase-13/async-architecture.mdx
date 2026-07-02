@@ -1,177 +1,389 @@
-Trong thiết kế hệ thống, khi một tác vụ tiêu tốn thời gian xử lý vượt quá giới hạn chịu đựng của kết nối mạng (thường > 2-3 giây), việc bắt Client chờ đợi đồng bộ (Synchronous Blocking) là một lỗi thiết kế nghiêm trọng. Với AI, đặc biệt là các tác vụ sinh ảnh, sinh video, phân tích tài liệu dài, hoặc chạy các Agent đa bước, thời gian xử lý có thể lên tới hàng chục giây hoặc vài phút. Chúng ta bắt buộc phải chuyển dịch toàn bộ luồng công việc sang kiến trúc **Bất đồng bộ (Asynchronous Architecture)**.
+Ở bài trước, bạn đã dùng cache để tránh gọi model khi không cần. Nhưng với các tác vụ AI thật sự nặng — phân tích PDF dài, sinh ảnh/video, chạy agent nhiều bước, ingestion embeddings, batch evaluation — cache không giúp được request đầu tiên. Nếu bạn giữ HTTP connection mở trong 30-120 giây, hệ thống sẽ timeout và user sẽ retry.
+
+**Async AI Architecture** tách luồng nhận yêu cầu khỏi luồng xử lý AI. Thay vì `POST /analyze` rồi chờ, client nhận `task_id`, worker xử lý nền, frontend theo dõi progress qua polling/webhook/SSE. Đây là pattern bắt buộc khi latency vượt quá vài giây hoặc workload cần retry/resume.
 
 ---
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: Sập nguồn Gateway vì Blocking Threads">
-**Bối cảnh:** Một công ty cung cấp dịch vụ AI trích xuất hợp đồng bảo hiểm. Người dùng tải file PDF lên và nhận về file JSON phân tích. Kỹ sư xây dựng API đồng bộ:
-`POST /extract -> Chờ Python PDF parser -> Chờ GPT-4o -> Trả về JSON.`
+<Callout type="danger" title="Báo cáo sự cố: API gateway sập vì 200 request PDF giữ thread 45 giây">
+**Bối cảnh:** Một công ty bảo hiểm xây API trích xuất hợp đồng: `POST /extract -> parse PDF -> call GPT-4o -> return JSON`. Mỗi request mất 30-60 giây.
 
-**Sự cố:** 
-1. Khi có 200 đại lý bảo hiểm đồng loạt tải file lên lúc 9h sáng, mỗi request chiếm dụng 1 thread của API Gateway trong vòng 45 giây. 
-2. Chỉ trong 10 giây, máy chủ API Gateway (AWS ECS) cạn kiệt luồng trống (Thread Pool Exhaustion) và bắt đầu từ chối tất cả các kết nối mới, kể cả request truy cập trang chủ của khách hàng.
-3. Client liên tục báo lỗi `504 Gateway Timeout`. Người dùng hoang mang bấm nút gửi lại liên tục, làm lượng tải nhân lên gấp bội.
+**Sự cố:** 9h sáng, 200 đại lý upload PDF cùng lúc. Mỗi request giữ một worker/thread của API gateway. Thread pool cạn, mọi endpoint khác cũng timeout. User thấy 504 và bấm gửi lại, tạo duplicate jobs. Một số request vẫn chạy ở backend nên công ty bị tính tiền LLM nhiều lần cho cùng một file.
 
-**Hậu quả:** Hệ thống sập suốt 3 giờ. Công ty phải đền bù thiệt hại hợp đồng cho các đại lý vì trễ hạn xử lý hồ sơ.
+1. Tác vụ dài được xử lý đồng bộ trong web request.
+2. Không có task id, idempotency key hoặc dedup theo file hash.
+3. Không có queue length monitoring hoặc worker autoscaling.
+4. Retry từ client tạo duplicate execution.
+
+**Hậu quả:** 3 giờ downtime, chi phí token tăng mạnh và kết quả bị trùng trong database.
 </Callout>
 
-Bài học rút ra: Tách biệt tuyệt đối luồng Nhận Request và luồng Xử lý AI. Giao tiếp đồng bộ chỉ dành cho các tác vụ siêu nhanh. Mọi thứ khác phải đưa vào Hàng đợi (Queue).
+Bài học rút ra: request AI dài phải trở thành **job**. Web API nhận việc nhanh, queue giữ backlog, worker xử lý có timeout/retry, và client theo dõi trạng thái.
 
 ---
 
-## 2. Architecture Blueprint (Kiến trúc giải pháp)
+## 2. Architecture Blueprint (Async Task Queue + Status API)
 
-Kiến trúc AI bất đồng bộ tiêu chuẩn công nghiệp sử dụng mô hình **Task ID & Webhooks/Polling**:
+Pattern chuẩn:
 
 ```text
-[ CLIENT / USER ]                  [ API GATEWAY ]                [ MESSAGE QUEUE ]
-        │                                 │ (Redis / RabbitMQ)            │
-        │ 1. POST /extract (Gửi File)     │                               │
-        ├────────────────────────────────>│                               │
-        │                                 ├── 2. Đẩy Job vào Queue ──────>│
-        │ 3. HTTP 202 (Trả Task_ID: 99)   │                               │
-        |<────────────────────────────────┤                               │
-        │                                                                 │
-[ BACKGROUND WORKERS ] <───────────────── 4. Pull Job ────────────────────┘
-  (Celery/Python)
-        │
-        ├── 5. Tải file từ S3, gọi LLM, chạy Vy-tính (Mất 45 giây)
-        │
-        ▼
-[ UPDATE STATE ] ── 6. Ghi kết quả vào DB (Status: Completed)
-        │
-        ├── 7a. Webhook Pattern: POST /webhooks/done (Bắn trực tiếp về Client)
-        │
-        └── 7b. Polling Pattern: Client gọi liên tục "GET /task/99" để kiểm tra
+[ Client ]
+   │ POST /tasks
+   ▼
+[ API Gateway ]
+  - auth
+  - quota
+  - idempotency key
+  - create task row
+   │
+   ├── 202 Accepted {task_id}
+   │
+   ▼
+[ Message Queue ]
+  - Redis/RabbitMQ/SQS/Kafka
+   │
+   ▼
+[ Worker Pool ]
+  - OCR/parser
+  - embeddings
+  - LLM calls
+  - result validation
+   │
+   ▼
+[ Task Store ]
+  - queued/running/succeeded/failed/cancelled
+  - progress
+  - result URL
+  - error code
+   │
+   ├── GET /tasks/{id} polling
+   ├── webhook callback
+   └── SSE/WebSocket progress
+```
+
+Mục tiêu: web layer không bị block, worker layer scale theo queue, task state giúp retry/resume và user không cần gửi lại request mù quáng.
+
+---
+
+## 3. When Sync Is OK vs When Async Is Required
+
+| Tác vụ | Sync được? | Lý do |
+|---|---|---|
+| intent classification < 100ms | có | nhanh, deterministic |
+| chat streaming 1-5s | có, nếu stream | user thấy token sớm |
+| RAG answer 2-8s | tùy | có thể sync với timeout/streaming |
+| PDF ingestion 30s-10m | async | parse/OCR/embed dài |
+| image/video generation | async | latency cao, GPU queue |
+| multi-step agent | async hoặc streaming task | không biết thời gian hoàn thành |
+| batch eval/training | async/job | workload nền |
+
+Quy tắc thực dụng:
+
+- dưới 1 giây: sync thường ổn,
+- 1-5 giây: sync + streaming hoặc async tùy UX,
+- trên 5-10 giây: async,
+- tác vụ có retry/resume/cancel: async,
+- tác vụ tốn tiền cao: async với idempotency và budget check.
+
+---
+
+## 4. Task State Machine
+
+Task phải có state rõ ràng:
+
+```text
+created -> queued -> running -> succeeded
+                    ├-> failed_retryable -> queued
+                    ├-> failed_terminal
+                    └-> cancelled
+```
+
+Task record tối thiểu:
+
+```json
+{
+  "task_id": "task_123",
+  "tenant_id": "tenant_a",
+  "user_id": "user_42",
+  "type": "pdf_extract",
+  "status": "running",
+  "progress": 0.45,
+  "input_hash": "sha256:...",
+  "idempotency_key": "tenant_a:file_hash:extract_v2",
+  "result_url": null,
+  "error_code": null,
+  "created_at": "2026-07-02T10:00:00Z",
+  "updated_at": "2026-07-02T10:01:12Z"
+}
+```
+
+Nếu state machine không chuẩn, frontend không biết hiển thị gì, support không debug được và retry dễ tạo duplicate.
+
+---
+
+## 5. Queue Semantics, Retries and Idempotency
+
+Queue thường có delivery semantics “at least once”: job có thể chạy lại. Vì vậy worker phải idempotent.
+
+### Idempotency key
+
+```text
+idempotency_key = hash(tenant_id + user_id + file_hash + task_type + config_version)
+```
+
+Nếu user gửi lại cùng file/cùng task, API trả task cũ thay vì tạo task mới.
+
+### Retry policy
+
+| Error | Retry? | Ghi chú |
+|---|---|---|
+| network timeout tải file | có | exponential backoff |
+| provider 429 | có nhưng respect retry-after | tránh retry storm |
+| invalid PDF | không | terminal failure |
+| prompt output invalid JSON | có giới hạn | có thể repair/retry 1-2 lần |
+| user cancelled | không | stop if possible |
+| quota exceeded | không | user action needed |
+
+### Dead letter queue
+
+Job fail nhiều lần nên vào DLQ để điều tra, không retry vô hạn.
+
+```text
+queue -> worker -> fail 3 times -> dead-letter-queue -> alert/runbook
 ```
 
 ---
 
-## 3. Tooling Landscape (Ma trận công cụ Bất đồng bộ)
+## 6. Polling vs Webhook vs SSE/WebSocket
 
-| Thành phần | Công nghệ tiêu biểu | Vai trò SRE (Use-case) | Điểm cần lưu ý |
-|---|---|---|---|
-| **Message Queue / Broker** | Redis, RabbitMQ, Apache Kafka | Lưu trữ các jobs thô tạm thời. Chịu tải hàng vạn request ghi cùng lúc để bảo vệ Backend khỏi bị sập nguồn. | Redis thích hợp cho quy mô vừa và nhỏ; Kafka thích hợp cho quy mô dữ liệu khổng lồ (Big Data streams). |
-| **Background Workers** | Celery (Python), BullMQ (NodeJS), Sidekiq | Lấy jobs từ Queue và thực thi các tính toán AI nặng nề (Inference, OCR, Embeddings) trên các luồng riêng biệt. | Phải thiết lập giới hạn thời gian chạy (Timeouts) cho mỗi worker để tránh kẹt luồng. |
-| **Notification Layer** | WebSockets, Server-Sent Events (SSE) | Đẩy kết quả tức thời từ Backend xuống trình duyệt người dùng ngay khi Worker hoàn thành tác vụ. | WebSockets hỗ trợ giao tiếp 2 chiều; SSE tiết kiệm tài nguyên mạng hơn khi chỉ cần đẩy dữ liệu 1 chiều từ server. |
+| Notification pattern | Khi dùng | Trade-off |
+|---|---|---|
+| Polling | web/mobile đơn giản | dễ DDoS nếu poll quá dày |
+| Exponential polling | task vài giây/phút | giảm tải DB/API |
+| Webhook | B2B/API integrations | cần signature, retry, endpoint của khách |
+| SSE | browser nhận progress một chiều | đơn giản hơn WebSocket |
+| WebSocket | realtime 2 chiều | phức tạp hơn, connection state |
+| Email/in-app notification | task rất dài | UX chậm nhưng rẻ |
+
+Polling endpoint nên cache/status store bằng Redis nếu QPS cao. Frontend không nên poll mỗi 100ms.
 
 ---
 
-## 4. Implementation Playbook (Thực thi)
+## Implementation Playbook: Queue + Task Status API
 
-Dưới đây là kịch bản FastAPI + Background Tasks để triển khai mẫu thiết kế **Asynchronous Task Pattern** chuẩn SRE.
+Ví dụ production skeleton dùng FastAPI + Redis Queue concept. Trong thực tế có thể dùng Celery/RQ/BullMQ/SQS.
+
+### Bước 1: API tạo task có idempotency
 
 ```python
+import hashlib
 import uuid
-import time
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, Header
 from pydantic import BaseModel
 
 app = FastAPI()
+task_store = {}
+queue = []
 
-# Giả lập Database trong RAM (Trong thực tế dùng Redis hoặc Postgres)
-task_db = {}
-
-class IngestionRequest(BaseModel):
-    document_url: str
+class ExtractRequest(BaseModel):
+    tenant_id: str
     user_id: str
+    document_url: str
+    document_sha256: str
 
-# Hàm chạy ngầm giả lập việc gọi LLM/RAG mất 30 giây
-def heavy_ai_computation_task(task_id: str, document_url: str):
-    try:
-        # Bước 1: Giả lập download & parse file
-        time.sleep(10) 
-        # Bước 2: Giả lập gọi LLM
-        time.sleep(15) 
-        
-        # Cập nhật trạng thái thành công
-        task_db[task_id] = {
-            "status": "completed",
-            "result": {"extracted_data": "Báo cáo doanh thu quý 2 đạt 50 tỷ"},
-            "error": None
-        }
-    except Exception as e:
-        task_db[task_id] = {
-            "status": "failed",
-            "result": None,
-            "error": str(e)
-        }
 
-@app.post("/api/v1/extract", status_code=202)
-async def extract_document(req: IngestionRequest, background_tasks: BackgroundTasks):
-    # 1. Tạo một mã công việc (Task ID) duy nhất
-    task_id = str(uuid.uuid4())
-    
-    # 2. Khởi tạo trạng thái trong Database
-    task_db[task_id] = {"status": "processing", "result": None, "error": None}
-    
-    # 3. Đẩy tác vụ nặng xuống Background Thread (Non-blocking)
-    background_tasks.add_task(heavy_ai_computation_task, task_id, req.document_url)
-    
-    # 4. Trả ngay HTTP 202 Accepted kèm Task ID cho Frontend
-    return {
-        "status": "accepted",
+def make_idempotency_key(req: ExtractRequest, config_version: str = "extract-v2") -> str:
+    raw = f"{req.tenant_id}:{req.user_id}:{req.document_sha256}:{config_version}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+@app.post("/tasks/extract", status_code=202)
+def create_extract_task(req: ExtractRequest, idempotency_key: str | None = Header(default=None)):
+    idem = idempotency_key or make_idempotency_key(req)
+
+    for task in task_store.values():
+        if task["idempotency_key"] == idem:
+            return {"task_id": task["task_id"], "status": task["status"], "deduped": True}
+
+    task_id = f"task_{uuid.uuid4().hex}"
+    task = {
         "task_id": task_id,
-        "check_status_url": f"/api/v1/tasks/{task_id}"
+        "status": "queued",
+        "progress": 0.0,
+        "idempotency_key": idem,
+        "result": None,
+        "error": None,
+        "request": req.model_dump(),
     }
-
-@app.get("/api/v1/tasks/{task_id}")
-async def get_task_status(task_id: str):
-    # API phục vụ Polling Pattern từ Frontend
-    if task_id not in task_db:
-        raise HTTPException(status_code=404, detail="Task không tồn tại")
-    return task_db[task_id]
+    task_store[task_id] = task
+    queue.append(task_id)
+    return {"task_id": task_id, "status_url": f"/tasks/{task_id}"}
 ```
 
+### Bước 2: Worker xử lý task
+
+```python
+def worker_loop():
+    while True:
+        if not queue:
+            continue
+
+        task_id = queue.pop(0)
+        task = task_store[task_id]
+        task["status"] = "running"
+
+        try:
+            task["progress"] = 0.2
+            text = parse_pdf(task["request"]["document_url"])
+            task["progress"] = 0.5
+            extracted = call_llm_extract(text)
+            task["progress"] = 0.9
+            validate_schema(extracted)
+
+            task["status"] = "succeeded"
+            task["progress"] = 1.0
+            task["result"] = extracted
+        except RetryableError as e:
+            task["status"] = "failed_retryable"
+            task["error"] = str(e)
+            # real queue would requeue with backoff and retry count
+        except Exception as e:
+            task["status"] = "failed_terminal"
+            task["error"] = str(e)
+```
+
+### Bước 3: Status endpoint
+
+```python
+from fastapi import HTTPException
+
+@app.get("/tasks/{task_id}")
+def get_task(task_id: str):
+    task = task_store.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {
+        "task_id": task_id,
+        "status": task["status"],
+        "progress": task["progress"],
+        "result": task["result"] if task["status"] == "succeeded" else None,
+        "error": task["error"],
+    }
+```
+
+### Bước 4: Production replacement
+
+Thay in-memory store/queue bằng:
+
+- Postgres for task records,
+- Redis for hot status/progress,
+- S3/GCS for large input/result artifacts,
+- Celery/RQ/BullMQ/SQS for queue,
+- Prometheus metrics for queue length and worker duration.
+
 ---
 
-## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## 7. Worker Scaling and Backpressure
 
-Kiến trúc bất đồng bộ giải quyết lỗi nghẽn luồng chính, nhưng lại tạo ra các bài toán phức tạp ở khâu quản lý trạng thái.
+Autoscale theo queue metrics:
 
-<Callout type="warning" title="Pitfall 1: Tràn ngập Worker (Queue Backlog)">
-**Triệu chứng:** Người dùng phản ánh họ gửi file từ sáng nhưng đến trưa vẫn ở trạng thái `processing`.
-**Nguyên nhân:** Lượng công việc đẩy vào Queue vượt quá khả năng xử lý của các Workers hiện tại. Một file PDF gặp lỗi làm worker bị treo vô hạn, chiếm dụng slot của các file khác.
-**Cách khắc phục (Fix):**
-1. Luôn cấu hình **Tự động Scale Worker (Autoscaling)** dựa trên độ dài của hàng đợi (Queue Length).
-2. Thiết lập giới hạn thời gian chạy cứng (`timeout = 60s`) cho mỗi task trong Worker. Nếu vượt quá, ép buộc terminate task và đánh dấu `failed` để giải phóng luồng.
-</Callout>
-
-<Callout type="warning" title="Pitfall 2: Polling DDoS (Frontend tự đánh sập Backend)">
-**Triệu chứng:** CSDL PostgreSQL bị sập vì quá tải truy vấn đọc (Read queries).
-**Nguyên nhân:** Kỹ sư Frontend viết code Polling: Cứ mỗi 100ms lại gọi `GET /api/v1/tasks/123` để hỏi kết quả. 5,000 users đồng thời tạo ra 50,000 requests/giây chỉ để hỏi trạng thái.
-**Cách khắc phục (Fix):** 
-1. Áp dụng cơ chế **Exponential Backoff Polling** ở Frontend (Lần đầu hỏi sau 2s, lần sau tăng lên 4s, 8s, 16s...).
-2. Lưu trạng thái Task tạm thời trên Redis thay vì truy vấn trực tiếp Postgres.
-</Callout>
-
-<Callout type="danger" title="Pitfall 3: Lỗi trùng lặp tác vụ (Duplicate Execution)">
-**Triệu chứng:** Khách hàng bị tính tiền 2 lần cho cùng một yêu cầu trích xuất dữ liệu.
-**Nguyên nhân:** Lỗi mạng làm đứt kết nối giữa Worker và Queue. Queue nghĩ rằng Worker đã chết nên đẩy lại job đó cho Worker khác chạy lại, trong khi thực tế Worker thứ nhất vẫn đang chạy ngầm và sắp hoàn thành.
-**Cách khắc phục (Fix):** Áp dụng cơ chế **Idempotency Key**. Trước khi chạy tính toán AI, Worker kiểm tra trạng thái khóa trong Redis. Nếu khóa đã được xác lập bởi một Worker khác, lập tức bỏ qua (Drop job) để tránh tính toán trùng lặp.
-</Callout>
-
----
-
-## 6. Cost & Performance Unit Economics
-
-Bất đồng bộ giúp tối ưu hóa tài nguyên máy chủ GPU một cách triệt để:
-
-| Chỉ số / Thiết kế | Phân tích SRE (Ý nghĩa kinh tế) | Tối ưu hóa (Optimization) |
+| Metric | Ý nghĩa | Action |
 |---|---|---|
-| **GPU Utilization (Tỉ lệ tận dụng)** | Nếu chạy đồng bộ (Sync), GPU phải chờ đợi các khối I/O mạng từ phía Client, khiến GPU nhàn rỗi (idle) nhiều. | Chạy bất đồng bộ cho phép **Batching tối đa**. Hàng đợi (Queue) sẽ gom các yêu cầu lại và đẩy vào GPU một lần dưới dạng lô (Batch), vắt kiệt công suất tính toán của card đồ họa, giảm 50% thời gian thuê máy. |
-| **Worker Cost (Chi phí chạy nền)** | Duy trì 10 Background Workers chạy 24/7 tốn rất nhiều tiền ngay cả khi ban đêm không có khách hàng. | Sử dụng **Knative** hoặc cấu hình HPA (Autoscaler) để tự động tắt bớt (Scale to Zero) các máy chủ Worker vào giờ thấp điểm khi Queue rỗng. |
+| queue length | backlog hiện tại | scale workers up |
+| oldest job age | user chờ lâu chưa | alert nếu vượt SLA |
+| worker duration p95 | task đang chậm | kiểm tra provider/OCR |
+| failure rate | nhiều job fail | pause queue / rollback |
+| retry count | retry storm | circuit breaker provider |
+| GPU utilization | worker GPU có bận không | tune batch/replicas |
+
+Backpressure cần ở API gateway:
+
+- reject nếu queue quá dài,
+- per-tenant concurrency limits,
+- quota theo task type,
+- `Retry-After` cho 429/503,
+- pricing/credits trước khi enqueue job đắt.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Queue backlog nhưng không ai biết">
+**Triệu chứng:** User task chờ hàng giờ, API vẫn nhận thêm job.
+
+**Fix:** Alert theo oldest job age, queue length, p95 task duration; hiển thị ETA/degraded mode và chặn enqueue khi quá tải.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Polling endpoint tự DDoS database">
+**Triệu chứng:** Postgres read QPS tăng mạnh chỉ vì frontend poll status.
+
+**Fix:** Exponential backoff, Redis status cache, SSE cho progress, và giới hạn poll frequency.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Duplicate execution tính tiền hai lần">
+**Triệu chứng:** Cùng file được xử lý 2-3 lần do user retry hoặc queue redelivery.
+
+**Fix:** Idempotency key, task dedup, output write idempotent, và billing chỉ charge theo task succeeded duy nhất.
+</Callout>
+
+---
+
+## Cost / Reliability / Throughput Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Async queue | tránh timeout, scale worker | state management phức tạp |
+| More workers | giảm queue wait | tăng GPU/API cost |
+| Batch workers | tăng throughput | tăng wait time từng job |
+| Aggressive retries | tăng success transient errors | duplicate/cost spike |
+| Webhooks | tốt cho B2B | cần signature/retry endpoint |
+| Polling | dễ làm frontend | tải lớn nếu không backoff |
+| Scale to zero | tiết kiệm idle | cold start worker |
+
+Async architecture tốt không chỉ “dùng queue”; nó kiểm soát task lifecycle, idempotency, retry budget, worker scaling và user communication.
+
+---
+
+## Practice exercises
+
+1. Thiết kế task state machine cho image generation app.
+2. Viết idempotency key cho PDF extraction dựa trên tenant, file hash và config version.
+3. So sánh polling, webhook và SSE cho B2B document analysis.
+4. Đề xuất retry policy cho lỗi 429, invalid PDF và invalid JSON output.
+5. Vẽ autoscaling rule dựa trên queue length và oldest job age.
+
+---
+
+## Knowledge check
+
+1. Vì sao task dài không nên chạy trong HTTP request đồng bộ?
+2. At-least-once delivery của queue dẫn đến yêu cầu gì cho worker?
+3. Dead letter queue dùng để làm gì?
+4. Polling quá dày gây vấn đề gì?
+5. Backpressure trong async AI architecture là gì?
+
+---
+
+## Answer key
+
+1. Nó giữ worker/thread lâu, dễ timeout, làm nghẽn endpoint khác và tạo retry storm.
+2. Worker phải idempotent vì cùng job có thể được deliver/chạy lại.
+3. Lưu job fail nhiều lần để điều tra thay vì retry vô hạn.
+4. Tạo tải lớn lên API/DB chỉ để hỏi trạng thái, có thể tự DDoS hệ thống.
+5. Cơ chế giới hạn/reject/degrade khi queue quá tải để bảo vệ hệ thống và ngân sách.
 
 ---
 
 ## Điểm cần nhớ
 
-- Tránh xa kiến trúc đồng bộ (Sync) đối với mọi tác vụ AI có thời gian xử lý kéo dài quá 3 giây.
-- Kiến trúc bất đồng bộ (Async) sử dụng mô hình: Gửi yêu cầu -> Nhận Task ID -> Xử lý qua Queue -> Trả qua Webhook hoặc Websocket.
-- Luôn kiểm soát sự cố tràn hàng đợi (Queue Backlog) bằng cách gài `Timeout` và cơ chế Auto-scaling cho Workers.
-- Enforce tính chất Idempotent (không trùng lặp) bằng cách sử dụng các khóa giao dịch độc nhất (Idempotency Keys).
+- Tác vụ AI dài nên trở thành task async với `task_id` và status API.
+- Queue delivery thường at-least-once, nên idempotency là bắt buộc.
+- Retry cần phân loại lỗi và có giới hạn; không retry vô hạn với LLM calls đắt tiền.
+- Polling cần backoff hoặc thay bằng SSE/webhook cho progress.
+- Worker autoscaling nên dựa trên queue length, oldest job age, duration và failure rate.
+
+---
 
 ## Next chapter bridge
 
-Kiến trúc bất đồng bộ đảm bảo tính ổn định và khả năng phục hồi của hệ thống mạng. Tuy nhiên, dù chạy đồng bộ hay bất đồng bộ, hóa đơn API vẫn là kẻ thù số một đối với lợi nhuận của doanh nghiệp. Làm thế nào để thiết kế một hệ thống thông minh tự biết lựa chọn mô hình đắt hay rẻ cho từng phân khúc người dùng và nén prompt tối đa? Chương tiếp theo và cũng là bài cuối cùng của Phase 13: **Cost-Aware Architecture** — Nơi các Kiến trúc sư hệ thống thể hiện kỹ năng tối ưu hóa tài chính cấp độ cao.
+Bạn đã biết cách tránh timeout và scale tác vụ dài bằng async architecture. Nhưng dù sync, cached hay async, mọi request AI đều có chi phí. Nếu không thiết kế cost-aware ngay từ đầu, traffic tăng sẽ biến thành hóa đơn tăng không giới hạn. Bài cuối Phase 13: **Cost-Aware Architecture** — nơi chúng ta thiết kế model routing, token budgets, spend limits, cost calculator và capstone system design implementation.

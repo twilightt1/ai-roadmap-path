@@ -1,168 +1,468 @@
-Trong kỹ nghệ AI thực tế, việc thiết kế một hệ thống hoạt động tốt là chưa đủ. Bạn bắt buộc phải thiết kế một hệ thống có khả năng tự kiểm soát tài chính (**Cost-Aware Architecture**). Khác với phần mềm truyền thống (nơi chi phí máy chủ thường cố định theo tháng), chi phí của hệ thống AI (API tokens, GPU compute) tăng trưởng tuyến tính và không giới hạn theo số lượng request của người dùng. Một hệ thống không có thiết kế tối ưu chi phí sẽ nhanh chóng đốt cháy toàn bộ ngân quỹ của doanh nghiệp.
+Bạn đã học framework, classic designs, inference placement, caching và async architecture. Tất cả những quyết định đó cuối cùng hội tụ vào một câu hỏi rất thực tế: **mỗi request AI có lãi hay lỗ?** Với AI products, cost không chỉ là server cố định theo tháng; token, embeddings, reranker, GPU time, retries và evals tăng theo từng hành động của user.
+
+**Cost-Aware Architecture** là năng lực thiết kế hệ thống AI có biên lợi nhuận dương. Bạn không dùng model mạnh nhất cho mọi việc; bạn route theo task, cache khi an toàn, nén context, giới hạn output, đặt hard spend limits và đo cost theo feature/user/tenant.
 
 ---
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: $3,000 cho tính năng 'Tự động hoàn thành'">
-**Bối cảnh:** Một công ty SaaS tích hợp tính năng tự động hoàn thành văn bản (Autocomplete) vào trình soạn thảo của người dùng. Mỗi khi người dùng gõ phím và dừng lại 500ms, hệ thống tự động gửi 2,000 tokens ngữ cảnh trước đó lên mô hình mạnh nhất (GPT-4o) để xin 10 tokens gợi ý tiếp theo.
+<Callout type="danger" title="Báo cáo sự cố: Autocomplete miễn phí đốt 3,000 USD vì gọi frontier model mỗi lần user dừng gõ">
+**Bối cảnh:** Một SaaS editor thêm tính năng autocomplete. Mỗi khi user dừng gõ 500ms, frontend gửi 2,000 tokens context lên GPT-4o để sinh 10 tokens gợi ý. Feature miễn phí cho mọi user.
 
-**Sự cố:** 
-1. Người dùng gõ phím liên tục cả ngày. Hàng nghìn request sinh gợi ý được gửi đi.
-2. Không có cơ chế kiểm soát token đầu ra (output limitation).
-3. Không có cơ chế lọc (Debounce) ở Frontend. Người dùng gõ nhanh vẫn kích hoạt gọi API liên tục.
+**Sự cố:** Power users gõ cả ngày. Mỗi user tạo hàng nghìn request nhỏ. Không có debounce đủ dài, không có per-user token budget, không cache, không model routing, và không có cost attribution theo feature.
 
-**Hậu quả:** Cuối tháng, hóa đơn API tăng thêm 3,000 USD chỉ riêng cho tính năng gợi ý từ, trong khi tính năng này hoàn toàn miễn phí cho người dùng và không tạo ra doanh thu trực tiếp. Startup đứng trước nguy cơ cạn tiền.
+1. Task autocomplete đơn giản nhưng dùng model đắt nhất.
+2. Input tokens quá dài so với output cần 10 tokens.
+3. Không có `max_tokens` cứng và stop sequences.
+4. Không có budget alert theo feature.
+5. Free tier không có hard spend limit.
+
+**Hậu quả:** Hóa đơn tăng 3,000 USD/tháng cho một feature không tạo doanh thu trực tiếp. Team phải tắt feature và thiết kế lại bằng small model + debounce + cache + budget guard.
 </Callout>
 
-Bài học rút ra: Phải phân mảnh giá trị của mô hình. Tác vụ đơn giản (như autocomplete) bắt buộc phải dùng mô hình rẻ tiền hoặc tự host nhỏ. Chỉ dùng mô hình đắt tiền cho các tác vụ cần lý luận logic sâu sắc.
+Bài học rút ra: cost-aware không phải tối ưu sau cùng; nó là requirement kiến trúc. Nếu feature không có cost model, bạn chưa biết nó có thể scale hay không.
 
 ---
 
-## 2. Architecture Blueprint (Kiến trúc giải pháp)
+## 2. Architecture Blueprint (Cost-Aware AI Gateway)
 
-Kiến trúc tối ưu chi phí (Cost-Aware Architecture) sử dụng mô hình **Định tuyến thông minh và Cắt giảm Token**:
+Một kiến trúc cost-aware đặt LLM gateway ở giữa product và model providers:
 
 ```text
-[ User Prompt / Request ]
-         │
-         ▼
-================ [ LỚP 1: PULL-BACK / FILTER (FRONTEND) ] =================
-  ├── Debounce (Chờ user dừng gõ 1.5s mới gửi)
-  └── Rate Limiter per User (Giới hạn tối đa 50 requests/ngày)
-         │
-         ▼ (Nếu đạt yêu cầu)
-================ [ LỚP 2: PROMPT COMPRESSION (MIDDLEWARE) ] =================
-  ├── Loại bỏ từ nối, thông tin lặp trong ngữ cảnh (RAG context compression)
-  └── Max Output Token Gate (Giới hạn cứng max_tokens=150)
-         │
-         ▼ (Nếu nhỏ gọn)
-================ [ LỚP 3: MODEL ROUTER (ĐỊNH TUYẾN PHÂN CẤP) ] =================
-  ├── Easy Task (Dịch thuật, Autocomplete) ──> Route to [ GPT-3.5-Turbo / LLaMA-8B ] (Rẻ x30 lần)
-  └── Hard Task (Lập luận pháp lý, Toán)  ──> Route to [ GPT-4o / Claude-Sonnet ] (Đắt tiền)
+[ Product feature request ]
+        │
+        ▼
+[ Cost-aware gateway ]
+  - estimate input/output tokens
+  - check tenant/user budget
+  - debounce/dedup/idempotency
+  - cache lookup
+  - classify task complexity
+  - choose model/provider
+  - enforce max tokens
+        │
+        ├── cheap/small model
+        ├── frontier model
+        ├── self-host vLLM
+        └── fallback provider
+        │
+        ▼
+[ Observability + billing ]
+  - cost per request
+  - cost per feature
+  - cost per user/tenant
+  - quality and latency metrics
 ```
 
----
-
-## 3. Tooling Landscape (Ma trận Chiến lược Tối ưu)
-
-| Chiến lược | Cơ chế thực thi | Tỷ lệ Tiết kiệm | Rủi ro (SRE Trade-off) |
-|---|---|---|---|
-| **Model Routing** | Phân loại độ khó của câu hỏi (Intent) trước khi chọn model. | **30% - 60%** | Nếu mô hình phân loại (Router) đoán sai, câu hỏi khó có thể bị gửi vào mô hình yếu, làm giảm chất lượng phản hồi. |
-| **Prompt Compression** | Sử dụng thuật toán (như LLMLingua) hoặc regex để cắt bỏ các từ thừa, dữ liệu nhiễu trong prompt trước khi gửi lên API. | **20% - 50%** | Có thể làm mất một vài chi tiết ngữ cảnh nhỏ nếu thuật toán nén quá mạnh tay. |
-| **Exact & Semantic Cache** | Đã học ở chương 13.4. Trả kết quả cũ nếu câu hỏi trùng lặp hoặc tương đương. | **30% - 70%** | Rủi ro dữ liệu bị cũ (Stale data) hoặc lộ thông tin chéo nếu không phân mảnh user. |
-| **Structured Output constraints** | Giới hạn mô hình chỉ được trả về định dạng JSON ngắn gọn, cấm viết thêm câu giải thích thừa. | **10% - 30%** | Yêu cầu mô hình phải hỗ trợ định dạng có cấu trúc tốt (như OpenAI Structured Outputs). |
+Mục tiêu: mỗi request đi qua policy layer trước khi đụng model đắt tiền.
 
 ---
 
-## 4. Implementation Playbook (Thực thi)
+## 3. Unit Economics: Cost per Feature, User and Outcome
 
-Dưới đây là một ví dụ thiết lập một lớp **Model Router** động bằng Python. Hệ thống sẽ phân tích độ phức tạp của câu hỏi và tự động bẻ lái request sang mô hình có chi phí phù hợp nhất.
+Công thức đơn giản:
+
+```text
+request_cost = input_tokens * input_price + output_tokens * output_price + fixed_overhead
+feature_margin = feature_revenue - feature_cost
+```
+
+Nhưng production cần đo theo nhiều chiều:
+
+| Dimension | Câu hỏi |
+|---|---|
+| Feature | tính năng nào đốt tiền nhất? |
+| User/tenant | ai đang vượt budget? |
+| Model | model nào cost cao nhưng quality không hơn? |
+| Prompt version | prompt mới có làm cost tăng? |
+| Cache status | cache hit đã tiết kiệm bao nhiêu? |
+| Outcome | cost per successful task là bao nhiêu? |
+
+Ví dụ: chatbot support có cost/request thấp nhưng giải quyết nhiều ticket; legal analysis có cost/request cao nhưng user trả phí premium. Không thể tối ưu cost tách khỏi giá trị business.
+
+---
+
+## 4. Model Routing by Task Value
+
+Không có “best model” cho mọi request. Có model phù hợp với từng task.
+
+| Task | Model phù hợp | Lý do |
+|---|---|---|
+| autocomplete | small/fast model, local/edge nếu được | output ngắn, latency thấp |
+| rewrite/format | cheap LLM | ít reasoning |
+| FAQ public | cache + small model/RAG | lặp lại nhiều |
+| legal/medical reasoning | frontier model + citations | high risk |
+| extraction JSON | cheap model nếu schema đơn giản | structured, eval được |
+| escalation/high-value customer | stronger model/human | value cao |
+
+Router có thể dùng:
+
+- rules/heuristics,
+- small classifier,
+- embedding similarity to task clusters,
+- LLM judge/router nhẹ,
+- user tier/business value,
+- budget remaining.
+
+Router phải được eval. Nếu route sai câu khó sang model yếu, cost giảm nhưng quality giảm âm thầm.
+
+---
+
+## 5. Token Budgets and Prompt Compression
+
+Token là đơn vị tiền tệ của AI system.
+
+Các chiến lược giảm token:
+
+| Strategy | Cách làm | Rủi ro |
+|---|---|---|
+| Max input length | truncate theo policy | mất context quan trọng |
+| RAG top-k nhỏ hơn | lấy ít chunks hơn | recall giảm |
+| Reranking | giữ chunks chất lượng hơn | thêm latency/cost |
+| Contextual compression | nén context trước LLM lớn | mất chi tiết nếu nén sai |
+| Summary memory | tóm tắt history dài | mất nuance |
+| Structured output | JSON ngắn thay vì văn xuôi | cần schema validation |
+| `max_tokens` | giới hạn output | answer có thể cụt nếu quá thấp |
+
+<Callout type="warning" title="Nén prompt trong domain số liệu cần cực kỳ cẩn thận">
+Văn bản tài chính/pháp lý/y tế thường phụ thuộc vào từ phủ định, con số nhỏ và điều kiện ngoại lệ. Compression mù quáng có thể xóa đúng phần quan trọng nhất.
+</Callout>
+
+---
+
+## 6. Budgets, Quotas and Hard Spend Limits
+
+Cost-aware architecture cần guardrails cứng:
+
+```text
+free user:
+  max 100 requests/day
+  max 50,000 tokens/day
+  cheap models only
+
+pro user:
+  max 2,000 requests/day
+  max 2,000,000 tokens/month
+  frontier model allowed for premium workflows
+
+enterprise tenant:
+  monthly budget cap
+  per-feature budgets
+  alert at 50/80/100 percent
+  allow overage only with contract setting
+```
+
+Budget checks nên nằm trước LLM call:
+
+```text
+estimate tokens -> check remaining budget -> choose model -> enforce max_tokens -> log actual cost
+```
+
+Nếu chỉ log sau khi gọi model, bạn đã tiêu tiền rồi.
+
+---
+
+## 7. Cost Observability and Alerts
+
+Metrics bắt buộc:
+
+| Metric | Alert ví dụ |
+|---|---|
+| cost/hour | tăng hơn 3 lần baseline |
+| cost/feature/day | vượt budget feature |
+| cost/user/day | user bất thường hoặc abuse |
+| input/output tokens/request | prompt regression làm dài context |
+| cache hit savings | hit rate giảm bất thường |
+| model mix | frontier model share tăng đột biến |
+| retry cost | provider lỗi gây retry storm |
+| cost per successful task | feature không còn profitable |
+
+Cost dashboard nên gắn với release version. Khi prompt v14 làm output dài hơn 2 lần, bạn cần biết ngay.
+
+---
+
+## Implementation Playbook: Cost Router + Budget Guard
+
+### Bước 1: Pricing config theo provider/model
 
 ```python
-import os
-from openai import OpenAI
-
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
-# Bảng giá ước tính trên 1 triệu tokens (USD)
-PRICING = {
-    "gpt-4o": {"input": 5.0, "output": 15.0},
-    "gpt-4o-mini": {"input": 0.15, "output": 0.60} # Rẻ hơn khoảng 30 lần!
+PRICING_PER_1M = {
+    "gpt-4o": {"input": 5.00, "output": 15.00},
+    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+    "claude-sonnet": {"input": 3.00, "output": 15.00},
+    "local-llama-8b": {"input": 0.05, "output": 0.10},
 }
 
-def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    rates = PRICING.get(model, {"input": 10.0, "output": 30.0})
-    input_cost = (input_tokens / 1_000_000) * rates["input"]
-    output_cost = (output_tokens / 1_000_000) * rates["output"]
-    return input_cost + output_cost
 
-def select_model_router(user_query: str) -> str:
-    """
-    Router phân loại nhanh.
-    Trong thực tế, bạn có thể train một mô hình nhỏ (BERT) để phân loại intent.
-    Ở đây dùng một bộ quy tắc (heuristics) đơn giản.
-    """
-    query_len = len(user_query.split())
-    
-    # Kịch bản: Câu hỏi ngắn và chứa các từ khóa đơn giản
-    easy_keywords = ["hello", "xin chào", "tóm tắt", "dịch", "translate", "format"]
-    is_easy = any(kw in user_query.lower() for kw in easy_keywords)
-    
-    if is_easy and query_len < 100:
-        return "gpt-4o-mini" # Chọn mô hình siêu rẻ
-    
-    return "gpt-4o" # Chọn mô hình thông minh hàng đầu
+def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+    price = PRICING_PER_1M[model]
+    return (input_tokens / 1_000_000) * price["input"] + (output_tokens / 1_000_000) * price["output"]
+```
 
-# ----- Chạy thử nghiệm -----
-queries = [
-    "Dịch câu sau sang tiếng Anh: 'Hôm nay trời mưa rất to.'",
-    "Hãy lập luận và phân tích rủi ro pháp lý của điều khoản bất khả kháng trong hợp đồng thương mại quốc tế đính kèm dưới đây..."
-]
+### Bước 2: Model router theo task và budget
 
-for q in queries:
-    selected_model = select_model_router(q)
-    # Giả lập số lượng tokens
-    est_cost = estimate_cost(selected_model, input_tokens=1000, output_tokens=200)
-    print(f"Query: '{q[:30]}...' -> Route to: {selected_model} | Est Cost: {est_cost:.5f}")
+```python
+def choose_model(task_type: str, risk_level: str, user_tier: str, remaining_budget_usd: float) -> str:
+    if remaining_budget_usd <= 0:
+        raise PermissionError("Budget exhausted")
+
+    if task_type in {"autocomplete", "format", "rewrite"}:
+        return "gpt-4o-mini"
+
+    if risk_level == "high" and user_tier in {"pro", "enterprise"}:
+        return "gpt-4o"
+
+    if task_type == "faq" and remaining_budget_usd < 1.0:
+        return "local-llama-8b"
+
+    return "gpt-4o-mini"
+```
+
+### Bước 3: Gateway policy trước khi gọi model
+
+```python
+def handle_ai_request(user, task_type: str, prompt: str, requested_max_tokens: int):
+    input_tokens = estimate_tokens(prompt)
+    max_tokens = min(requested_max_tokens, user.plan.max_output_tokens)
+
+    model = choose_model(
+        task_type=task_type,
+        risk_level=classify_risk(prompt),
+        user_tier=user.plan.name,
+        remaining_budget_usd=user.remaining_budget_usd,
+    )
+
+    estimated = estimate_cost_usd(model, input_tokens, max_tokens)
+    if estimated > user.remaining_budget_usd:
+        return {"error": "budget_exceeded", "estimated_cost": estimated}
+
+    cached = lookup_cache(user, task_type, prompt)
+    if cached:
+        log_cost_saved(user.id, model, estimated)
+        return cached
+
+    response = call_llm(model=model, prompt=prompt, max_tokens=max_tokens)
+    actual_cost = estimate_cost_usd(model, response.input_tokens, response.output_tokens)
+    record_usage(user.id, task_type, model, actual_cost)
+    return response.text
+```
+
+### Bước 4: Alert rules
+
+```text
+Alert: feature_cost_spike
+Condition: cost_per_hour(feature) > 3x rolling_7d_baseline for 15 minutes
+Action: page feature owner, downgrade model route if auto-policy enabled
+
+Alert: tenant_budget_80_percent
+Condition: tenant_monthly_spend > 0.8 * tenant_budget
+Action: notify customer success and tenant admin
+
+Alert: frontier_model_share_spike
+Condition: frontier_model_requests / total_requests > expected + 20 percent
+Action: inspect router regression
 ```
 
 ---
 
-## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## Project Guide: Cost Calculator Tool (Phase 13 Medium)
 
-Tối ưu chi phí quá mức có thể phản tác dụng và gây hại cho chất lượng dịch vụ (QoS).
+Mục tiêu project: xây tool ước tính chi phí AI API theo provider, model, feature, user và usage assumptions.
 
-<Callout type="warning" title="Pitfall 1: Sự sụt giảm chất lượng âm thầm (Quality Drift)">
-**Triệu chứng:** Hóa đơn API giảm 50% đúng kế hoạch. Tuy nhiên, tỉ lệ người dùng bấm nút Thumbs-down hoặc gửi phản hồi khiếu nại tăng vọt.
-**Nguyên nhân:** Bộ định tuyến (Router) phân loại sai quá nhiều câu hỏi trung bình-khó sang mô hình yếu. Mô hình yếu sinh ra câu trả lời hời hợt hoặc sai logic.
-**Cách khắc phục (Fix):** Thiết lập một hệ thống **Shadow Evaluation**. Chạy song song: Cứ mỗi 100 requests được route sang mô hình rẻ, hệ thống tự động gửi 1 request ngẫu nhiên sang mô hình đắt tiền để so sánh kết quả. Nếu độ lệch chất lượng (semantic distance) vượt ngưỡng cho phép, tự động nâng cấp độ nhạy của Router.
+### Requirements
+
+- Backend FastAPI lưu pricing table cho OpenAI, Anthropic, Gemini, Cohere hoặc self-host estimates.
+- Frontend React cho phép nhập:
+  - model/provider,
+  - input tokens/request,
+  - output tokens/request,
+  - requests/user/day,
+  - number of users,
+  - cache hit rate,
+  - percentage routed to each model.
+- Output:
+  - cost/request,
+  - cost/user/month,
+  - cost/feature/month,
+  - savings from cache/routing,
+  - break-even estimate nếu có revenue/user.
+
+### Suggested architecture
+
+```text
+[ React UI ] -> [ FastAPI cost API ] -> [ Pricing config JSON/Postgres ]
+                     │
+                     └── scenario calculator + report export
+```
+
+### Example pricing config
+
+```json
+{
+  "models": {
+    "gpt-4o-mini": {"input_per_1m": 0.15, "output_per_1m": 0.60},
+    "gpt-4o": {"input_per_1m": 5.00, "output_per_1m": 15.00}
+  }
+}
+```
+
+### Acceptance criteria
+
+- Có ít nhất 4 providers/models.
+- Có cache hit rate và model routing mix.
+- Có chart hoặc table so sánh scenarios.
+- Có cảnh báo nếu gross margin âm.
+- Pricing config tách khỏi code để update dễ.
+
+Stretch goal: import CSV usage logs thật và tính cost theo feature/user.
+
+---
+
+## Project Guide: Full AI System Design Implementation (Phase 13 Hard)
+
+Mục tiêu project: chọn một classic design và triển khai phiên bản production-grade nhỏ nhưng đầy đủ design decisions.
+
+### Chọn một bài toán
+
+- Enterprise RAG Knowledge Base,
+- AI Customer Support Router,
+- PDF Q&A at Scale,
+- Meeting Summarizer Async Pipeline,
+- Multi-LLM Gateway.
+
+### Must-have architecture components
+
+1. API gateway/backend với auth giả lập và request id.
+2. Một AI component chính: RAG, router, LLM gateway hoặc async worker.
+3. Caching hoặc dedup layer.
+4. Async path nếu task dài.
+5. Cost tracking theo request/model/feature.
+6. Basic monitoring dashboard/logs.
+7. Eval sanity set hoặc regression tests.
+8. ADRs cho ít nhất 3 quyết định:
+   - model selection,
+   - caching/async decision,
+   - cost/security trade-off.
+
+### Example stack
+
+```text
+FastAPI
+Postgres
+Redis
+Qdrant or pgvector
+OpenAI/vLLM-compatible API
+Docker Compose
+Grafana/Langfuse optional
+```
+
+### Acceptance criteria
+
+- README có architecture diagram và runbook.
+- Có `/healthz` và `/readyz`.
+- Có cost log cho mỗi request.
+- Có rollback/degrade plan khi provider lỗi.
+- Có ít nhất một eval script chặn regression đơn giản.
+- Có ADR files trong `docs/adr/`.
+
+Stretch goal: deploy lên Kubernetes hoặc Cloud Run, thêm canary config và budget alert giả lập.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Router tiết kiệm tiền nhưng quality drift âm thầm">
+**Triệu chứng:** Bill giảm 50% nhưng thumbs-down rate tăng mạnh.
+
+**Fix:** Shadow eval một phần request cheap-model bằng strong model, theo dõi quality delta và tune router thresholds.
 </Callout>
 
-<Callout type="warning" title="Pitfall 2: 'Nén' mất thông tin cốt lõi (Lossy Compression)">
-**Triệu chứng:** Bạn dùng thuật toán nén prompt để cắt bớt 50% từ thừa của tài liệu RAG trước khi gửi lên LLM. Kết quả là mô hình trả lời sai số liệu tài chính.
-**Nguyên nhân:** Thuật toán nén dựa trên tần suất từ (TF-IDF/BERT) đã vô tình xóa bỏ các trạng từ phủ định (như "không", "chưa") hoặc các con số nhỏ vốn có ý nghĩa quan trọng trong văn bản tài chính.
-**Cách khắc phục (Fix):** Đối với các tài liệu chứa dữ liệu cấu trúc (số liệu, mã lệnh), tắt tính năng nén từ tự động. Chỉ áp dụng nén cho các văn bản tự sự, mô tả hoặc hội thoại tự do.
+<Callout type="warning" title="Pitfall 2: Prompt compression xóa mất phủ định hoặc số liệu quan trọng">
+**Triệu chứng:** Model trả sai điều khoản tài chính/pháp lý sau khi bật compression.
+
+**Fix:** Không nén mù quáng domain số liệu/high-risk; dùng extraction/reranking thay vì summarization lossy; eval trước rollout.
 </Callout>
 
-<Callout type="danger" title="Pitfall 3: Wallet Drain (Người dùng phá hoại ngân sách)">
-**Triệu chứng:** Một kẻ tấn công viết script gửi hàng vạn câu hỏi dài dằng dặc lên hệ thống của bạn để phá hoại tài chính (DDoS cost attack).
-**Cách khắc phục (Fix):** Thiết lập hạn mức **Hard Spend Limits (Hạn mức chi tiêu cứng)** per user ở tầng API Gateway. Chặn ngay lập tức nếu một tài khoản tiêu tốn quá 1 USD/ngày, bất kể họ là khách hàng trả phí hay miễn phí.
+<Callout type="danger" title="Pitfall 3: Wallet drain attack qua prompt dài và retry">
+**Triệu chứng:** Một user mới tạo hàng nghìn request dài, bill tăng trước khi rate limit phát hiện.
+
+**Fix:** Hard spend limit trước LLM call, max input/output tokens, per-user/day budget, anomaly detection và captcha/verification cho free tier.
 </Callout>
 
 ---
 
-## 6. Cost & Performance Unit Economics
+## Cost / Quality / Margin Unit Economics
 
-Tối ưu FinOps cho AI là việc liên tục theo dõi và kiểm soát biểu đồ chi phí:
+| Lever | Savings potential | Quality risk | Guardrail |
+|---|---|---|---|
+| Model routing | cao | route sai task khó | golden eval per route |
+| Exact cache | trung bình-cao | stale data | versioned keys + TTL |
+| Semantic cache | cao | false hit/privacy | scope filter + threshold |
+| Prompt compression | trung bình | mất context | domain-aware eval |
+| Max output tokens | trung bình | answer cụt | task-specific limits |
+| Self-host small model | cao ở scale | ops complexity | compare TCO with APIs |
+| Async batching | trung bình | wait time | SLA and queue metrics |
+| Budget caps | bảo vệ tài chính | user bị chặn | transparent UX and upgrade path |
 
-| Chỉ số Tài chính | Phân tích SRE (Ý nghĩa kinh tế) | Hành động (Action) |
-|---|---|---|
-| **Input vs Output Cost** | Output tokens luôn đắt gấp 3 lần Input tokens. Nếu người dùng hỏi câu ngắn nhưng mô hình viết bài dài lê thê, bạn đang chịu lỗ. | Thêm chỉ thị nghiêm ngặt vào System Prompt: *"Hãy trả lời cực kỳ ngắn gọn dưới 3 câu"* hoặc ràng buộc bằng `max_tokens` của API. |
-| **Inference Price Volatility** | Các nhà cung cấp (như OpenAI/Anthropic) liên tục giảm giá API của họ theo chu kỳ năm. | Thiết kế hệ thống thông qua **LLM Gateway** (đã học ở Phase 7). Khi OpenAI giảm giá GPT-4o xuống thấp hơn Claude, chỉ cần thay đổi cấu hình Routing trên Gateway để chuyển hướng 100% traffic ngay lập tức mà không cần sửa code. |
+Cost-aware architecture không đơn giản là “rẻ hơn”. Nó tối ưu cost dưới ràng buộc quality, latency, safety và business value.
+
+---
+
+## Practice exercises
+
+1. Tính cost/month cho chatbot có 100,000 requests/day, mỗi request 1,000 input tokens và 300 output tokens.
+2. Thiết kế model routing policy cho Free, Pro và Enterprise tiers.
+3. Lập budget guard cho autocomplete feature miễn phí.
+4. So sánh savings nếu exact cache hit 20% và semantic cache hit 15%.
+5. Viết ADR chọn self-host small model cho intent classification.
+
+---
+
+## Knowledge check
+
+1. Vì sao cost-aware architecture phải nằm ở gateway/policy layer?
+2. Model routing có rủi ro gì?
+3. Vì sao output tokens thường cần giới hạn chặt?
+4. Hard spend limit khác gì budget alert?
+5. Cost per successful task hữu ích hơn cost per request khi nào?
+
+---
+
+## Answer key
+
+1. Vì cần estimate, budget check, cache, route và enforce limits trước khi gọi model đắt tiền.
+2. Router có thể gửi task khó sang model yếu, làm quality giảm hoặc safety fail.
+3. Output tokens thường đắt hơn input và model có thể verbose nếu không giới hạn.
+4. Hard limit chặn request khi vượt ngân sách; alert chỉ thông báo sau/ngay khi tiến gần ngưỡng.
+5. Khi request có thể fail/retry hoặc feature tạo business outcome khác nhau; cost cần gắn với giá trị đạt được.
 
 ---
 
 ## Điểm cần nhớ
 
-- **Cost-Awareness là tư duy sản xuất:** Không có mô hình nào tốt nhất cho mọi việc; chỉ có mô hình tối ưu nhất dưới ràng buộc ngân sách.
-- **Model Routing** giúp tối ưu hóa chi phí bằng cách phân chia độ khó tác vụ sang các tầng model rẻ/đắt tương ứng.
-- **Prompt Compression** giúp giảm dung lượng đầu vào nhưng phải cẩn trọng với các tài liệu nhạy cảm chứa số liệu và từ phủ định.
-- Luôn thiết lập hạn mức chi phí cứng (Hard Limits) trên từng định danh người dùng để chống lại các cuộc tấn công phá hoại tài chính (Wallet Drain attacks).
+- AI cost tăng theo từng request/token; phải thiết kế guardrails từ đầu.
+- Không có model tốt nhất cho mọi task; model routing là đòn bẩy margin lớn.
+- Token budgets, cache, compression và max tokens cần đi cùng eval để không giảm quality âm thầm.
+- Cost observability phải theo feature/user/tenant/model/prompt version.
+- Phase 13 Medium là cost calculator; Phase 13 Hard là triển khai một AI system design production-grade với ADRs.
 
 ---
 
 ## Tổng kết Phase 13 (Phase 13 Wrap-up)
 
-Bạn vừa hoàn thành toàn bộ chuyên đề **AI System Design (Thiết kế hệ thống AI quy mô lớn)**:
+Bạn vừa hoàn thành chuyên đề **AI System Design** — năng lực ghép mọi kiến thức trước đó thành kiến trúc có thể giải thích, review và triển khai:
 
-1. **AI System Design Framework:** Làm chủ 5 bước thiết kế hệ thống từ làm rõ yêu cầu, vẽ luồng dữ liệu đến giám sát.
-2. **Classic AI System Designs:** Mổ xẻ 3 bản thiết kế kinh điển: Chatbot với Redis memory, RAG ở quy mô lớn, và hệ thống phân loại Intent Router.
-3. **Inference Placement Strategy:** Phân tích tradeoffs và lai ghép (Hybrid) vị trí đặt mô hình giữa Server, Edge và Client.
-4. **Caching Strategies:** Thiết kế hệ thống cache đa tầng kết hợp Exact Cache (Redis) và Semantic Cache (Vector DB).
-5. **Async AI Architecture:** Chuyển đổi toàn bộ luồng xử lý nặng sang kiến trúc bất đồng bộ (Task Queue, Webhooks) để chống nghẽn server.
-6. **Cost-Aware Architecture:** Ứng dụng mô hình Router phân cấp và kiểm soát ngân sách token để tối ưu hóa tối đa FinOps.
+1. **AI System Design Framework:** bắt đầu từ requirements, constraints, NFRs, data flow, model decisions, reliability, security và cost.
+2. **Classic AI System Designs:** chatbot memory, enterprise RAG, PDF Q&A, customer support router và multi-LLM gateway.
+3. **Inference Placement Strategy:** server, edge, client, async worker và hybrid placement theo latency/privacy/cost/model size.
+4. **Caching Strategies:** exact cache, semantic cache, prompt cache, RAG cache, invalidation và tenant isolation.
+5. **Async AI Architecture:** queue, task lifecycle, polling/webhook/SSE, retries, idempotency và worker autoscaling.
+6. **Cost-Aware Architecture:** model routing, token budgets, spend limits, cost dashboard và unit economics.
+
+Sau Phase 13, bạn không chỉ biết xây một component AI. Bạn biết thiết kế cả hệ thống: từ user request đến model, cache, queue, storage, eval, monitoring, fallback và cost controls.
+
+---
 
 ## Next phase bridge
 
-Chúng ta đã làm chủ toàn bộ kỹ năng từ lập trình PyTorch, thiết kế RAG, viết Agent, tối ưu hạ tầng MLOps, cho đến thiết kế hệ thống AI quy mô lớn trên Cloud. Tuy nhiên, tất cả các hệ thống này đều có một điểm chung: Chúng cần lưu trữ, truy xuất và thao tác dữ liệu một cách kiên cố. Đã đến lúc chúng ta quay về với cội nguồn của mọi hệ thống thông tin: Dữ liệu cấu trúc. Chương tiếp theo: **Phase 14 - SQL & Databases for AI Engineers** — làm chủ ngôn ngữ SQL, truy vấn nâng cao (CTEs, Window functions), và cách sử dụng pgvector để lưu trữ embeddings trực tiếp bên trong cơ sở dữ liệu PostgreSQL của bạn.
+AI system nào cũng cần lưu trữ và truy vấn dữ liệu có cấu trúc: users, conversations, prompt versions, usage logs, billing, tasks, document metadata, eval results và vector embeddings. Nếu không biết database design và SQL, bạn sẽ khó debug cost, khó audit behavior và khó xây analytics cho production. Phase tiếp theo: **SQL & Databases for AI Engineers** — nơi chúng ta làm chủ SQL core, advanced queries, pgvector, schema design cho AI apps và lựa chọn SQL vs NoSQL trong hệ thống thật.

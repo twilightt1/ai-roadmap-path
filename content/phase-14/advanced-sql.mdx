@@ -1,0 +1,470 @@
+Khi AI product đi vào production, các câu hỏi không còn dừng ở “tháng này tốn bao nhiêu tiền?”. Bạn cần biết chi phí tăng từ lúc nào, user nào gây spike, feature nào tạo latency tail, request nào là retry, và hội thoại nào dẫn tới lỗi. Những câu hỏi này đòi hỏi SQL nâng cao: CTEs, window functions, recursive queries và conditional logic.
+
+Advanced SQL không phải để khoe cú pháp. Nó là cách bạn debug một hệ thống AI đang chạy thật mà không cần export dữ liệu sang notebook mỗi lần có sự cố.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Cost tăng 40% nhưng không ai biết vì sao">
+**Bối cảnh:** Một nền tảng chatbot enterprise có dashboard tổng chi phí theo ngày. Tuần này, tổng spend tăng 40% so với tuần trước.
+
+**Sự cố:** Dashboard chỉ có query `SUM(cost_usd) GROUP BY day`. Không có breakdown theo user cohort, feature, model tier, retry pattern hay rolling average.
+
+1. Product team nghi ngờ do tăng traffic.
+2. Infra team nghi ngờ provider đổi giá.
+3. AI team nghi ngờ prompt mới dài hơn.
+
+Sau 6 giờ điều tra thủ công, nguyên nhân thật là một prompt version mới làm output dài hơn 3 lần cho riêng feature “contract_review”.
+
+**Hậu quả:** Hệ thống không sập, nhưng mất một ngày kỹ sư senior để trả lời một câu hỏi lẽ ra SQL có thể trả lời trong 30 giây.
+</Callout>
+
+Bài học rút ra: Aggregate cơ bản cho bạn con số. SQL nâng cao cho bạn bối cảnh, xu hướng và nguyên nhân.
+
+---
+
+## 2. Architecture Blueprint (SQL như Data Pipeline)
+
+Hãy xem một query phân tích production AI telemetry như pipeline nhiều bước:
+
+```text
+[ raw model_calls ]
+       │
+       ▼
+[ normalized_calls ]
+  - chuẩn hóa status
+  - tính total_tokens
+  - gán model_tier
+       │
+       ▼
+[ daily_feature_metrics ]
+  - group theo ngày/feature/model_tier
+       │
+       ▼
+[ trend_analysis ]
+  - rolling average
+  - LAG so với ngày trước
+       │
+       ▼
+[ anomaly_report ]
+  - xếp hạng spike
+  - đánh dấu feature bất thường
+```
+
+CTE (`WITH`) giúp bạn viết pipeline này trong một câu SQL có thể review, test và đưa vào dashboard.
+
+---
+
+## 3. CTEs: SQL như một Data Pipeline
+
+CTE giúp chia query phức tạp thành từng bước có tên rõ ràng.
+
+```sql
+WITH normalized_calls AS (
+  SELECT
+    id,
+    user_id,
+    feature,
+    model,
+    created_at::date AS day,
+    COALESCE(input_tokens, 0) AS input_tokens,
+    COALESCE(output_tokens, 0) AS output_tokens,
+    COALESCE(cost_usd, 0) AS cost_usd,
+    CASE
+      WHEN model LIKE '%mini%' OR model LIKE '%haiku%' THEN 'cheap'
+      WHEN model LIKE '%gpt-4%' OR model LIKE '%sonnet%' THEN 'premium'
+      ELSE 'standard'
+    END AS model_tier
+  FROM model_calls
+  WHERE created_at >= now() - interval '30 days'
+), daily_feature_metrics AS (
+  SELECT
+    day,
+    feature,
+    model_tier,
+    COUNT(*) AS calls,
+    SUM(input_tokens + output_tokens) AS total_tokens,
+    SUM(cost_usd) AS cost_usd
+  FROM normalized_calls
+  GROUP BY day, feature, model_tier
+)
+SELECT *
+FROM daily_feature_metrics
+ORDER BY day DESC, cost_usd DESC;
+```
+
+<Callout type="tip" title="CTE tốt là CTE có ý nghĩa nghiệp vụ">
+Tên CTE như `step1`, `tmp`, `x` khiến query khó review. Hãy đặt tên theo ý nghĩa production: `normalized_calls`, `daily_cost`, `ranked_users`, `anomaly_candidates`.
+</Callout>
+
+---
+
+## 4. Window Functions for AI Telemetry
+
+Window function tính metric “trên một cửa sổ dữ liệu” mà vẫn giữ từng dòng chi tiết. Đây là khác biệt lớn so với `GROUP BY`.
+
+```sql
+SELECT
+  user_id,
+  created_at,
+  cost_usd,
+  SUM(cost_usd) OVER (
+    PARTITION BY user_id
+    ORDER BY created_at
+  ) AS running_user_cost
+FROM model_calls
+WHERE created_at >= date_trunc('month', now())
+ORDER BY user_id, created_at;
+```
+
+Các window functions thường dùng:
+
+| Function | Ứng dụng trong AI system |
+|---|---|
+| `ROW_NUMBER()` | Lấy request mới nhất của mỗi conversation/user |
+| `RANK()` | Xếp hạng user theo spend, giữ khoảng trống khi hòa |
+| `DENSE_RANK()` | Xếp hạng không tạo khoảng trống khi hòa |
+| `LAG()` | So sánh cost/latency với dòng trước |
+| `LEAD()` | Nhìn sự kiện kế tiếp trong session |
+| `SUM() OVER` | Running cost theo user/feature |
+| `AVG() OVER` | Rolling latency/cost average |
+
+Ví dụ tìm top user theo spend mỗi ngày:
+
+```sql
+WITH daily_user_cost AS (
+  SELECT
+    created_at::date AS day,
+    user_id,
+    SUM(cost_usd) AS spend_usd
+  FROM model_calls
+  WHERE created_at >= now() - interval '14 days'
+  GROUP BY created_at::date, user_id
+), ranked AS (
+  SELECT
+    day,
+    user_id,
+    spend_usd,
+    DENSE_RANK() OVER (
+      PARTITION BY day
+      ORDER BY spend_usd DESC
+    ) AS spend_rank
+  FROM daily_user_cost
+)
+SELECT *
+FROM ranked
+WHERE spend_rank <= 10
+ORDER BY day DESC, spend_rank;
+```
+
+---
+
+## 5. PARTITION BY vs GROUP BY
+
+`GROUP BY` gom nhiều dòng thành một dòng. `PARTITION BY` giữ từng dòng, nhưng thêm ngữ cảnh tính toán.
+
+```sql
+-- GROUP BY: mất chi tiết từng request
+SELECT user_id, SUM(cost_usd) AS total_cost
+FROM model_calls
+GROUP BY user_id;
+
+-- PARTITION BY: giữ từng request, thêm total của user
+SELECT
+  id,
+  user_id,
+  cost_usd,
+  SUM(cost_usd) OVER (PARTITION BY user_id) AS user_total_cost
+FROM model_calls;
+```
+
+Trong AI telemetry, bạn dùng:
+
+- `GROUP BY` để tạo dashboard summary.
+- `PARTITION BY` để debug từng dòng trong bối cảnh user/session/feature.
+
+<Callout type="info" title="Mental model">
+Nếu câu hỏi là “mỗi user tốn bao nhiêu?” dùng `GROUP BY`. Nếu câu hỏi là “request này chiếm bao nhiêu phần trăm tổng chi phí của user?” dùng window function với `PARTITION BY`.
+</Callout>
+
+---
+
+## 6. Rolling Metrics and Anomaly Detection
+
+Một spike đơn lẻ không đáng báo động nếu traffic tăng đều. Điều bạn cần là so sánh với baseline.
+
+```sql
+WITH daily_feature_cost AS (
+  SELECT
+    created_at::date AS day,
+    feature,
+    SUM(cost_usd) AS cost_usd
+  FROM model_calls
+  WHERE created_at >= now() - interval '30 days'
+  GROUP BY created_at::date, feature
+), with_baseline AS (
+  SELECT
+    day,
+    feature,
+    cost_usd,
+    AVG(cost_usd) OVER (
+      PARTITION BY feature
+      ORDER BY day
+      ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+    ) AS avg_cost_previous_7_days
+  FROM daily_feature_cost
+)
+SELECT
+  day,
+  feature,
+  cost_usd,
+  avg_cost_previous_7_days,
+  ROUND(cost_usd / NULLIF(avg_cost_previous_7_days, 0), 2) AS spike_ratio
+FROM with_baseline
+WHERE avg_cost_previous_7_days IS NOT NULL
+  AND cost_usd > 1.5 * avg_cost_previous_7_days
+ORDER BY spike_ratio DESC;
+```
+
+Window frame `ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING` rất quan trọng: baseline không được bao gồm chính ngày đang kiểm tra, nếu không spike sẽ tự làm trung bình tăng lên và che mất bất thường.
+
+---
+
+## 7. Recursive CTEs for Conversations and Agents
+
+AI conversations không phải lúc nào cũng là danh sách tuyến tính. Agent có thể gọi tool, tool trả kết quả, agent gọi tool tiếp, và mỗi node có `parent_message_id`.
+
+```sql
+WITH RECURSIVE conversation_tree AS (
+  SELECT
+    id,
+    parent_message_id,
+    role,
+    content,
+    created_at,
+    0 AS depth,
+    ARRAY[id] AS path
+  FROM messages
+  WHERE conversation_id = 'conv_123'
+    AND parent_message_id IS NULL
+
+  UNION ALL
+
+  SELECT
+    m.id,
+    m.parent_message_id,
+    m.role,
+    m.content,
+    m.created_at,
+    t.depth + 1 AS depth,
+    t.path || m.id AS path
+  FROM messages m
+  JOIN conversation_tree t ON m.parent_message_id = t.id
+  WHERE NOT m.id = ANY(t.path)
+)
+SELECT id, role, depth, left(content, 120) AS preview
+FROM conversation_tree
+ORDER BY path;
+```
+
+Recursive CTE hữu ích cho:
+
+- Hiển thị conversation tree.
+- Debug agent/tool-call hierarchy.
+- Tìm vòng lặp tool call bất thường.
+- Tính độ sâu hội thoại trước khi context bị quá dài.
+
+---
+
+## 8. Conditional SQL: CASE WHEN, COALESCE, Subqueries
+
+Production data luôn bẩn: provider thiếu token count, model name đổi, error code null, user bị xóa. Conditional SQL giúp chuẩn hóa trước khi phân tích.
+
+```sql
+SELECT
+  id,
+  provider,
+  model,
+  CASE
+    WHEN status = 'success' THEN 'ok'
+    WHEN error_code IN ('rate_limit', 'quota_exceeded') THEN 'capacity_issue'
+    WHEN error_code IS NOT NULL THEN 'provider_error'
+    ELSE 'unknown'
+  END AS normalized_status,
+  COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) AS total_tokens
+FROM model_calls;
+```
+
+Subquery không tương quan phù hợp để so sánh với global baseline:
+
+```sql
+SELECT id, user_id, cost_usd
+FROM model_calls
+WHERE cost_usd > (
+  SELECT AVG(cost_usd) * 10
+  FROM model_calls
+  WHERE created_at >= now() - interval '7 days'
+);
+```
+
+Correlated subquery có thể đọc tự nhiên nhưng dễ chậm ở dataset lớn:
+
+```sql
+SELECT c.*
+FROM model_calls c
+WHERE c.cost_usd > (
+  SELECT AVG(c2.cost_usd) * 5
+  FROM model_calls c2
+  WHERE c2.user_id = c.user_id
+);
+```
+
+Nếu query này chậm, hãy chuyển sang CTE + join hoặc window function.
+
+---
+
+## 9. Implementation Playbook (Thực thi)
+
+Playbook dưới đây trả lời câu hỏi: “Feature nào làm cost tăng bất thường tuần này?”
+
+```sql
+WITH normalized AS (
+  SELECT
+    created_at::date AS day,
+    feature,
+    prompt_version_id,
+    COALESCE(input_tokens, 0) AS input_tokens,
+    COALESCE(output_tokens, 0) AS output_tokens,
+    COALESCE(cost_usd, 0) AS cost_usd
+  FROM model_calls
+  WHERE created_at >= now() - interval '21 days'
+), daily AS (
+  SELECT
+    day,
+    feature,
+    prompt_version_id,
+    COUNT(*) AS calls,
+    SUM(input_tokens) AS input_tokens,
+    SUM(output_tokens) AS output_tokens,
+    SUM(cost_usd) AS cost_usd
+  FROM normalized
+  GROUP BY day, feature, prompt_version_id
+), trend AS (
+  SELECT
+    *,
+    LAG(cost_usd) OVER (
+      PARTITION BY feature
+      ORDER BY day
+    ) AS previous_day_cost,
+    AVG(cost_usd) OVER (
+      PARTITION BY feature
+      ORDER BY day
+      ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+    ) AS baseline_cost
+  FROM daily
+)
+SELECT
+  day,
+  feature,
+  prompt_version_id,
+  calls,
+  input_tokens,
+  output_tokens,
+  cost_usd,
+  previous_day_cost,
+  baseline_cost,
+  ROUND(cost_usd / NULLIF(baseline_cost, 0), 2) AS baseline_ratio
+FROM trend
+WHERE baseline_cost IS NOT NULL
+  AND cost_usd > baseline_cost * 1.4
+ORDER BY baseline_ratio DESC;
+```
+
+Đây là dạng query bạn có thể đưa thẳng vào Metabase/Grafana để cảnh báo FinOps cho AI.
+
+---
+
+## 10. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Window frame mặc định gây sai rolling sum">
+**Triệu chứng:** Rolling metric nhảy kỳ lạ khi nhiều dòng có cùng timestamp.
+
+**Nguyên nhân:** Nếu không chỉ định frame, database có thể dùng frame mặc định theo `RANGE`, gom các dòng có cùng giá trị `ORDER BY`.
+
+**Cách khắc phục:** Khi cần rolling theo số dòng, ghi rõ `ROWS BETWEEN ...`. Khi cần rolling theo thời gian, cân nhắc pre-aggregate theo ngày/giờ trước.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Correlated subquery chạy O(n²)">
+**Triệu chứng:** Query chạy tốt trên 10,000 dòng nhưng treo khi bảng lên 10 triệu dòng.
+
+**Nguyên nhân:** Subquery bị chạy lại cho từng dòng ngoài.
+
+**Cách khắc phục:** Dùng CTE để tính baseline một lần, rồi join lại. Hoặc dùng window function nếu metric cùng partition.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Ranking sai vì không hiểu ties">
+**Triệu chứng:** Dashboard top 10 user đôi khi hiển thị 12 người hoặc bỏ qua hạng.
+
+**Nguyên nhân:** `RANK()` tạo khoảng trống khi hòa, `DENSE_RANK()` không tạo khoảng trống, `ROW_NUMBER()` ép mỗi dòng một số duy nhất.
+
+**Cách khắc phục:** Chọn function theo ý nghĩa sản phẩm. Leaderboard công bằng thường dùng `DENSE_RANK()`. Pagination ổn định thường cần `ROW_NUMBER()` kèm tie-breaker như `ORDER BY spend DESC, user_id`.
+</Callout>
+
+---
+
+## 11. Cost & Performance Unit Economics
+
+| Kỹ thuật | Giá trị sản phẩm | Chi phí vận hành |
+|---|---|---|
+| CTE pipeline | Query dễ đọc, dễ review, dễ debug | CTE quá nhiều có thể khó tối ưu nếu database materialize |
+| Window functions | Phân tích trend/ranking/session mà không mất chi tiết dòng | Cần sort theo partition, tốn memory với bảng lớn |
+| Recursive CTE | Debug conversation tree và agent loops | Có thể runaway nếu thiếu điều kiện dừng |
+| Pre-aggregation | Dashboard nhanh hơn | Dữ liệu có độ trễ, cần job refresh |
+| Materialized views | Giảm tải query lặp lại | Tốn storage và cần chiến lược refresh |
+
+Nguyên tắc thực tế: query ad-hoc có thể chậm vài giây; dashboard production cần predictable latency. Nếu một window query được chạy mỗi 10 giây bởi 200 người dùng, hãy cân nhắc pre-aggregate hoặc materialized view.
+
+---
+
+## Practice exercises
+
+1. Viết CTE pipeline gồm 3 bước để chuẩn hóa `model_calls`, aggregate theo ngày và tìm feature có cost cao nhất mỗi ngày.
+2. Dùng `LAG()` để so sánh cost của từng feature với ngày trước đó và tính phần trăm tăng/giảm.
+3. Viết query dùng `ROW_NUMBER()` để lấy request mới nhất của mỗi conversation.
+4. Thiết kế recursive CTE để hiển thị cây message/tool-call với cột `depth` và guard chống vòng lặp.
+5. Chuyển một correlated subquery chậm thành CTE + join hoặc window function.
+
+---
+
+## Knowledge check
+
+1. CTE giúp gì cho query production AI telemetry?
+2. `GROUP BY` khác `PARTITION BY` như thế nào?
+3. Vì sao rolling baseline không nên bao gồm chính dòng/ngày đang kiểm tra?
+4. Khi nào nên dùng `ROW_NUMBER()` thay vì `RANK()` hoặc `DENSE_RANK()`?
+5. Vì sao recursive CTE cần điều kiện dừng hoặc cycle guard?
+
+---
+
+## Answer key
+
+1. CTE chia query phức tạp thành các bước có tên rõ ràng, dễ review, debug và đưa vào dashboard.
+2. `GROUP BY` gom nhiều dòng thành summary; `PARTITION BY` giữ từng dòng nhưng thêm metric tính trong từng nhóm.
+3. Nếu baseline chứa chính spike, trung bình sẽ bị kéo lên và làm bất thường khó bị phát hiện.
+4. Dùng `ROW_NUMBER()` khi cần đúng một dòng theo thứ tự ổn định, ví dụ request mới nhất hoặc pagination có tie-breaker.
+5. Thiếu guard có thể khiến traversal chạy vô hạn hoặc scan quá sâu khi dữ liệu conversation/agent có vòng lặp.
+
+---
+
+## Điểm cần nhớ
+
+- CTE biến SQL phức tạp thành pipeline có thể đọc và review.
+- Window functions giữ chi tiết từng dòng trong khi thêm metric theo user/feature/time window.
+- `GROUP BY` trả lời câu hỏi summary; `PARTITION BY` trả lời câu hỏi contextual.
+- Recursive CTE hữu ích cho conversation tree và agent/tool-call hierarchy, nhưng cần guard chống vòng lặp.
+- Advanced SQL là nền tảng để phát hiện cost spike, latency regression và usage anomaly trong AI systems.
+
+## Next chapter bridge
+
+Advanced SQL giúp bạn phân tích telemetry. Nhưng AI systems còn có các pattern dữ liệu đặc thù hơn: feature engineering, sampling cho evaluation, JSONB traces, và vector similarity search bằng pgvector. Chương tiếp theo: **AI-Specific SQL Patterns** — nơi SQL truyền thống gặp embeddings, RAG và ML feature pipelines.

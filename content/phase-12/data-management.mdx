@@ -1,171 +1,394 @@
-Trong kỷ nguyên của AI, code không còn là tài sản duy nhất cần được quản lý phiên bản. Sự thay đổi của mô hình AI bị chi phối mạnh mẽ bởi dữ liệu. Nếu bạn không thể tái tạo lại (reproduce) tập dữ liệu chính xác đã dùng để huấn luyện mô hình tuần trước, hệ thống của bạn không phải là một hệ thống phần mềm kỹ thuật (engineering software), mà chỉ là một dự án nghiên cứu nghiệp dư. Chương này chuyển dịch tư duy của bạn từ "lưu file CSV trên máy cá nhân" sang kiến trúc **Quản lý và Phiên bản hóa Dữ liệu (Data Management & Versioning)** cấp độ doanh nghiệp (Enterprise-grade MLOps).
+Phase 11 đã đưa bạn qua generative AI beyond text: image, audio, video và multimodal. Nhưng một mô hình đẹp trong demo chưa phải là production system. Phase 12 bắt đầu phần khó nhất của nghề AI Engineer: biến model, prompt, dataset và hạ tầng thành một hệ thống có thể tái tạo, triển khai, giám sát và bảo vệ.
+
+Bài đầu tiên là **Data Management & Versioning**. Trong MLOps/LLMOps, dữ liệu không phải là file phụ trợ; dữ liệu là một phần của sản phẩm. Nếu bạn không biết chính xác model được train bằng dataset nào, prompt nào, config nào và commit nào, bạn không thể debug, rollback hoặc chứng minh chất lượng hệ thống.
 
 ---
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: Cơn ác mộng 'Works on my machine'">
-**Bối cảnh:** Nhóm Data Science (DS) vừa fine-tune thành công một mô hình LLaMA-3 cực kỳ xuất sắc cho tác vụ trích xuất hợp đồng pháp lý. Họ chuyển giao model weights cho nhóm Engineering để deploy lên Production.
+<Callout type="danger" title="Báo cáo sự cố: Model production không thể reproduce vì mất dataset gốc">
+**Bối cảnh:** Một team fine-tune LLaMA cho tác vụ trích xuất điều khoản hợp đồng. Sau 2 tuần thử nghiệm, run tốt nhất đạt điểm rất cao trên benchmark nội bộ. Team deploy model weights lên production.
 
-**Sự cố:** Sau khi deploy, model bắt đầu hallucinate (bịa đặt) các điều khoản hợp đồng. Nhóm DS cố gắng train lại model nhưng không thể đạt được độ chính xác như cũ. Khi kiểm tra lại, họ phát hiện ra tệp `train_data_final_v3_REAL.json` nằm trên laptop của một kỹ sư DS đã bị ghi đè nhầm bởi một đoạn script dọn dẹp dữ liệu (cleaning script) vào sáng hôm sau. Không có cách nào khôi phục lại tập dữ liệu hoàn hảo ban đầu.
+**Sự cố:** Sau deploy, model bắt đầu hallucinate điều khoản. Team muốn reproduce run cũ để kiểm tra nhưng phát hiện file `train_data_final_v3_REAL.jsonl` nằm trên laptop của một data scientist đã bị ghi đè bởi script cleaning mới. File validation cũng đã thay đổi nhưng không ai biết thay đổi ở commit nào.
 
-**Hậu quả:** Toàn bộ công sức tinh chỉnh trong 2 tuần bị xóa sổ. Dự án bị chậm tiến độ 1 tháng. Công ty lãng phí $5,000 tiền thuê GPU.
+1. Dataset thật không được version bằng DVC hoặc object storage có hash.
+2. Training config không lưu dataset fingerprint.
+3. Validation set bị sửa sau khi benchmark được báo cáo.
+4. Không có data lineage nối từ raw data đến cleaned dataset đến model artifact.
+
+**Hậu quả:** Team không thể xác định model hỏng do data drift, cleaning bug hay inference regression. Dự án bị rollback, mất thêm ngân sách GPU để train lại từ đầu.
 </Callout>
 
-Bài học rút ra: Dữ liệu cũng là Code. Nó cần được Commit, Branching, và Rollback.
+Bài học rút ra: trong AI production, **code + config + data + model artifact** phải được quản lý như một đơn vị không thể tách rời. Mất một mắt xích là mất khả năng vận hành.
 
 ---
 
-## 2. Architecture Blueprint (Kiến trúc giải pháp)
+## 2. Architecture Blueprint (Reproducible Data & Model Lineage)
 
-Để giải quyết bài toán trên, kiến trúc MLOps hiện đại chia tách rõ ràng việc lưu trữ Code (Git) và Data/Models (Object Storage), nhưng liên kết chúng bằng một cấu trúc băm (Hashing) chặt chẽ.
+Một kiến trúc data management tốt không cố nhét file lớn vào Git. Nó dùng Git để version metadata và dùng object storage để lưu artifact thật.
 
 ```text
-[ Git Repository ] <----------------------------+
-  │                                             │
-  ├── train.py (Mã nguồn)                       │ Link bằng mã Hash (ví dụ: a1b2c3d)
-  ├── model_config.yml                          │
-  └── data.dvc (Chứa Hash trỏ tới dữ liệu) -----+
-                                                │
-[ Cloud Object Storage (S3 / GCS / Azure) ] <---+
-  │
-  ├── a1b2c3d... (File dữ liệu thật: train_data_v1.json)
-  └── f9e8d7c... (Model weights: model-v1.safetensors)
+[ Raw data sources ]
+  - uploads
+  - databases
+  - logs
+  - vendor datasets
+        │
+        ▼
+[ Ingestion pipeline ]
+  - schema validation
+  - PII scanning
+  - source metadata
+        │
+        ▼
+[ Versioned data lake / object storage ]
+  - s3://bucket/raw/...
+  - s3://bucket/clean/...
+  - immutable snapshots
+        │
+        ▼
+[ DVC / LakeFS / Data registry ] <------ [ Git commit ]
+  - dataset hash                       - training code
+  - split hash                         - config yaml
+  - artifact pointer                   - prompt templates
+        │
+        ▼
+[ Training / eval pipeline ]
+  - dataset fingerprint
+  - model artifact
+  - eval report
+        │
+        ▼
+[ Model registry ]
+  - model version
+  - linked dataset version
+  - linked eval version
 ```
 
-### Tại sao không dùng thẳng Git cho Dữ liệu?
-Git được thiết kế để theo dõi các file văn bản nhỏ (source code). Nếu bạn `git commit` một file dataset nặng 10GB hoặc một file model weights 15GB, kho lưu trữ Git của bạn sẽ bị sập, thời gian `git clone` sẽ kéo dài vô tận và bạn sẽ vượt quá giới hạn của GitHub/GitLab.
+Mục tiêu: bất kỳ model nào trong production cũng phải trả lời được bốn câu hỏi:
 
-Giải pháp là **DVC (Data Version Control)**. DVC thay thế các file dữ liệu lớn bằng một file text nhỏ xíu (file `.dvc`) chứa mã băm (MD5/SHA256) của dữ liệu. Git sẽ theo dõi file `.dvc` này, còn dữ liệu thật được DVC đẩy lên Cloud Storage (Amazon S3, Google Cloud Storage).
+1. Nó được train bằng data snapshot nào?
+2. Data snapshot đó được tạo từ raw sources nào?
+3. Code/config/prompt nào đã tạo ra model?
+4. Eval report nào chứng minh model đủ điều kiện deploy?
 
 ---
 
-## 3. Tooling Landscape (Ma trận công cụ)
+## 3. Data as a First-Class Artifact
 
-Việc quản lý dữ liệu trong MLOps không chỉ dừng lại ở lưu trữ, mà còn bao gồm chất lượng dữ liệu và kỹ nghệ đặc trưng (Feature Engineering).
+Trong phần mềm truyền thống, build artifact là Docker image hoặc binary. Trong AI, artifact còn bao gồm:
 
-| Lĩnh vực | Công cụ phổ biến | Chức năng cốt lõi (SRE Use-case) |
+| Artifact | Ví dụ | Vì sao cần version? |
 |---|---|---|
-| **Data Versioning** | DVC, Git LFS, Pachyderm | Quản lý phiên bản cho file dữ liệu lớn và trọng số mô hình. Liên kết chặt chẽ với Git commit. |
-| **Data Validation** | Great Expectations, Pandera | Viết unit tests cho Data. (Ví dụ: "Cột tuổi không được âm", "Cột email không được null"). |
-| **Data Pipelines** | Airflow, Prefect, Dagster | Quản lý luồng xử lý dữ liệu DAG (Directed Acyclic Graph) tự động, lên lịch và retry khi có lỗi. |
-| **Feature Stores** | Feast, Tecton, Hopsworks | Lưu trữ và chia sẻ các đặc trưng (features) đã được xử lý để dùng chung giữa Training và Inference, đảm bảo không có độ trễ (latency). |
+| Raw data | log hội thoại, PDF, ảnh, audio | Audit nguồn gốc và compliance |
+| Cleaned data | JSONL instruction dataset | Reproduce training |
+| Splits | train/validation/test split | Tránh benchmark bị thay đổi |
+| Prompts | system prompt, eval prompt | Prompt thay đổi làm behavior đổi |
+| Embeddings | vector index snapshot | RAG answer phụ thuộc index version |
+| Model weights | `.safetensors`, LoRA adapter | Rollback và registry |
+| Eval reports | score, judge output, failure cases | Release gate |
+
+Nếu chỉ version model weights mà không version data, bạn chỉ lưu “kết quả” nhưng mất “nguyên nhân”.
 
 ---
 
-## 4. Implementation Playbook (Thực thi)
+## 4. Git vs DVC vs Object Storage
 
-Hãy cùng thiết lập một luồng làm việc DVC chuẩn chỉ cho dự án Fine-Tuning LLM của bạn.
+Git rất tốt cho source code nhỏ, text diff và review. Nhưng Git không phù hợp cho dataset/model nặng hàng GB.
 
-### Bước 1: Khởi tạo DVC và kết nối Cloud Storage
-Yêu cầu hệ thống đã cài đặt `git` và `dvc` (`pip install dvc[s3]`).
+```text
+Git repo:
+  train.py
+  configs/sft.yaml
+  data/train.jsonl.dvc     -> pointer hash only
+  reports/eval-v12.json
+
+Object storage:
+  s3://ml-artifacts/dvc/files/md5/ab/cdef...
+  s3://ml-artifacts/models/customer-support/v12/
+```
+
+| Công cụ | Dùng cho | Không nên dùng cho |
+|---|---|---|
+| Git | Code, config, small eval reports, DVC pointers | Dataset 10GB, model 20GB |
+| DVC | Version file artifacts, data pipelines, remote storage | Streaming data cực lớn realtime |
+| Git LFS | File lớn ít thay đổi trong repo | Dataset biến động liên tục |
+| LakeFS | Data lake versioning, branch/merge trên object storage | Team nhỏ chỉ có vài file JSONL |
+| Feature store | Online/offline features cho ML truyền thống | Instruction dataset đơn giản |
+
+Quy tắc thực dụng: **Git quản lý con trỏ, object storage quản lý bytes thật**.
+
+---
+
+## 5. Dataset Lineage và Fingerprinting
+
+Dataset fingerprint là hash đại diện cho nội dung và cách tạo dataset. Nó nên bao gồm:
+
+- hash của raw input files,
+- version của cleaning script,
+- config lọc dữ liệu,
+- seed khi split train/validation/test,
+- schema version,
+- timestamp và người tạo snapshot.
+
+Ví dụ metadata tối thiểu:
+
+```json
+{
+  "dataset_id": "contract-extraction-sft",
+  "version": "2026-07-02.1",
+  "raw_sources": ["s3://legal/raw/contracts/2026-06"],
+  "cleaning_commit": "7c9f2ab",
+  "schema_version": "chatml-v2",
+  "split_seed": 42,
+  "train_hash": "sha256:...",
+  "validation_hash": "sha256:...",
+  "pii_scan": "passed",
+  "owner": "ml-platform"
+}
+```
+
+Không cần metadata quá phức tạp lúc đầu. Nhưng nếu metadata không đủ để reproduce, nó chưa đạt chuẩn production.
+
+---
+
+## 6. Data Quality Gates
+
+Data versioning chỉ đảm bảo bạn lưu đúng phiên bản. Nó không đảm bảo dữ liệu tốt. Vì vậy pipeline cần quality gates trước khi dataset được phép đi vào training.
+
+| Gate | Kiểm tra | Ví dụ lỗi bị chặn |
+|---|---|---|
+| Schema | field bắt buộc, type, max length | thiếu `messages`, output null |
+| Safety | PII, secrets, toxic content | lộ số thẻ, API key |
+| Deduplication | duplicate exact/near-duplicate | cùng câu trả lời lặp 10,000 lần |
+| Distribution | ngôn ngữ, domain, length histogram | validation toàn câu ngắn hơn train |
+| Leakage | overlap train/test | test case nằm trong train |
+| License | quyền sử dụng dữ liệu | web scrape không rõ license |
+
+<Callout type="warning" title="Đừng chỉ kiểm tra schema">
+Một file JSONL có thể đúng schema nhưng vẫn phá model: duplicate quá nhiều, câu trả lời sai, PII chưa mask, hoặc dữ liệu test bị trộn vào train. Data validation trong AI phải kiểm tra cả cấu trúc lẫn ngữ nghĩa.
+</Callout>
+
+---
+
+## Implementation Playbook: DVC + Pandera + Dataset Manifest
+
+Playbook này thiết lập workflow tối thiểu cho một instruction dataset.
+
+### Bước 1: Khởi tạo DVC remote
 
 ```bash
-# 1. Khởi tạo Git và DVC
 git init
 dvc init
 
-# 2. Cấu hình DVC trỏ tới một S3 bucket làm Remote Storage
-dvc remote add -d myremote s3://my-company-mlops-bucket/project-x
-dvc remote modify myremote region us-east-1
+dvc remote add -d storage s3://company-ml-artifacts/customer-support
+dvc remote modify storage region ap-southeast-1
 
-# Lưu cấu hình DVC vào Git
 git add .dvc/config
-git commit -m "Configure DVC remote S3 storage"
+git commit -m "Configure DVC remote"
 ```
 
-### Bước 2: Theo dõi tập dữ liệu huấn luyện
-Giả sử bạn có một file `dataset/train_chatml.jsonl` nặng 5GB.
+### Bước 2: Version dataset bằng DVC
 
 ```bash
-# Thêm file dữ liệu vào DVC
-dvc add dataset/train_chatml.jsonl
+mkdir -p dataset
+python scripts/build_dataset.py \
+  --raw s3://company-raw/support-tickets/2026-06 \
+  --out dataset/train_chatml.jsonl \
+  --split-seed 42
 
-# DVC sẽ tạo ra file `dataset/train_chatml.jsonl.dvc` và tự động thêm file gốc vào `.gitignore`
-# Ta sẽ commit file .dvc này vào Git
-git add dataset/train_chatml.jsonl.dvc dataset/.gitignore
-git commit -m "Add version 1 of training dataset"
+dvc add dataset/train_chatml.jsonl dataset/validation_chatml.jsonl
 
-# Đẩy dữ liệu vật lý (5GB) lên S3
+git add dataset/*.dvc dataset/.gitignore scripts/build_dataset.py
+git commit -m "Add customer support SFT dataset v1"
 dvc push
 ```
 
-### Bước 3: Kiểm thử chất lượng dữ liệu (Data Validation) với Pandera
-Trước khi đưa dữ liệu vào huấn luyện, ta phải viết Unit Test cho dữ liệu (để tránh rác lọt vào model).
+### Bước 3: Validate schema trước training
 
 ```python
-import pandas as pd
-import pandera as pa
-from pandera.typing import Series
+import json
+from pathlib import Path
 
-# Định nghĩa Schema (Kỳ vọng) cho Dữ liệu
-schema = pa.DataFrameSchema({
-    "instruction": pa.Column(str, checks=pa.Check.str_length(min_value=10, max_value=1000)),
-    "input": pa.Column(str, nullable=True), # Có thể null
-    "output": pa.Column(str, checks=[
-        pa.Check.str_length(min_value=1),
-        pa.Check(lambda x: not x.str.contains("NaN").any(), error="Output chứa chuỗi NaN bị lỗi")
-    ])
-})
+REQUIRED_ROLES = {"system", "user", "assistant"}
 
-# Đọc dữ liệu (đã được kéo về bằng dvc pull)
-df = pd.read_json("dataset/train_chatml.jsonl", lines=True)
 
-# Chạy kiểm thử (Sẽ throw Error nếu dữ liệu vi phạm schema)
-validated_df = schema.validate(df)
-print("Data validation passed! Sẵn sàng cho Training.")
+def validate_chatml(path: str) -> None:
+    errors = []
+    for line_no, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
+        item = json.loads(line)
+        messages = item.get("messages")
+        if not isinstance(messages, list) or len(messages) < 2:
+            errors.append(f"line {line_no}: messages must be a non-empty list")
+            continue
+
+        for msg in messages:
+            if msg.get("role") not in REQUIRED_ROLES:
+                errors.append(f"line {line_no}: invalid role {msg.get('role')}")
+            if not msg.get("content") or len(msg["content"]) > 8000:
+                errors.append(f"line {line_no}: invalid content length")
+
+    if errors:
+        raise ValueError("\n".join(errors[:20]))
+
+
+validate_chatml("dataset/train_chatml.jsonl")
+validate_chatml("dataset/validation_chatml.jsonl")
+print("Dataset schema passed")
 ```
+
+### Bước 4: Tạo manifest nối data với training run
+
+```python
+import hashlib
+import json
+from pathlib import Path
+
+
+def sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+manifest = {
+    "dataset_id": "customer-support-sft",
+    "version": "v1",
+    "train_hash": sha256_file("dataset/train_chatml.jsonl"),
+    "validation_hash": sha256_file("dataset/validation_chatml.jsonl"),
+    "split_seed": 42,
+    "schema": "chatml-v1",
+}
+
+Path("dataset/manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+```
+
+Training script nên log `manifest.json` vào W&B/MLflow cùng với hyperparameters.
 
 ---
 
-## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## 7. Data Governance và Access Control
 
-Dù đã có DVC, hệ thống vẫn có thể hỏng hóc trong quá trình vận hành. Dưới đây là các lỗi kinh điển và cách kỹ sư MLOps xử lý:
+Production dataset thường chứa dữ liệu nhạy cảm. Data management phải trả lời được:
 
-<Callout type="warning" title="Pitfall 1: Mất đồng bộ giữa Git và DVC (Dangling Data)">
-**Triệu chứng:** Chạy `git checkout v2.0` để quay về code cũ, sau đó chạy model training nhưng kết quả loss vẫn ra của bản v3.0.
-**Nguyên nhân:** Kỹ sư chỉ chuyển nhánh Git mà quên không chuyển nhánh dữ liệu vật lý của DVC.
-**Cách khắc phục (Fix):** Luôn tạo thói quen chạy một cặp lệnh đi liền nhau. Bạn có thể cấu hình Git Hooks (post-checkout) để tự động hóa việc này.
+- Ai có quyền đọc raw data?
+- Ai có quyền tạo snapshot mới?
+- Ai có quyền promote dataset vào training?
+- Snapshot nào chứa PII và chính sách retention là gì?
+- Khi user yêu cầu xóa dữ liệu, dataset/model bị ảnh hưởng ra sao?
+
+Thiết kế tối thiểu:
+
+```text
+raw bucket:
+  access: data-platform only
+  encryption: KMS
+  retention: policy by domain
+
+clean bucket:
+  access: ml-team read, pipeline write
+  PII: masked/tokenized
+
+training bucket:
+  access: training jobs only
+  immutable snapshots
+
+registry:
+  approval required to promote dataset to production training
+```
+
+Đừng để notebook cá nhân trở thành nơi lưu bản copy duy nhất của dữ liệu nhạy cảm.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Git checkout nhưng quên dvc pull">
+**Triệu chứng:** Bạn checkout code cũ nhưng training vẫn dùng dataset mới.
+
+**Nguyên nhân:** Git chỉ đổi file pointer `.dvc`; file vật lý trong workspace chưa được đồng bộ.
+
+**Fix:** Luôn chạy cặp lệnh:
+
 ```bash
-git checkout v2.0
-dvc pull  # Bắt buộc: Tải file dữ liệu vật lý tương ứng với file .dvc ở nhánh này
+git checkout release-v1.4
+dvc pull
 ```
+
+Có thể thêm Git hook `post-checkout` để nhắc hoặc tự chạy `dvc pull` trong môi trường CI.
 </Callout>
 
-<Callout type="warning" title="Pitfall 2: Bóp nghẹt băng thông (Bandwidth Bottleneck) khi CI/CD">
-**Triệu chứng:** Pipeline CI/CD trên GitHub Actions mất 45 phút chỉ để kéo (pull) model weights 30GB từ S3 về máy chủ build.
-**Nguyên nhân:** DVC kéo dữ liệu vật lý qua đường truyền Internet công cộng.
-**Cách khắc phục (Fix):** 
-1. Chạy Self-hosted runners (máy chủ CI/CD đặt cùng VPC mạng nội bộ với S3 bucket).
-2. Tránh `dvc pull` toàn bộ project. Hãy dùng tính năng Data Registry của DVC để chỉ pull đúng thư mục/file cần thiết (`dvc get`).
+<Callout type="warning" title="Pitfall 2: Validation set bị thay đổi âm thầm">
+**Triệu chứng:** Eval score tăng mạnh nhưng production quality giảm.
+
+**Nguyên nhân:** Validation set mới dễ hơn hoặc bị trộn với training data.
+
+**Fix:** Version validation/test split riêng, khóa quyền sửa, log hash vào experiment tracking và release report.
 </Callout>
 
-<Callout type="danger" title="Pitfall 3: Lộ lọt dữ liệu nhạy cảm (Data Leakage)">
-**Triệu chứng:** Dữ liệu chứa thông tin thẻ tín dụng của khách hàng vô tình bị đẩy lên DVC remote public.
-**Cách khắc phục (Fix):** Luôn tích hợp các script kiểm tra PII (Personally Identifiable Information) như Presidio vào Data Pipeline (Airflow/Prefect) **trước khi** dữ liệu được phép `dvc add`.
+<Callout type="danger" title="Pitfall 3: DVC remote public chứa dữ liệu nhạy cảm">
+**Triệu chứng:** Security team phát hiện PII nằm trong bucket artifact có quyền public read.
+
+**Fix:** Bật bucket private by default, KMS encryption, IAM least privilege, PII scanning trước `dvc add`, và lifecycle policy để xóa/retire snapshot theo compliance.
 </Callout>
 
 ---
 
-## 6. Cost & Performance Unit Economics
+## Cost / Storage / Compliance Unit Economics
 
-Hệ thống Data Management không miễn phí. Một kỹ sư MLOps phải biết tính toán chi phí (Unit Economics):
-
-| Chi phí | Phân tích SRE | Tối ưu hóa (Optimization) |
+| Quyết định | Chi phí ẩn | Tối ưu |
 |---|---|---|
-| **Storage Cost (S3/GCS)** | Lưu nhiều phiên bản (v1, v2, v3) của tập dữ liệu 100GB sẽ tốn $23/tháng/phiên bản. | Bật tính năng Deduplication của DVC. Cấu hình S3 Lifecycle rule đẩy các phiên bản cũ (>90 ngày) xuống kho lạnh (S3 Glacier) với giá chỉ bằng 1/10. |
-| **Egress / Transfer Cost** | Tải dữ liệu từ S3 về máy cá nhân hoặc máy chủ ngoài VPC bị tính phí truyền tải mạng (khoảng $0.09/GB). Kéo 100GB mất ~$9. | Luôn đặt máy chủ Training (EC2/SageMaker) cùng vùng (Region) với S3 Bucket. Truyền dữ liệu nội mạng (Intra-region) thường hoàn toàn miễn phí. |
-| **Pipeline Latency** | Chạy kiểm tra dữ liệu bằng Pandera trên 10 triệu dòng mất 15 phút. | Thay thế Pandas bằng Polars, PySpark hoặc chạy validation trực tiếp trên Database bằng dbt (Data Build Tool) / SQL. |
+| Lưu mọi snapshot mãi mãi | S3/GCS tăng đều theo tháng | Lifecycle sang cold storage, retention theo domain |
+| Pull dataset lớn trong CI | Chậm pipeline, tốn egress | Self-hosted runner cùng VPC, cache artifact |
+| Lưu nhiều bản model 30GB | Registry phình nhanh | Chỉ promote model có eval report, xóa checkpoint trung gian |
+| Validation toàn bộ dữ liệu mỗi PR | CI chậm và đắt | Sanity validation trên PR, full validation nightly |
+| Copy data về laptop | Rủi ro PII và mất kiểm soát | Workbench trong VPC, signed URL ngắn hạn |
+
+Một data platform tốt không chỉ “lưu được file”; nó giảm thời gian debug, giảm chi phí train lại và giảm rủi ro compliance.
+
+---
+
+## Practice exercises
+
+1. Thiết kế manifest JSON cho một dataset fine-tuning chatbot tiếng Việt gồm raw sources, split hashes, cleaning commit và PII status.
+2. Viết một script kiểm tra JSONL ChatML: mỗi dòng phải có `messages`, role hợp lệ và assistant response không rỗng.
+3. Lập chính sách retention cho ba loại artifact: raw data, cleaned data, model checkpoints.
+4. Vẽ data lineage từ raw support tickets đến model registry cho một customer support LLM.
+5. Liệt kê 5 lỗi có thể làm validation score tăng giả tạo.
+
+---
+
+## Knowledge check
+
+1. Vì sao không nên commit trực tiếp dataset lớn vào Git?
+2. DVC lưu gì trong Git và lưu gì trong object storage?
+3. Dataset fingerprint nên bao gồm những thành phần nào?
+4. Vì sao train/test leakage nguy hiểm hơn lỗi schema đơn giản?
+5. Khi checkout một commit cũ, lệnh nào thường cần chạy để đồng bộ dữ liệu?
+
+---
+
+## Answer key
+
+1. Git được tối ưu cho text diff nhỏ; dataset lớn làm repo nặng, clone chậm và khó quản lý lịch sử.
+2. Git lưu pointer/hash `.dvc`; object storage lưu bytes thật của dataset/model.
+3. Raw file hashes, cleaning code commit, config, split seed, schema version và hash của train/validation/test.
+4. Leakage làm benchmark đo trí nhớ thay vì năng lực generalization, dẫn đến score production sai lệch.
+5. `dvc pull` sau `git checkout` để lấy đúng file vật lý tương ứng với pointer trong commit.
 
 ---
 
 ## Điểm cần nhớ
 
-- **Code + Config + Data = Model Reproducibility:** Mất một trong ba yếu tố này, bạn sẽ không bao giờ tạo lại được mô hình cũ.
-- DVC quản lý dữ liệu lớn bằng cách lưu trữ file thực tế trên Cloud (S3) và theo dõi con trỏ hash (file `.dvc`) bằng Git.
-- Data Validation (như Great Expectations/Pandera) là lớp khiên bảo vệ đầu tiên ngăn rác lọt vào 파ipeline huấn luyện.
-- Vận hành DVC trong môi trường doanh nghiệp phải đi kèm với bài toán tối ưu băng thông mạng (VPC) và chi phí lưu trữ kho lạnh (Glacier).
+- Data là artifact production, không phải file phụ trợ.
+- Reproducibility cần liên kết code, config, data, prompt, model và eval report.
+- Git quản lý metadata/pointers; object storage quản lý file lớn.
+- Data quality gates phải kiểm tra schema, PII, duplicate, distribution và leakage.
+- Dataset không có lineage sẽ biến mọi lỗi model thành điều tra thủ công tốn kém.
+
+---
 
 ## Next chapter bridge
 
-Sau khi bạn đã đóng gói và phiên bản hóa thành công tập dữ liệu huấn luyện an toàn trên Cloud, bước tiếp theo là khởi động các phiên huấn luyện (Training runs). Tuy nhiên, khi bạn thử nghiệm 50 cấu hình Learning Rate và Batch Size khác nhau, làm sao để nhớ được cấu hình nào sinh ra mô hình tốt nhất? Chương tiếp theo: **Experiment Tracking** — nơi chúng ta sẽ thiết lập bảng điều khiển chỉ huy (Control Center) với Weights & Biases (W&B) và MLflow để giám sát mọi tham số và số liệu (metrics) của mô hình.
+Bạn đã biết cách đóng gói và version dataset để mọi training run có thể reproduce. Nhưng trong thực tế, bạn sẽ chạy hàng chục thí nghiệm với learning rate, batch size, LoRA rank, dataset mix và prompt format khác nhau. Chương tiếp theo: **Experiment Tracking** — nơi chúng ta xây control tower để ghi lại hyperparameters, metrics, GPU usage, artifacts và quyết định run nào đủ điều kiện đi tiếp.

@@ -1,183 +1,426 @@
-Thế giới phần mềm đã chứng minh: nếu một hệ thống không thể chạy tự động, nó sẽ chết dưới áp lực vận hành. Các ứng dụng AI hiện đại (đặc biệt là LLMs) không chỉ là một file Python đơn lẻ; chúng là một mạng lưới phức tạp gồm: Backend API, Model Inference Engine, Vector Database, Redis Cache, và hệ thống theo dõi (Telemetry). Việc thiết lập thủ công các dịch vụ này trên một máy chủ (Bare Metal) là một công thức hoàn hảo để gây ra thảm họa khi cần mở rộng quy mô (Scaling) hoặc khôi phục sau sự cố (Disaster Recovery). 
+Ở bài trước, bạn đã chạy được inference engine. Nhưng một service chạy được trên một máy chưa phải production platform. Khi traffic tăng, instance chết, image cần rollback hoặc GPU node cần scale, bạn không thể SSH vào từng máy rồi `docker run` thủ công.
 
-Chương này trang bị cho bạn tư duy của một **Kỹ sư Hạ tầng (SRE)**: Đóng gói (Containerization) mọi thứ bằng Docker và Điều phối (Orchestrating) chúng trên không gian phân tán bằng Kubernetes (K8s).
+**Containerization & Orchestration** biến AI service thành đơn vị triển khai chuẩn hóa. Docker giúp môi trường chạy giống nhau; Kubernetes giúp hệ thống tự phục hồi, rollout, scale và quản lý tài nguyên GPU ở quy mô cụm.
 
 ---
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: 'Hôm qua nó vẫn chạy cơ mà?'">
-**Bối cảnh:** Nhóm AI xây dựng một hệ thống RAG nội bộ rất thành công. Họ phát triển trên máy Mac (Silicon M2), cấu hình thư viện `torch==2.1.0` và `vllm==0.3.0`. Sau đó, họ `scp` đoạn code này lên một máy chủ Ubuntu (chứa GPU Nvidia RTX 4090) ở chi nhánh khác để phục vụ 500 nhân sự của công ty. Kỹ sư chạy lệnh `pip install -r requirements.txt` và để ứng dụng chạy ngầm bằng `tmux`.
+<Callout type="danger" title="Báo cáo sự cố: Chạy bằng tmux trên GPU server và downtime 3 ngày">
+**Bối cảnh:** Team xây RAG nội bộ. Prototype chạy tốt trên máy Mac của engineer. Khi deploy, họ SSH vào GPU server Ubuntu, `pip install -r requirements.txt`, tải model từ Hugging Face và chạy FastAPI trong `tmux`.
 
-**Sự cố:** Nửa đêm, hệ điều hành tự động cập nhật driver NVIDIA từ version 535 lên 545. Thư viện `torch` biên dịch cục bộ bị xung đột do lệch CUDNN version, gây rò rỉ bộ nhớ (memory leak). Đến 9h sáng hôm sau, dịch vụ sập hoàn toàn. Kỹ sư MLOps mới nhận việc cố gắng cài lại môi trường trên máy chủ mới, nhưng không thể tìm ra đúng phiên bản của thư viện `faiss-cpu` mà team Data Science đã xài (vì họ quên không ghim version trong requirements.txt). Dịch vụ ngừng hoạt động (downtime) suốt 3 ngày.
+**Sự cố:** Driver NVIDIA tự cập nhật, CUDA/PyTorch lệch version. Process memory leak và sập lúc nửa đêm. Engineer mới không dựng lại được môi trường vì requirements không pin version, model cache nằm trong home directory của người cũ và không có health check.
 
-**Hậu quả:** Niềm tin của tổ chức vào nhóm AI sụp đổ.
+1. Không có Docker image bất biến.
+2. Không có process supervisor hoặc orchestration.
+3. Không có resource requests/limits cho GPU.
+4. Không có rolling update, rollback hoặc readiness probe.
+5. Model weights tải runtime làm restart mất 20 phút.
+
+**Hậu quả:** Dịch vụ dừng 3 ngày, stakeholder mất niềm tin và team phải rebuild deployment bằng Docker + Kubernetes.
 </Callout>
 
-Bài học rút ra: Đừng bao giờ cài đặt hệ thống AI trực tiếp lên hệ điều hành gốc của máy chủ (Host OS). Hãy luôn luôn đóng gói mọi thứ (Mã nguồn + Thư viện + Biến môi trường + OS dependencies) vào một hộp chứa (Container) hoàn toàn biệt lập (Isolated).
+Bài học rút ra: nếu AI service phụ thuộc vào “máy này đang cài đúng thư viện”, nó chưa production-ready. Môi trường phải được đóng gói, version, health-check và orchestration.
 
 ---
 
-## 2. Architecture Blueprint (Kiến trúc giải pháp)
+## 2. Architecture Blueprint (Docker Image to Kubernetes GPU Deployment)
 
-Trong một hệ sinh thái MLOps trưởng thành, vòng đời triển khai (Deployment Lifecycle) đi qua 3 tầng trừu tượng:
+Một vòng đời triển khai cloud-native:
 
 ```text
-[ 1. Local Development ]          [ 2. Container Registry ]           [ 3. Kubernetes Cluster ]
-       (Docker)                             (Harbor / ECR)                      (Orchestration)
-          │                                      │                                     │
-          ├── Viết Dockerfile                    │                                     ├── HPA (Auto-scaler) theo lượng GPU
-          ├── Đóng gói (Build Image)             │                                     ├── Kéo (Pull) Image về Worker Node
-          └── Chạy test nội bộ                   └── Push Image lên Đám mây (S3)       └── K8s phân bổ Pods chứa GPU
+[ Source code + Dockerfile ]
+        │
+        ▼
+[ Build immutable image ]
+  - pinned dependencies
+  - non-root user
+  - health endpoint
+  - model loading strategy
+        │
+        ▼
+[ Container registry ]
+  - image tags
+  - vulnerability scan
+  - signed image
+        │
+        ▼
+[ Kubernetes cluster ]
+  - Deployment / StatefulSet
+  - Service / Ingress
+  - GPU node pool
+  - HPA / KEDA
+  - ConfigMap / Secret
+        │
+        ▼
+[ Runtime operations ]
+  - rolling update
+  - readiness/liveness probes
+  - logs/metrics/traces
+  - rollback
 ```
 
-### 2.1. Docker (Tầng đóng gói)
-- **Hình dung:** Docker giống như một chiếc xe container tiêu chuẩn. Bên trong có thể chứa hàng điện tử, trái cây hay xe hơi (Model, API, Redis). Cảng biển (Máy chủ đám mây) không cần biết bên trong chứa gì, nó chỉ cần cẩu chiếc container chuẩn đó lên xe tải và nó sẽ tự chạy.
-- **Giải quyết:** Triệt tiêu hoàn toàn câu nói "Chạy được trên máy tôi nhưng lỗi trên máy chủ".
-
-### 2.2. Kubernetes (K8s) (Tầng điều phối)
-- **Hình dung:** K8s là bộ đàm trung tâm của toàn bộ càng biển. Nếu một container bị rò rỉ nước (Crash), K8s tự động ném nó đi và lấy một container mới (Self-healing). Nếu có 10,000 khách hàng mua trái cây cùng lúc, K8s gọi thêm 100 xe tải mới để chở hàng (Auto-scaling).
-- **Giải quyết:** Đảm bảo thời gian Uptime 99.99% và quản lý hạ tầng hàng ngàn GPU.
+Mục tiêu: mỗi release là một image có tag rõ ràng, deploy qua manifest/Helm, có health check và rollback được.
 
 ---
 
-## 3. Tooling Landscape (Ma trận công cụ)
+## 3. Docker Fundamentals for AI Services
 
-| Công nghệ | Lớp ứng dụng | Vai trò (SRE Use-case) |
-|---|---|---|
-| **Docker** | Đóng gói | Xây dựng các bản sao (Image) bất biến chứa mã nguồn và môi trường thực thi (CUDA, PyTorch). |
-| **Docker Compose** | Triển khai đơn | Tự động khởi chạy nhiều container phụ thuộc nhau (ví dụ: FastAPI + Postgres + Redis) trên MỘT máy chủ duy nhất. Phù hợp cho Dev/Test hoặc PoC nhỏ. |
-| **Kubernetes (K8s)** | Điều phối quy mô lớn | Quản lý cụm (Cluster) gồm hàng chục/trăm máy chủ. Tự động chia tải (Load balancing), tự phục hồi (Self-healing) và tự động mở rộng theo GPU. |
-| **Helm** | Quản lý K8s | Trình quản lý gói (Package Manager) cho K8s. Giúp cài đặt toàn bộ hệ thống RAG phức tạp chỉ bằng một dòng lệnh (ví dụ: `helm install my-ai-app`). |
-| **NVIDIA Device Plugin** | Hạ tầng cứng | Trình điều khiển (Plugin) bắt buộc phải cài trên K8s/Docker để container có thể "nhìn thấy" và sử dụng GPU vật lý của máy chủ. |
+Docker image cho AI khác web app thường vì:
 
----
+- phụ thuộc CUDA/PyTorch lớn,
+- model weights có thể hàng GB,
+- cần NVIDIA Container Toolkit,
+- startup có thể lâu,
+- image size dễ phình trên 10GB,
+- secrets/API keys không được bake vào image.
 
-## 4. Implementation Playbook (Thực thi)
+Một Dockerfile production cần:
 
-Hãy cùng thiết kế quá trình đóng gói một hệ thống AI API bằng **Docker Multi-stage Builds** — một kỹ thuật sản xuất giúp giảm thiểu tối đa kích thước Image cuối cùng (Rất quan trọng vì Image AI thường nặng vài Gigabytes do dính thư viện CUDA).
+| Yếu tố | Lý do |
+|---|---|
+| Pin version | tránh drift giữa build và runtime |
+| Multi-stage build | giảm image size |
+| Non-root user | giảm rủi ro bảo mật |
+| `.dockerignore` | tránh copy dataset/cache vào image |
+| Health endpoint | Kubernetes biết pod đã sẵn sàng chưa |
+| Env config | cùng image chạy được staging/prod |
+| Runtime CUDA image | tránh kéo dev tools thừa |
 
-### Bước 1: Viết Production Dockerfile
-
-```dockerfile
-# --------- Stage 1: Build & Compile (Môi trường nặng nề) ---------
-FROM python:3.10-slim AS builder
-
-WORKDIR /app
-
-# Cài đặt các công cụ biên dịch C/C++ cần thiết cho các thư viện AI
-RUN apt-get update && apt-get install -y build-essential gcc
-
-# Sao chép và cài đặt thư viện vào một thư mục ảo để dễ dàng mang sang Stage 2
-COPY requirements.txt .
-RUN pip install --user --no-cache-dir -r requirements.txt
-
-# --------- Stage 2: Production Run (Môi trường cực nhẹ và sạch) ---------
-FROM python:3.10-slim AS runner
-
-WORKDIR /app
-
-# Khuyến nghị SRE: Không bao giờ chạy container dưới quyền Root user để tránh leo thang đặc quyền
-RUN useradd -m -s /bin/bash ai_user
-USER ai_user
-
-# Sao chép các thư viện đã được build từ Stage 1 sang Stage 2
-COPY --from=builder /root/.local /home/ai_user/.local
-
-# Cập nhật đường dẫn môi trường (PATH)
-ENV PATH=/home/ai_user/.local/bin:$PATH
-
-# Sao chép mã nguồn của bạn vào
-COPY --chown=ai_user:ai_user ./src ./src
-
-# Expose cổng của FastAPI
-EXPOSE 8000
-
-# Lệnh khởi chạy API sử dụng Uvicorn
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-### Bước 2: Tự động hóa Scale với Kubernetes HPA
-
-Khi đưa container lên K8s, nếu hệ thống có quá nhiều người dùng (Traffic Spike), bạn muốn K8s tự động tạo thêm bản sao (Replica) của AI API. Nhưng khác với Web API bình thường (scale theo CPU/RAM), hệ thống AI phải scale dựa trên mức độ sử dụng GPU.
-
-Dưới đây là một cấu hình Horizontal Pod Autoscaler (HPA) giám sát GPU:
-
-```yaml
-# K8s HPA Configuration (Yêu cầu cài đặt NVIDIA DCGM Exporter)
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: llm-api-autoscaler
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: llm-api-deployment
-  minReplicas: 2   # Luôn chạy tối thiểu 2 Pods để dự phòng sập
-  maxReplicas: 10  # Scale tối đa lên 10 Pods khi bị DDoS
-  metrics:
-  - type: Pods
-    pods:
-      metric:
-        # Scale khi độ sử dụng GPU trung bình của hệ thống vượt ngưỡng 70%
-        name: DCGM_FI_DEV_GPU_UTIL
-      target:
-        type: AverageValue
-        averageValue: "70" 
-```
+<Callout type="warning" title="Đừng bake secrets vào Docker image">
+Nếu `OPENAI_API_KEY` hoặc HF token nằm trong image layer, xóa khỏi code chưa đủ. Secret vẫn có thể tồn tại trong image history. Dùng Kubernetes Secret hoặc secret manager.
+</Callout>
 
 ---
 
-## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## 4. Kubernetes Concepts for AI Engineers
 
-Triển khai container tích hợp GPU là một trải nghiệm có độ khó cao. Dưới đây là các lỗi bạn chắc chắn sẽ gặp:
+| K8s object | Vai trò trong AI service |
+|---|---|
+| Pod | một hoặc nhiều container chạy cùng nhau |
+| Deployment | quản lý replicas và rolling update |
+| Service | endpoint nội bộ ổn định cho pods |
+| Ingress/Gateway | public routing, TLS, host/path routing |
+| ConfigMap | config không nhạy cảm: model name, thresholds |
+| Secret | API keys, DB passwords |
+| PVC | lưu model cache, vector index, checkpoints |
+| HPA/KEDA | autoscale theo CPU, queue, custom metrics |
+| Node pool | nhóm máy GPU/CPU riêng |
+| Taint/Toleration | ép pod AI chạy đúng GPU nodes |
 
-<Callout type="warning" title="Pitfall 1: Lỗi 'CUDA Out of Memory' khi Scale bằng K8s">
-**Triệu chứng:** K8s nhận thấy lượng request cao nên tự động tạo thêm một Pod (Bản sao container) trên cùng một máy chủ (Node) đang chạy. Ngay lập tức cả 2 Pods đều bị sập OOM.
-**Nguyên nhân:** Kỹ sư thiết lập HPA nhưng quên khai báo giới hạn phần cứng cứng (Resource Requests/Limits) trên K8s. Khi Pod thứ 2 được bật lên, nó cố gắng giành giật VRAM với Pod thứ 1 trên cùng một GPU vật lý.
-**Cách khắc phục (Fix):** K8s không tự động chia VRAM như RAM. Bạn phải yêu cầu chiếm dụng GPU vật lý dưới dạng số nguyên (Exclusive lock) trong file Deployment:
+Kubernetes không tự hiểu “VRAM còn bao nhiêu”. Bạn phải khai báo GPU resource và cài NVIDIA device plugin/DCGM exporter nếu muốn metrics GPU.
+
+---
+
+## 5. GPU Scheduling and Runtime
+
+Kubernetes quản lý GPU như tài nguyên đặc biệt.
+
 ```yaml
 resources:
   limits:
-    nvidia.com/gpu: "1" # Khóa cứng 1 GPU vật lý cho 1 Pod này
+    nvidia.com/gpu: "1"
 ```
+
+Điều này thường cấp nguyên một GPU vật lý cho pod. Nếu muốn chia GPU:
+
+- dùng NVIDIA MIG trên A100/H100,
+- dùng time-slicing qua NVIDIA device plugin,
+- hoặc chạy nhiều model nhỏ trong một inference server có scheduler riêng.
+
+| Chiến lược | Khi dùng | Rủi ro |
+|---|---|---|
+| 1 pod / 1 GPU | model lớn, isolation tốt | có thể lãng phí VRAM |
+| MIG | nhiều workload nhỏ, isolation phần cứng | setup phức tạp, chỉ GPU hỗ trợ |
+| Time-slicing | dev/test, model nhẹ | noisy neighbor |
+| Shared vLLM server | nhiều tenant/model routing | cần quota và isolation logic |
+
+---
+
+## Implementation Playbook: Production Dockerfile + K8s Deployment
+
+### Bước 1: Dockerfile tối thiểu cho FastAPI AI API
+
+```dockerfile
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --user --no-cache-dir -r requirements.txt
+
+FROM python:3.11-slim AS runner
+
+WORKDIR /app
+RUN useradd -m -u 10001 appuser
+
+COPY --from=builder /root/.local /home/appuser/.local
+COPY ./src ./src
+
+ENV PATH=/home/appuser/.local/bin:$PATH
+ENV PYTHONUNBUFFERED=1
+
+USER appuser
+EXPOSE 8000
+
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### Bước 2: Health endpoints trong FastAPI
+
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+model_loaded = False
+
+@app.on_event("startup")
+def load_model():
+    global model_loaded
+    # load tokenizer/model/client here
+    model_loaded = True
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+@app.get("/readyz")
+def readyz():
+    return {"ready": model_loaded}
+```
+
+### Bước 3: Kubernetes Deployment có probes và GPU limit
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ai-api
+  template:
+    metadata:
+      labels:
+        app: ai-api
+    spec:
+      containers:
+        - name: api
+          image: registry.example.com/ai-api:1.0.0
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: ai-api-secrets
+            - configMapRef:
+                name: ai-api-config
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 20
+```
+
+### Bước 4: Service nội bộ
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-api
+spec:
+  selector:
+    app: ai-api
+  ports:
+    - port: 80
+      targetPort: 8000
+```
+
+---
+
+## Project Guide: Dockerize an AI API (Phase 12 Easy)
+
+Mục tiêu project: đóng gói một FastAPI + OpenAI/LLM app thành Docker image production-ready.
+
+### Requirements
+
+- Endpoint `/chat` gọi OpenAI hoặc vLLM-compatible API.
+- Endpoint `/healthz` và `/readyz`.
+- Config qua environment variables.
+- Logging JSON cơ bản: request id, latency, status.
+- Dockerfile non-root, pinned dependencies.
+- `.dockerignore` để loại `.env`, cache, dataset.
+- GitHub Actions build image và chạy test.
+
+### Suggested structure
+
+```text
+ai-api/
+  src/
+    main.py
+    settings.py
+    llm_client.py
+  tests/
+    test_health.py
+  requirements.txt
+  Dockerfile
+  .dockerignore
+  docker-compose.yml
+```
+
+### Minimal docker-compose
+
+```yaml
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      MODEL_NAME: gpt-4o-mini
+```
+
+### Acceptance criteria
+
+- `docker build` thành công.
+- `docker run` không cần cài Python local.
+- `/healthz` trả 200.
+- API key không nằm trong image.
+- Container chạy bằng non-root user.
+- README có lệnh build/run/test.
+
+Stretch goal: deploy image lên Render/Railway/Cloud Run và thêm GitHub Actions để build trên pull request.
+
+---
+
+## 6. Helm and Environment Promotion
+
+Khi manifest nhiều lên, Helm giúp template hóa deployment.
+
+```text
+charts/ai-api/
+  Chart.yaml
+  values.yaml
+  values-staging.yaml
+  values-prod.yaml
+  templates/deployment.yaml
+  templates/service.yaml
+```
+
+Promotion flow:
+
+```text
+same image tag -> staging values -> prod values
+```
+
+Khác biệt giữa staging/prod nên nằm ở config, không phải code fork:
+
+- replica count,
+- resource limits,
+- model name,
+- rate limits,
+- logging level,
+- feature flags.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Pod scale lên nhưng cùng tranh một GPU">
+**Triệu chứng:** HPA tăng replicas, pod mới schedule vào node đã có model chiếm gần hết VRAM, cả hai OOM.
+
+**Fix:** Khai báo `nvidia.com/gpu: 1`, dùng node affinity/taints, hoặc MIG/time-slicing có kiểm soát.
 </Callout>
 
-<Callout type="warning" title="Pitfall 2: Tải mô hình từ HuggingFace mỗi khi Pod khởi động lại">
-**Triệu chứng:** Khi có lỗi mạng, K8s tự động Restart lại container (Self-healing). Tuy nhiên, mỗi lần Restart, hệ thống bị nghẽn tới 15 phút vì ứng dụng phải tải lại (Download) file weights nặng 15GB từ HuggingFace qua mạng public.
-**Nguyên nhân:** Các kỹ sư thiết lập mã nguồn theo kiểu `model.from_pretrained("meta-llama...")`. Docker container hoàn toàn mất dữ liệu mỗi khi bị restart (Ephemeral storage).
-**Cách khắc phục (Fix):** Đừng bao giờ tải mô hình ở thời điểm Runtime.
-1. Tải sẵn (Bake) mô hình vào trực tiếp bên trong Docker Image ở quá trình Build (Dành cho mô hình nhỏ).
-2. Dùng K8s **Persistent Volume Claim (PVC)**: Gắn (Mount) một ổ đĩa mạng (Ví dụ AWS EFS hoặc NFS) chứa sẵn các model weights vào Pod. Code chỉ cần load model từ đường dẫn ổ đĩa nội bộ (Local path).
+<Callout type="warning" title="Pitfall 2: Startup 15 phút vì tải model mỗi lần pod restart">
+**Triệu chứng:** Rolling update cực chậm, readiness mãi không pass.
+
+**Fix:** Dùng PVC/model cache, preload weights vào node, hoặc bake model nhỏ vào image. Với model lớn, tránh tải từ Internet public mỗi restart.
 </Callout>
 
-<Callout type="danger" title="Pitfall 3: Size của Docker Image lên tới 10GB">
-**Triệu chứng:** Quá trình đẩy (Push) Image lên Cloud Registry mất nửa tiếng. Thời gian K8s kéo (Pull) Image về máy chủ mới để Scale quá chậm làm người dùng bị đứt kết nối.
-**Nguyên nhân:** Kỹ sư dùng Image cơ sở (Base Image) chứa đầy đủ các công cụ phát triển (ví dụ `nvidia/cuda:12.1.1-devel-ubuntu22.04`). Nó chứa toàn bộ trình biên dịch C++, headers, libraries không cần thiết cho quá trình chạy suy luận.
-**Cách khắc phục (Fix):** Luôn dùng Image loại `runtime` (ví dụ `nvidia/cuda:12.1.1-runtime-ubuntu22.04`) cho môi trường Production để cắt giảm 60% dung lượng.
+<Callout type="danger" title="Pitfall 3: Image 12GB làm rollout chậm và tốn egress">
+**Triệu chứng:** Scale node mới mất nhiều phút chỉ để pull image.
+
+**Fix:** Multi-stage build, runtime base image, `.dockerignore`, không copy dataset/cache, dùng registry gần cluster và image layer caching.
 </Callout>
 
 ---
 
-## 6. Cost & Performance Unit Economics
+## Cost / Reliability / Scaling Unit Economics
 
-Hạ tầng phân tán (K8s) mang lại khả năng mở rộng vô hạn nhưng cũng đi kèm với rủi ro tài chính tiềm ẩn:
-
-| Hạ tầng Orchestration | Phân tích SRE (Ý nghĩa kinh tế) | Tối ưu hóa (Optimization) |
+| Quyết định | Tác động | Tối ưu |
 |---|---|---|
-| **K8s Node Autoscaling** | Scale-out (Mở rộng): Tạo thêm một máy chủ GPU mới mất từ 3-5 phút (do phải khởi động máy ảo cloud và kéo Docker Image). Trong 5 phút này, người dùng sẽ bị nghẽn (Drop requests). | Áp dụng kỹ thuật **Overprovisioning**: Luôn chạy dư 1 máy chủ (Dummy Pod). Khi traffic tăng, các dummy pods nhường chỗ ngay lập tức để ứng dụng chính chạy. Hạn chế: Tốn kém chi phí (Waste 1 GPU cost). |
-| **GPU Time-slicing** | Mặc định 1 GPU trị giá $3/giờ chỉ phục vụ cho 1 Container (Pod). Nếu container này chỉ chạy một mô hình 3B (nhỏ), 80% VRAM còn lại của GPU đang bị lãng phí. | Sử dụng **NVIDIA MIG (Multi-Instance GPU)** hoặc kỹ thuật Time-Slicing ở cấp độ K8s Plugin để chia 1 GPU vật lý thành 4 GPU ảo (Virtual GPUs). Giúp 4 Pods chia sẻ nhau tiền thuê, giảm 75% chi phí vận hành. |
+| Image quá lớn | pull chậm, egress cao | slim/runtime base, layer cache |
+| Min replicas cao | uptime tốt nhưng tốn GPU | autoscale theo queue, keep warm nhỏ |
+| HPA theo CPU | AI service có thể GPU overload nhưng CPU thấp | custom GPU/queue metrics |
+| PVC model cache | restart nhanh hơn | quản lý version và cleanup |
+| 1 GPU per pod | isolation tốt | MIG/time-slicing cho model nhỏ |
+| Rolling update mặc định | an toàn web app | với model load lâu, cần readiness và maxUnavailable phù hợp |
+
+Kubernetes giúp scale, nhưng nếu metric sai hoặc image quá nặng, nó chỉ scale sự cố nhanh hơn.
+
+---
+
+## Practice exercises
+
+1. Viết Dockerfile cho một FastAPI app chạy non-root và có health endpoint.
+2. Thiết kế Kubernetes Deployment cho một API dùng 1 GPU.
+3. Giải thích khác nhau giữa liveness probe và readiness probe.
+4. Lập kế hoạch model caching để pod restart nhanh hơn.
+5. Đề xuất HPA metric phù hợp cho LLM serving ngoài CPU.
+
+---
+
+## Knowledge check
+
+1. Docker giải quyết vấn đề gì trong AI deployment?
+2. Vì sao Kubernetes cần NVIDIA device plugin?
+3. `readinessProbe` khác gì `livenessProbe`?
+4. Vì sao không nên tải model từ Hugging Face mỗi lần container start?
+5. Khi nào nên dùng MIG hoặc time-slicing?
+
+---
+
+## Answer key
+
+1. Đóng gói code, dependencies và runtime thành image bất biến, giảm lỗi môi trường.
+2. Để container có thể request và sử dụng GPU vật lý qua resource `nvidia.com/gpu`.
+3. Readiness cho biết pod sẵn sàng nhận traffic; liveness cho biết pod còn sống hay cần restart.
+4. Làm startup chậm, phụ thuộc Internet, tốn băng thông và gây downtime khi restart/scale.
+5. Khi model nhỏ hoặc workload nhẹ không cần nguyên GPU, và bạn chấp nhận quản lý isolation phức tạp hơn.
 
 ---
 
 ## Điểm cần nhớ
 
-- **Docker:** Mang đến tính bất biến (Immutability). Khắc phục triệt để hội chứng "Chạy được trên máy tôi".
-- Multi-stage build là kỹ năng bắt buộc với AI Engineer để giữ dung lượng Image nhẹ gọn và sạch sẽ khỏi các thư viện biên dịch thừa.
-- **Kubernetes (K8s):** Quản lý quy mô lớn. K8s cung cấp Auto-scaling, Self-healing và Rolling Updates mà không làm sập dịch vụ (Zero-downtime).
-- Việc Scale tự động dựa trên độ sử dụng GPU (GPU Utilization) thay vì CPU là một yêu cầu chuyên biệt của MLOps mà kỹ sư SRE thông thường hiếm khi thiết lập.
+- Docker tạo môi trường bất biến; Kubernetes quản lý rollout, self-healing và scale.
+- AI containers cần chú ý CUDA, image size, secrets, health checks và model loading.
+- GPU scheduling phải khai báo rõ resource; Kubernetes không tự chia VRAM an toàn.
+- Project Phase 12 Easy là Dockerize một AI API với health checks, env vars và logging.
+- Orchestration tốt là nền tảng trước khi nói đến cloud deployment và CI/CD.
+
+---
 
 ## Next chapter bridge
 
-Containerization và Kubernetes là nền tảng trừu tượng độc lập với cơ sở hạ tầng. Tuy nhiên, việc vận hành phần cứng (Bare metal) hoặc cụm K8s tự quản lý (Self-managed K8s) đòi hỏi một lượng nhân lực vận hành DevOps/SRE khổng lồ. Hầu hết các công ty lựa chọn ủy thác nhiệm vụ này cho các "Gã khổng lồ đám mây" (Cloud Providers). Chương tiếp theo: **Cloud Deployment** — Khám phá hệ sinh thái AI được quản lý toàn diện trên AWS (SageMaker), GCP (Vertex AI) và Microsoft Azure (Azure OpenAI), tối ưu hóa từ chi phí đến mức độ bảo mật dữ liệu doanh nghiệp (Enterprise Security).
+Bạn đã biết đóng gói và điều phối AI service. Nhưng cụm Kubernetes và GPU node không tự xuất hiện; phần lớn team sẽ dùng AWS, GCP hoặc Azure để thuê hạ tầng managed, quản lý region, IAM, quota và chi phí. Chương tiếp theo: **Cloud Deployment** — nơi chúng ta đưa AI workloads lên cloud một cách có kiểm soát về cost, latency và compliance.

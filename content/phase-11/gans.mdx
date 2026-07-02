@@ -1,297 +1,351 @@
-Nếu VAE giải quyết bài toán sinh dữ liệu bằng cách học một không gian ẩn mượt mà thông qua nén và giải nén, thì Generative Adversarial Networks (GANs) lại chọn một con đường cực đoan và kịch tính hơn rất nhiều: **Học thông qua sự đối kháng**. Trong GANs, không có một hàm Loss nào bắt các pixel của ảnh sinh ra phải giống hệt ảnh gốc. Sự chân thực của bức ảnh được rèn giũa qua một trò chơi sinh tử giữa Kẻ làm giả (Generator) và Cảnh sát (Discriminator).
+Ở bài trước, VAE cho bạn latent space mượt và có cấu trúc xác suất, nhưng output thường bị mờ vì reconstruction loss có xu hướng trung bình hóa pixel. GANs chọn một hướng khác: không yêu cầu ảnh sinh ra giống từng pixel với ảnh gốc, mà yêu cầu nó đủ thật để đánh lừa một discriminator.
 
-## Why this matters
-
-Trong thế giới sản xuất AI:
-
-- **Sắc nét tuyệt đối:** VAE thường sinh ra các bức ảnh mờ (blurry) do trung bình hóa các pixel (MSE loss). GANs khắc phục hoàn toàn điểm yếu này, sinh ra những hình ảnh vô cùng sắc nét, sắc sảo đến từng chi tiết (high-fidelity).
-- **Latent Space Control:** Các kiến trúc nâng cao của GAN (như StyleGAN) cho phép chúng ta kiểm soát các đặc tính của khuôn mặt cực kỳ chi tiết (tuổi tác, giới tính, hướng nhìn, màu tóc) bằng cách cộng trừ các vector trực tiếp trong không gian ẩn.
-- **Nền tảng của Deepfake & Ứng dụng y học:** Hiểu GANs là chìa khóa để xây dựng (và phòng chống) Deepfake, hoặc sinh dữ liệu y khoa tổng hợp (tạo ra các ảnh X-quang giả lập để huấn luyện mô hình chẩn đoán khi thiếu data thực).
-
-<Callout type="danger" title="Huấn luyện GANs là một cực hình">
-Trái ngược với sự ổn định của VAE, huấn luyện GANs trong thực tế là một bài toán cực kỳ bất ổn (highly unstable). Nếu Cảnh sát (Discriminator) quá giỏi, Kẻ làm giả (Generator) sẽ không có cơ hội học hỏi (Vanishing Gradient). Nếu Kẻ làm giả tìm ra một lỗ hổng, nó sẽ chỉ in ra một loại ảnh duy nhất (Mode Collapse). Kỹ sư AI cần có kỹ năng can thiệp toán học tinh tế để giữ cân bằng cho trò chơi này.
-</Callout>
-
-## Learning objectives
-
-Sau chương này, bạn sẽ có thể:
-
-1. Trình bày lý thuyết trò chơi Minimax đằng sau kiến trúc GANs.
-2. Phân biệt vai trò của Generator và Discriminator.
-3. Giải thích hiện tượng sụp đổ mode (Mode Collapse) và Vanishing Gradient.
-4. Phân tích các bước cải tiến kiến trúc từ Vanilla GAN lên DCGAN (Deep Convolutional GAN).
-5. Xây dựng và huấn luyện một mô hình DCGAN cơ bản bằng PyTorch.
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Lý thuyết mạng Convolutional Neural Networks (CNNs) ở Phase 4.
-- Hàm mất mát Binary Cross-Entropy (BCE Loss).
-- Khái niệm về Tối ưu hóa (Optimizers) như Adam.
+Generative Adversarial Networks (GANs) từng là tiêu chuẩn vàng cho ảnh sắc nét, deepfake, face generation và synthetic data. Nhưng với AI Engineer, GANs cũng là bài học quan trọng về training instability: loss không dễ đọc, metric có thể lừa bạn, mode collapse có thể phá diversity và một vài sample đẹp không chứng minh model production-ready.
 
 ---
 
-## Core intuition: The Forger and the Police
+## 1. The Incident (Tình huống sự cố)
 
-Hãy tưởng tượng một trò chơi mèo vờn chuột giữa hai tác nhân:
+<Callout type="danger" title="Báo cáo sự cố: Demo GAN đẹp nhưng catalog sản phẩm bị mode collapse">
+**Bối cảnh:** Một team e-commerce train GAN để sinh ảnh sản phẩm thời trang synthetic cho A/B testing. Sau vài ngày, demo có một số ảnh rất sắc nét và stakeholder quyết định dùng ảnh synthetic để augment dataset.
 
-1. **The Forger (Kẻ làm giả tiền - Generator):** Không bao giờ nhìn thấy tiền thật. Hắn nhắm mắt lại, lấy các con số ngẫu nhiên (noise) làm đầu vào và cố gắng in ra một tờ tiền.
-2. **The Police (Cảnh sát - Discriminator):** Là một chuyên gia giám định. Hắn được xem lẫn lộn cả tiền thật từ ngân hàng và tiền giả do Generator làm ra. Nhiệm vụ của hắn là phân loại "Thật" (True = 1) hay "Giả" (Fake = 0).
+**Sự cố:** Khi chạy batch lớn, 80% ảnh sinh ra gần như cùng một kiểu áo, cùng pose, cùng nền. Classifier downstream học lệch phân phối và performance trên sản phẩm thật giảm.
 
-**Quá trình huấn luyện đan xen:**
-- Lượt của Cảnh sát: Cố gắng giỏi hơn trong việc bắt lỗi tiền giả.
-- Lượt của Kẻ làm giả: Lấy feedback từ Cảnh sát để điều chỉnh nét vẽ, cố gắng in ra tờ tiền giống thật hơn.
+1. Team chọn checkpoint dựa trên vài ảnh đẹp, không đo diversity.
+2. Generator rơi vào mode collapse nhưng loss không cảnh báo rõ.
+3. Discriminator quá mạnh ở một số giai đoạn, generator học đường tắt.
+4. Không có FID/KID, nearest-neighbor check hoặc human review theo batch.
 
-Mục tiêu tối thượng của trò chơi là Kẻ làm giả tạo ra tờ tiền hoàn hảo đến mức Cảnh sát phải bối rối và tung đồng xu (xác suất dự đoán bằng 0.5 cho mọi trường hợp).
+**Hậu quả:** Synthetic dataset bị loại bỏ, mô hình downstream phải retrain và team chuyển sang eval pipeline có diversity metrics trước khi dùng generated data.
+</Callout>
+
+Bài học rút ra: GANs có thể sinh ảnh sắc nét, nhưng production cần đánh giá cả fidelity lẫn diversity. Một vài sample đẹp không đủ để chứng minh generator hữu ích.
+
+---
+
+## 2. Architecture Blueprint (Adversarial Training Loop)
+
+GAN là một vòng lặp giữa generator, discriminator và evaluator:
 
 ```text
-       Random Noise (z)
-             │
-             ▼
-       [ GENERATOR ]
-             │
-             ▼
-        Fake Image (x') ----------┐
-                                  │
-      Real Image (x)              ▼
-             │              [ DISCRIMINATOR ]
-             ▼                    │
-      [ FROM DATASET ]            ▼
-                           Probability (0 to 1)
-                           (0 = Giả, 1 = Thật)
+[ Random noise z / condition c ]
+        │
+        ▼
+[ Generator G ]
+  - synthesize fake sample
+  - tries to fool D
+        │
+        ▼
+[ Fake samples G(z) ] ───────────────┐
+                                      ▼
+[ Real dataset samples x ] ───► [ Discriminator D ]
+                                - real vs fake score
+                                - learns decision boundary
+                                      │
+                                      ▼
+[ Alternating updates ]
+  - update D to classify real/fake
+  - update G to fool D
+        │
+        ▼
+[ Evaluation & monitoring ]
+  - sample grids
+  - FID/KID
+  - diversity checks
+  - nearest-neighbor memorization check
+```
+
+Mục tiêu: giữ trò chơi cân bằng đủ lâu để generator học phân phối dữ liệu thật, không chỉ học một mẹo đánh lừa discriminator.
+
+---
+
+## 3. Generator, Discriminator và Minimax Game
+
+GAN có hai mạng:
+
+| Thành phần | Vai trò | Failure nếu quá mạnh/yếu |
+|---|---|---|
+| Generator `G` | Biến noise/condition thành sample giả | Quá yếu: ảnh noise; quá mạnh theo đường tắt: mode collapse |
+| Discriminator `D` | Phân biệt real/fake | Quá mạnh: generator mất gradient; quá yếu: feedback vô nghĩa |
+
+Hàm mục tiêu cổ điển:
+
+```text
+min_G max_D V(D, G)
+= E[log D(x)] + E[log(1 - D(G(z)))]
+```
+
+Intuition:
+
+- Discriminator muốn `D(real)` gần 1 và `D(fake)` gần 0.
+- Generator muốn fake samples được D đánh giá gần 1.
+- Điểm cân bằng lý tưởng: D không phân biệt được real/fake, output khoảng 0.5.
+
+Trong thực hành, generator thường dùng non-saturating loss để tránh vanishing gradient:
+
+```text
+Generator objective: maximize log D(G(z))
+```
+
+<Callout type="info" title="GAN loss không giống supervised loss">
+Trong supervised learning, loss giảm thường là tốt. Với GANs, loss của G và D phản ánh một trò chơi động. Loss đẹp không đảm bảo ảnh đẹp, và ảnh đẹp không đảm bảo diversity tốt.
+</Callout>
+
+---
+
+## 4. DCGAN, Conditional GAN và StyleGAN
+
+### DCGAN
+
+DCGAN đưa convolution vào GAN để xử lý ảnh tốt hơn:
+
+| Design choice | Lý do |
+|---|---|
+| Transposed convolution trong G | Upsample latent thành ảnh |
+| Strided convolution trong D | Downsample ảnh và học đặc trưng |
+| BatchNorm | Ổn định gradient |
+| ReLU trong G, LeakyReLU trong D | Giữ gradient flow |
+| Tanh output | Match ảnh normalized về `[-1, 1]` |
+
+### Conditional GAN
+
+Conditional GAN thêm điều kiện `c` như class label, text embedding hoặc attributes:
+
+```text
+G(z, c) -> fake sample matching condition c
+D(x, c) -> real/fake score conditioned on c
+```
+
+Ứng dụng:
+
+- Sinh ảnh theo class.
+- Image-to-image translation.
+- Synthetic medical images theo loại bệnh.
+- Product images theo category/style.
+
+### StyleGAN
+
+StyleGAN tách latent thành nhiều mức style, cho phép điều khiển thuộc tính ảnh tốt hơn:
+
+- coarse style: pose, layout,
+- middle style: facial features,
+- fine style: texture, color, hair detail.
+
+StyleGAN quan trọng vì nó cho thấy latent space có thể trở thành interface điều khiển generation, không chỉ là noise.
+
+---
+
+## 5. Failure Modes của GANs
+
+### Mode collapse
+
+Generator sinh ra một hoặc vài kiểu sample lặp lại dù input noise khác nhau.
+
+```text
+z1 -> same-looking face A
+z2 -> same-looking face A
+z3 -> same-looking face A
+```
+
+### Vanishing gradient
+
+Discriminator quá giỏi, `D(fake)` gần 0 với confidence cao. Generator nhận gradient yếu và không biết cải thiện hướng nào.
+
+### Non-convergence
+
+G và D liên tục đuổi nhau, metric dao động, sample quality lên xuống không ổn định.
+
+### Memorization
+
+Generator copy gần như nguyên mẫu training data. Điều này đặc biệt nguy hiểm với dữ liệu nhạy cảm như khuôn mặt, y tế hoặc tài liệu nội bộ.
+
+| Failure | Triệu chứng | Signal cần monitor |
+|---|---|---|
+| Mode collapse | Samples giống nhau | Diversity score, embedding clusters |
+| Vanishing gradient | G không cải thiện | D accuracy quá cao, gradient norm thấp |
+| Non-convergence | Quality dao động | FID/KID theo epoch, sample grids |
+| Memorization | Samples giống train images | nearest-neighbor similarity |
+
+---
+
+## 6. Evaluation: Fidelity, Diversity và Safety
+
+GAN evaluation không nên dựa vào mắt nhìn vài ảnh.
+
+| Metric / Check | Đo gì? | Caveat |
+|---|---|---|
+| FID | Khoảng cách phân phối feature giữa real và fake | Nhạy với dataset/reference |
+| KID | Tương tự FID nhưng estimator khác | Cần đủ sample |
+| Precision/Recall for generative models | Fidelity vs coverage | Phức tạp hơn nhưng hữu ích |
+| Diversity embedding clusters | Có nhiều mode không | Phụ thuộc embedding model |
+| Nearest-neighbor check | Có copy train data không | Cần lưu index train set |
+| Human review | Artifacts, realism, brand fit | Đắt và dễ bias |
+
+Production rule:
+
+```text
+Generated data chỉ nên dùng nếu:
+- fidelity đủ tốt,
+- diversity không collapse,
+- không memorize training examples,
+- không làm downstream model regress.
 ```
 
 ---
 
-## Toán học của Minimax Game
+## 7. Implementation Playbook: DCGAN Training Step Skeleton
 
-Trong lý thuyết trò chơi, hàm mục tiêu của GAN được biểu diễn dưới dạng Minimax:
-
-`min_G max_D V(D, G) = E[log(D(x))] + E[log(1 - D(G(z)))]`
-
-Hãy phân tách nó ra bằng plain text:
-
-### 1. Góc nhìn của Discriminator (D)
-D muốn **tối đa hóa (Maximize)** hàm V.
-- Đối với dữ liệu thật `x`: D muốn dự đoán `D(x)` càng gần 1 càng tốt (khi đó `log(1)` bằng 0, là mức cao nhất).
-- Đối với dữ liệu giả `G(z)`: D muốn dự đoán `D(G(z))` càng gần 0 càng tốt (khi đó `1 - 0 = 1`, và `log(1)` bằng 0).
-
-### 2. Góc nhìn của Generator (G)
-G muốn **tối thiểu hóa (Minimize)** hàm V.
-- G không thể tác động vào `D(x)` (vì x là dữ liệu thật).
-- G chỉ có thể thay đổi cách tạo ra `G(z)`. Mục tiêu của G là đánh lừa D, khiến D dự đoán `D(G(z))` tiến tới 1. Khi `D(G(z)) -> 1`, biểu thức `log(1 - D(G(z)))` sẽ tiến về âm vô cùng (mức tối thiểu).
-
-*Mẹo trong thực hành:* Thay vì tối thiểu hóa `log(1 - D(G(z)))` (có thể gây ra đạo hàm bằng 0 ở giai đoạn đầu khi D quá giỏi), lập trình viên thường chọn cách **tối đa hóa `log(D(G(z)))`**. Về mặt toán học, hai cách này không hoàn toàn tương đương, nhưng cách thứ hai cung cấp gradients (đạo hàm) mạnh mẽ hơn cho G học hỏi.
-
----
-
-## Architecture: Từ Vanilla GAN lên DCGAN
-
-Các mạng GAN ban đầu (Vanilla GAN) chỉ sử dụng Fully Connected Layers (các mạng lưới phẳng). Điều này khiến nó mất đi khả năng cảm nhận không gian và chỉ sinh ra được các ảnh mờ, độ phân giải thấp.
-
-**Deep Convolutional GANs (DCGAN)** tạo ra một chuẩn mực thiết kế mới bằng cách:
-
-1. **Loại bỏ Pooling Layers:** Thay Max-Pooling bằng các phép cuộn có bước nhảy lớn (Strided Convolutions) trong Discriminator và Fractional-Strided Convolutions (Transposed Convolutions) trong Generator để mạng tự học cách thu nhỏ và phóng to ảnh.
-2. **Sử dụng BatchNorm:** Chuẩn hóa batch được áp dụng trên cả hai mạng giúp dòng chảy gradient ổn định, hạn chế sự sụp đổ.
-3. **Loại bỏ Fully Connected Layers ở các lớp sâu:** Để giữ lại cấu trúc không gian ba chiều của dữ liệu.
-4. **Hàm kích hoạt chuyên biệt:** 
-   - Generator: Dùng `ReLU` ở các lớp giữa, và `Tanh` ở lớp cuối (để ép pixel về khoảng [-1, 1]).
-   - Discriminator: Dùng `LeakyReLU` cho tất cả các lớp. `LeakyReLU` cho phép một lượng nhỏ gradient chảy qua ngay cả khi giá trị âm, giúp Generator nhận được tín hiệu phản hồi tốt hơn.
-
----
-
-## 3 Căn bệnh nan y của GANs (Failure Modes)
-
-### 1. Mode Collapse (Sụp đổ mode)
-Generator phát hiện ra rằng có một kiểu hình ảnh cụ thể (ví dụ: một số 1 màu đỏ) luôn đánh lừa được Discriminator. Thay vì sinh ra đa dạng các mẫu (các số từ 0 đến 9), Generator sẽ "lười biếng" và chỉ tập trung sinh ra duy nhất kiểu ảnh đó. Toàn bộ tính đa dạng (diversity) của hệ thống bị phá hủy.
-
-### 2. Vanishing Gradient (Triệt tiêu đạo hàm)
-Nếu Discriminator học quá nhanh và trở nên quá xuất sắc, nó sẽ dễ dàng từ chối mọi bức ảnh do Generator tạo ra với độ tự tin 100%. Lúc này, đường cong hàm Loss của Discriminator trở nên bằng phẳng hoàn toàn, giá trị đạo hàm (gradient) bằng 0. Generator không nhận được thông tin hướng dẫn nào để cải thiện và quá trình huấn luyện bị đình trệ.
-
-### 3. Không hội tụ (Non-convergence)
-Không giống như huấn luyện mạng neural phân loại (luôn hội tụ về một điểm tối thiểu cục bộ cố định), GAN là trò chơi mèo vờn chuột không có điểm dừng. Việc hai mạng liên tục đuổi theo nhau có thể tạo ra các vòng lặp vô tận, trong đó Loss của cả hai dao động mạnh mẽ nhưng chất lượng hình ảnh sinh ra không hề cải thiện.
-
----
-
-## Implementation lab: DCGAN with PyTorch
-
-**Nhiệm vụ:** Viết khung mã PyTorch thiết lập một Generator và Discriminator theo cấu trúc DCGAN, định nghĩa hàm Loss và quy trình cập nhật trọng số luân phiên.
+Skeleton dưới đây minh họa alternating updates và các điểm dễ sai.
 
 ```python
 import torch
 import torch.nn as nn
-import torch.optim as optim
 
-# Kích thước vector nhiễu (Latent dimension)
-nz = 100
 
-class Generator(nn.Module):
-    def __init__(self):
-        super(Generator, self).__init__()
-        # Transposed Convolutions để phóng to từ vector z (1x1) lên ảnh (64x64)
-        self.main = nn.Sequential(
-            # Input là z, chuyển vào lớp ConvTranspose2d
-            nn.ConvTranspose2d(nz, 512, 4, 1, 0, bias=False),
-            nn.BatchNorm2d(512),
-            nn.ReLU(True),
-            
-            nn.ConvTranspose2d(512, 256, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(256),
-            nn.ReLU(True),
-            
-            nn.ConvTranspose2d(256, 128, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(128),
-            nn.ReLU(True),
-            
-            nn.ConvTranspose2d(128, 64, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(64),
-            nn.ReLU(True),
-            
-            # Lớp cuối: Output là ảnh 3 kênh màu (RGB), kích thước 64x64
-            nn.ConvTranspose2d(64, 3, 4, 2, 1, bias=False),
-            nn.Tanh() # Ép giá trị pixel về dải [-1, 1]
-        )
+def train_gan_step(generator, discriminator, real_images, optim_g, optim_d, latent_dim):
+    device = real_images.device
+    batch_size = real_images.size(0)
+    bce = nn.BCELoss()
 
-    def forward(self, input):
-        return self.main(input)
+    real_labels = torch.ones(batch_size, device=device)
+    fake_labels = torch.zeros(batch_size, device=device)
 
-class Discriminator(nn.Module):
-    def __init__(self):
-        super(Discriminator, self).__init__()
-        # Mạng CNN thông thường dùng Strided Conv để thu nhỏ ảnh dần dần
-        self.main = nn.Sequential(
-            nn.Conv2d(3, 64, 4, 2, 1, bias=False),
-            nn.LeakyReLU(0.2, inplace=True), # LeakyReLU giúp gradient không bị chết
-            
-            nn.Conv2d(64, 128, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(128),
-            nn.LeakyReLU(0.2, inplace=True),
-            
-            nn.Conv2d(128, 256, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(256),
-            nn.LeakyReLU(0.2, inplace=True),
-            
-            nn.Conv2d(256, 512, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(512),
-            nn.LeakyReLU(0.2, inplace=True),
-            
-            # Lớp cuối: Nén toàn bộ về 1 con số (Xác suất Fake/Real)
-            nn.Conv2d(512, 1, 4, 1, 0, bias=False),
-            nn.Sigmoid()
-        )
+    # 1. Update Discriminator
+    optim_d.zero_grad()
 
-    def forward(self, input):
-        return self.main(input).view(-1, 1).squeeze(1)
+    real_scores = discriminator(real_images)
+    loss_d_real = bce(real_scores, real_labels)
 
-# ----- Vòng lặp huấn luyện (Training Loop Pseudo-code) -----
-# netG = Generator()
-# netD = Discriminator()
-# criterion = nn.BCELoss()
-# optimizerD = optim.Adam(netD.parameters(), lr=0.0002, betas=(0.5, 0.999))
-# optimizerG = optim.Adam(netG.parameters(), lr=0.0002, betas=(0.5, 0.999))
+    z = torch.randn(batch_size, latent_dim, 1, 1, device=device)
+    fake_images = generator(z)
 
-# for epoch in range(num_epochs):
-#     for real_data in dataloader:
-#         batch_size = real_data.size(0)
-#         
-#         # --- BƯỚC 1: Cập nhật Discriminator ---
-#         netD.zero_grad()
-#         # Huấn luyện D với ảnh thật (Target = 1)
-#         output_real = netD(real_data)
-#         loss_D_real = criterion(output_real, torch.ones(batch_size))
-#         
-#         # Huấn luyện D với ảnh giả
-#         noise = torch.randn(batch_size, nz, 1, 1)
-#         fake_data = netG(noise)
-#         output_fake = netD(fake_data.detach()) # Dùng detach() để không tính đạo hàm của G
-#         loss_D_fake = criterion(output_fake, torch.zeros(batch_size))
-#         
-#         loss_D = loss_D_real + loss_D_fake
-#         loss_D.backward()
-#         optimizerD.step()
-#         
-#         # --- BƯỚC 2: Cập nhật Generator ---
-#         netG.zero_grad()
-#         # Dù là ảnh giả, nhưng G muốn đánh lừa D nên đặt Target = 1
-#         output = netD(fake_data) 
-#         loss_G = criterion(output, torch.ones(batch_size))
-#         loss_G.backward()
-#         optimizerG.step()
+    # detach prevents gradients flowing into G during D update
+    fake_scores = discriminator(fake_images.detach())
+    loss_d_fake = bce(fake_scores, fake_labels)
+
+    loss_d = loss_d_real + loss_d_fake
+    loss_d.backward()
+    optim_d.step()
+
+    # 2. Update Generator
+    optim_g.zero_grad()
+
+    # G wants D(fake) to be classified as real
+    fake_scores_for_g = discriminator(fake_images)
+    loss_g = bce(fake_scores_for_g, real_labels)
+
+    loss_g.backward()
+    optim_g.step()
+
+    return {
+        "loss_d": float(loss_d.detach().cpu()),
+        "loss_g": float(loss_g.detach().cpu()),
+        "d_real_mean": float(real_scores.detach().mean().cpu()),
+        "d_fake_mean": float(fake_scores.detach().mean().cpu()),
+    }
 ```
+
+Production checklist:
+
+- Normalize real images to match generator output range.
+- Save fixed-noise sample grid every epoch.
+- Track diversity metrics, not only loss.
+- Use fixed seeds for comparison, but evaluate random seeds for diversity.
+- Run nearest-neighbor checks before using generated samples as training data.
 
 ---
 
-## Common mistakes & debugging checklist
+## 8. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
-<Callout type="warning" title="Mistake 1: Quên detach() ảnh giả khi huấn luyện Discriminator">
-Khi bạn huấn luyện Discriminator trên ảnh giả được sinh ra bởi Generator, nếu bạn truyền thẳng `fake_data` vào mà không gọi `.detach()`, PyTorch sẽ cố gắng tính ngược đạo hàm xuyên qua cả mạng Generator. Điều này làm tốn VRAM vô ích và gây lỗi cập nhật trọng số chéo.
+<Callout type="warning" title="Pitfall 1: Mode collapse">
+**Triệu chứng:** Nhiều latent vectors sinh ra samples gần như giống nhau.
+
+**Nguyên nhân:** Generator tìm được một mode dễ đánh lừa discriminator; training mất cân bằng.
+
+**Cách khắc phục:** Theo dõi diversity, thử minibatch discrimination, label smoothing, data augmentation, WGAN-GP hoặc giảm learning rate.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: Đánh giá mô hình dựa trên Loss">
-Ở các bài toán AI thông thường (Phân loại, VAE), Loss giảm nghĩa là mô hình tốt lên. Với GANs, Loss của D và G chỉ mang tính tương đối (đang giằng co nhau). Loss ổn định quanh mức 0.5 - 0.7 có thể là một dấu hiệu tốt, nhưng Loss của G tụt về 0 không có nghĩa là G hoàn hảo, mà có thể do D đã hoàn toàn sụp đổ. Đánh giá GAN phải dựa trên việc quan sát bằng mắt hoặc sử dụng chỉ số chuyên dụng (như FID Score).
+<Callout type="warning" title="Pitfall 2: Discriminator quá mạnh">
+**Triệu chứng:** D accuracy gần 100%, G loss không cải thiện, samples vẫn noise.
+
+**Nguyên nhân:** D học nhanh hơn G, khiến gradient cho G yếu.
+
+**Cách khắc phục:** Giảm update steps/LR của D, dùng label smoothing, noisy labels hoặc non-saturating loss.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: Đặt Learning Rate quá cao">
-GANs cực kỳ nhạy cảm với Learning Rate. Việc sử dụng cấu hình mặc định của Adam optimizer (lr=0.001) thường làm sụp đổ mô hình ngay lập tức. Cấu hình tiêu chuẩn của DCGAN là Learning Rate phải rất nhỏ (`0.0002`) và tham số momentum beta1 phải được giảm xuống `0.5` thay vì `0.9`.
+<Callout type="warning" title="Pitfall 3: Đánh giá bằng vài ảnh đẹp">
+**Triệu chứng:** Demo tốt nhưng batch lớn thiếu diversity hoặc đầy artifact.
+
+**Nguyên nhân:** Cherry-pick samples, không có FID/KID/diversity eval.
+
+**Cách khắc phục:** Tự động sample nhiều seed, tạo eval report và yêu cầu human review trên random grid.
 </Callout>
 
-### Checklist kiểm tra:
-- [ ] Mạng Generator sử dụng `ConvTranspose2d` để phóng to dữ liệu chưa?
-- [ ] Hàm kích hoạt ở lớp ra (output layer) của Generator là `Tanh` (giá trị [-1, 1]) chưa? Và dữ liệu ảnh gốc đã được normalize về dải [-1, 1] chưa?
-- [ ] Discriminator có sử dụng `LeakyReLU` để duy trì luồng chảy của gradient không?
-- [ ] Trong vòng lặp huấn luyện, sau khi cập nhật D, bạn có sinh lại `fake_data` hoặc giữ nguyên nhưng bỏ `detach()` để tính loss cho G không?
+<Callout type="warning" title="Pitfall 4: Generator memorize dữ liệu thật">
+**Triệu chứng:** Ảnh sinh ra quá giống ảnh trong training set.
+
+**Nguyên nhân:** Dataset nhỏ/nhạy cảm, model overfit, thiếu privacy checks.
+
+**Cách khắc phục:** Nearest-neighbor audit, dedup dataset, regularization, differential privacy nếu cần và không dùng dữ liệu nhạy cảm khi chưa có policy.
+</Callout>
+
+---
+
+## 9. Cost & Evaluation Unit Economics
+
+GANs thường rẻ khi inference một sample, nhưng đắt ở training retry và evaluation.
+
+| Cost bucket | Vì sao phát sinh | Cách kiểm soát |
+|---|---|---|
+| Training retries | GAN instability, nhiều run fail | Config sweeps nhỏ, checkpointing, early diagnostics |
+| Human review | Visual quality khó đo hoàn toàn bằng metric | Review random grids, rubric rõ |
+| Diversity eval | Cần sample nhiều ảnh | Batch eval offline, embedding cache |
+| Privacy audit | Generated images có thể memorize | Nearest-neighbor index, dataset governance |
+| Downstream regression | Synthetic data làm model khác tệ đi | A/B eval real-only vs synthetic-augmented |
+
+Production takeaway: GANs không chỉ tốn GPU để train. Chúng tốn chi phí để chứng minh ảnh sinh ra đa dạng, không copy dữ liệu thật và thật sự cải thiện downstream workload.
 
 ---
 
 ## Practice exercises
 
-1. **Chuẩn hóa dữ liệu:** Viết đoạn code Python sử dụng thư viện `torchvision.transforms` để normalize một bức ảnh màu về đúng dải giá trị `[-1, 1]` tương thích với hàm Tanh của Generator.
-2. **Khắc phục vanishing gradient:** Sửa đổi hàm Loss của Generator. Thay vì tối thiểu hóa biểu thức `log(1 - D(G(z)))` như sách giáo khoa, hãy viết code PyTorch để tối đa hóa biểu thức `log(D(G(z)))`.
-3. **Phân tích nhãn:** Giả sử bạn muốn Discriminator dự đoán không quá tự tin (để tránh bóp nghẹt Generator). Hãy triển khai kỹ thuật "Label Smoothing" bằng cách đổi nhãn của ảnh thật từ `1.0` thành một số ngẫu nhiên trong khoảng `[0.9, 1.0]`.
+1. Thiết kế eval report cho GAN sinh ảnh sản phẩm gồm fidelity, diversity và memorization checks.
+2. Viết pseudo-code tạo fixed-noise sample grid sau mỗi epoch.
+3. So sánh VAE và GAN theo latent smoothness, image sharpness và training stability.
+4. Đề xuất cách phát hiện mode collapse bằng image embeddings.
+5. Thiết kế policy dùng synthetic images trong training classifier mà không làm leakage dữ liệu nhạy cảm.
 
 ---
 
 ## Knowledge check
 
-1. Vì sao không gian ẩn của VAE liên tục nhưng ảnh sinh ra thường bị mờ, trong khi GAN sinh ra ảnh sắc nét nhưng không gian ẩn khó kiểm soát?
-2. Hàm kích hoạt `LeakyReLU` mang lại lợi thế gì cho mạng Discriminator so với `ReLU` thông thường?
-3. Hiện tượng "Mode Collapse" biểu hiện cụ thể bằng hình ảnh như thế nào?
-4. Trong hàm tính Loss của Generator ở thực tế (thực thi mã), tại sao nhãn mục tiêu (target label) cho dữ liệu giả lại được gán bằng `1` (True) thay vì `0` (False)?
-5. Tại sao cấu hình optimizer Adam trong DCGAN thường yêu cầu tham số `beta1 = 0.5`?
+1. Vai trò của Generator và Discriminator trong GAN là gì?
+2. Mode collapse là gì?
+3. Vì sao GAN loss khó dùng làm metric chất lượng duy nhất?
+4. DCGAN cải thiện Vanilla GAN bằng những design nào?
+5. Vì sao cần nearest-neighbor check với generated images?
 
 ---
 
 ## Answer key
 
-1. VAE sử dụng MSE/BCE Loss, đo lường sai số từng điểm ảnh độc lập, do đó có xu hướng trung bình hóa các khả năng, tạo ra vùng mờ. GANs không so sánh pixel trực tiếp mà được đánh giá qua mạng Discriminator (có tính toàn cục), ép Generator sinh ra các kết cấu sắc sảo để đánh lừa bộ phân loại.
-2. `ReLU` cắt bỏ hoàn toàn phần âm (gradient = 0). Nếu Discriminator quá tự tin đẩy các dự đoán ảnh giả về giá trị âm sâu, `ReLU` sẽ chặn đứng gradient, khiến Generator không học được gì (Vanishing Gradient). `LeakyReLU` cho phép rò rỉ một lượng nhỏ đạo hàm qua phần âm, duy trì tín hiệu học tập.
-3. Generator chỉ sinh ra duy nhất một bức ảnh hoặc một nhóm ảnh rất giống nhau lặp đi lặp lại bất kể bạn truyền vào vector nhiễu (noise) $z$ nào.
-4. Vì mục tiêu của Generator là "đánh lừa" Discriminator. Bằng cách gán nhãn mục tiêu là `1` cho ảnh giả, ta đang yêu cầu PyTorch cập nhật trọng số của G sao cho đầu ra của D tiến càng gần giá trị `1` càng tốt.
-5. `beta1` là hệ số quán tính (momentum) của thuật toán Adam. Đặt `beta1` cao (như mặc định 0.9) sẽ khiến các gradient bị trễ nhịp (oscillation) mạnh, làm hai mạng D và G liên tục chạy lố mục tiêu và sụp đổ. Giảm `beta1 = 0.5` giúp quá trình học nhạy bén hơn.
-
----
-
-## Mini-project: DCGAN Face Generator
-
-**Nhiệm vụ:** Xây dựng và huấn luyện mô hình DCGAN trên tập dữ liệu CelebA (khuôn mặt người nổi tiếng).
-
-**Yêu cầu đầu ra:**
-- Định nghĩa kiến trúc DCGAN hoàn chỉnh.
-- Viết vòng lặp huấn luyện luân phiên giữa D và G.
-- Sử dụng hàm `torchvision.utils.make_grid` để lưu lại sự tiến hóa của các khuôn mặt sinh ra sau mỗi epoch.
-- Báo cáo và giải thích ít nhất một hiện tượng sụp đổ (nếu có) xảy ra trong quá trình bạn tinh chỉnh hyperparameters.
+1. Generator sinh sample giả từ noise/condition; Discriminator phân biệt sample thật và giả, cung cấp tín hiệu học cho Generator.
+2. Là khi Generator chỉ sinh một hoặc vài kiểu sample lặp lại, mất diversity dù input noise thay đổi.
+3. Vì GAN là trò chơi động giữa hai mạng; loss phản ánh cân bằng tương đối, không trực tiếp đo fidelity/diversity/safety.
+4. Dùng convolution/transposed convolution, BatchNorm, LeakyReLU, Tanh output và normalization phù hợp cho ảnh.
+5. Để kiểm tra generator có memorize/copy training data không, đặc biệt với dữ liệu nhạy cảm hoặc dataset nhỏ.
 
 ---
 
 ## Điểm cần nhớ
 
-- Trái với VAE hội tụ theo hàm Loss, GAN là bài toán tìm điểm cân bằng Nash trong lý thuyết trò chơi.
-- Kiến trúc DCGAN với Strided Convolutions, BatchNorm và LeakyReLU là bộ khung nền tảng giải quyết sự bất ổn của GAN.
-- Hiện tượng Mode Collapse và Vanishing Gradient là hai kẻ thù lớn nhất mà các kỹ sư AI cần liên tục theo dõi và xử lý khi huấn luyện GAN.
-
----
+- GANs sinh ảnh sắc nét nhờ adversarial training, không nhờ pixel reconstruction loss.
+- Training GAN là bài toán cân bằng Generator và Discriminator, rất dễ bất ổn.
+- Mode collapse là failure mode production-critical vì phá diversity.
+- Đánh giá GAN phải đo cả fidelity, diversity, memorization và downstream impact.
+- Một vài sample đẹp không đủ để dùng generated data trong production.
+- GANs là nền tảng quan trọng để hiểu deepfake, synthetic data và các rủi ro generative media.
 
 ## Next chapter bridge
 
-Tuy VAE cung cấp tính liên tục và GAN cung cấp độ sắc nét, cả hai đều có những khuyết điểm nghiêm trọng về tính ổn định khi mở rộng quy mô dữ liệu cực lớn. Để đạt được chất lượng sinh ảnh đỉnh cao như DALL-E hay Midjourney, giới nghiên cứu AI đã chuyển hướng sang một họ mô hình hoàn toàn mới mượn cảm hứng từ nhiệt động lực học. Chương tiếp theo: **Diffusion Models** — học cách phá hủy dữ liệu bằng nhiễu rồi tái tạo lại từng bước một.
+GANs giải quyết độ sắc nét nhưng khó train ổn định và khó điều khiển bằng prompt chi tiết. Chương tiếp theo: **Diffusion Models** — họ mô hình phá hủy rồi tái tạo dữ liệu bằng denoising, ổn định hơn, kiểm soát tốt hơn và trở thành nền tảng của DALL-E, Stable Diffusion, Midjourney và nhiều hệ sinh ảnh hiện đại.

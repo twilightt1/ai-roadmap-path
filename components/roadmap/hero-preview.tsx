@@ -1,23 +1,30 @@
 "use client";
 
-import { motion } from "motion/react";
-import { Terminal, Cpu, GitMerge, ShieldCheck, Layers } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
+import { Terminal, Cpu, GitMerge, Gauge, Layers } from "lucide-react";
 
 export function HeroPreview() {
+  const reduce = useReducedMotion();
+
   const nodes = [
     { id: "01", label: "Math & Python", icon: Cpu, status: "completed" },
     { id: "05", label: "Deep Learning", icon: Layers, status: "active" },
     { id: "10", label: "LLM & RAG", icon: GitMerge, status: "pending" },
-    { id: "15", label: "AI Agents", icon: ShieldCheck, status: "pending" },
+    { id: "15", label: "Optimization", icon: Gauge, status: "pending" },
   ];
 
   return (
     <div className="relative w-full max-w-md mx-auto">
       {/* Glow background */}
-      <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-emerald-500/20 to-cyan-500/20 opacity-30 blur-xl" />
+      <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 opacity-30 blur-xl" />
 
       {/* Main Terminal Window */}
-      <div className="relative rounded-2xl border border-white/10 bg-zinc-950/80 p-5 font-mono text-xs backdrop-blur-xl shadow-2xl">
+      <motion.div
+        initial={reduce ? false : { opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+        className="relative rounded-2xl border border-white/10 bg-zinc-950/80 p-5 font-mono text-xs backdrop-blur-xl shadow-2xl"
+      >
         {/* Header */}
         <div className="mb-4 flex items-center justify-between border-b border-white/5 pb-3">
           <div className="flex items-center gap-1.5">
@@ -47,9 +54,9 @@ export function HeroPreview() {
               return (
                 <motion.div
                   key={node.id}
-                  initial={{ opacity: 0, x: -10 }}
+                  initial={reduce ? false : { opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: idx * 0.1, duration: 0.4 }}
+                  transition={{ delay: reduce ? 0 : idx * 0.1 + 0.2, duration: 0.4 }}
                   className="relative flex items-center gap-4 pl-8"
                 >
                   {/* Node Circle */}
@@ -62,7 +69,7 @@ export function HeroPreview() {
                     {node.status === "active" && (
                       <div className="relative flex h-8 w-8 items-center justify-center rounded-full border border-emerald-400 bg-zinc-900 ring-4 ring-zinc-950">
                         <motion.div
-                          animate={{ scale: [1, 1.2, 1] }}
+                          animate={reduce ? {} : { scale: [1, 1.2, 1] }}
                           transition={{ repeat: Infinity, duration: 2 }}
                           className="absolute inset-0 rounded-full bg-emerald-400/10"
                         />
@@ -107,7 +114,7 @@ export function HeroPreview() {
           <span>System Load: 0.42</span>
           <span className="text-emerald-500">Status: Ready</span>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }

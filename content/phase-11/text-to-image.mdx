@@ -1,271 +1,455 @@
-Việc hiểu rõ về Diffusion Models ở khía cạnh toán học là nền tảng vững chắc, nhưng trong thế giới sản xuất phần mềm (production), rất ít công ty tự huấn luyện một mô hình sinh ảnh từ đầu. Hầu hết các kỹ sư AI thao tác với quá trình sinh ảnh thông qua **Text-to-Image APIs** (ví dụ: DALL-E, Midjourney, Stable Diffusion). Quá trình tích hợp này không chỉ là gọi một hàm REST API đơn giản, mà là thiết kế kiến trúc hệ thống để xử lý bài toán **Bất đồng bộ (Asynchronous Execution)** do thời gian tính toán kéo dài của mạng neural.
+Bạn đã hiểu Diffusion Models ở mức cơ chế: noise, denoising, scheduler, CFG, latent space và ControlNet. Nhưng trong sản phẩm thật, rất ít team tự train hoặc tự viết sampling loop từ đầu. Phần lớn AI Engineers tích hợp text-to-image qua API hoặc inference service như DALL-E, Stable Diffusion, Flux, Replicate, Hugging Face endpoints hoặc backend GPU nội bộ.
 
-## Why this matters
+Text-to-Image API không phải chỉ là `POST /generate`. Đây là một product pipeline bất đồng bộ: prompt moderation, style controls, queueing, provider calls, asset storage, output safety, cost budget, retry/re-roll policy và user experience khi generation mất 10-60 giây.
 
-Trong môi trường hệ thống thực tế (production system), tích hợp API sinh ảnh chứa đầy rủi ro:
+---
 
-- **Độ trễ khổng lồ (Latency Spike):** Một API sinh văn bản (LLM) phản hồi token đầu tiên trong 0.5s, nhưng một API sinh ảnh (như DALL-E 3) có thể mất từ 10s đến 30s. Nếu bạn để ứng dụng di động (Mobile App) mở kết nối HTTP chờ 30 giây, kết nối đó sẽ bị thiết bị cắt đứt do Time-out.
-- **Tiêu tốn tài nguyên máy chủ:** Giữ kết nối HTTP chờ (Blocking I/O) làm cạn kiệt số lượng luồng (Threads) của máy chủ Backend, dẫn đến sập toàn bộ hệ thống web khi có nhiều người dùng.
-- **Kiểm soát chi phí:** Sinh ảnh đắt hơn rất nhiều so với sinh văn bản. Bạn phải đối phó với bài toán Spam/Rate-limit.
-- **Content Moderation:** Hình ảnh sinh ra không thể dự đoán trước. Người dùng có thể truyền vào prompt độc hại để sinh ra các ảnh bạo lực hoặc không phù hợp (NSFW). Bạn sẽ vi phạm luật pháp nếu không có bộ lọc an toàn trước khi hiển thị cho người dùng cuối.
+## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Không bao giờ gọi Image API đồng bộ trên luồng chính của Backend">
-Lỗi thiết kế lớn nhất của AI Engineer mới vào nghề là `response = requests.post(dalley_url)` trên luồng API trực tiếp. Hãy thiết kế hệ thống theo mô hình Bất đồng bộ (Async Message Queue + Webhooks).
+<Callout type="danger" title="Báo cáo sự cố: Gọi image API đồng bộ làm backend timeout và bill tăng vọt">
+**Bối cảnh:** Một startup launch tính năng tạo ảnh marketing bằng API sinh ảnh. Backend nhận prompt từ frontend, gọi provider trực tiếp trong request HTTP, chờ ảnh xong rồi trả URL về client.
+
+**Sự cố:** Khi traffic tăng, nhiều request giữ kết nối 30-45 giây rồi timeout. User bấm generate lại nhiều lần, tạo duplicate jobs. Một số prompt unsafe bị gửi lên provider trước khi moderation, vẫn bị tính phí dù output bị chặn.
+
+1. Image generation chạy đồng bộ trên request thread.
+2. Không có job id, queue, polling/webhook hoặc idempotency key.
+3. Không có pre-generation moderation và user quota.
+4. Lưu URL tạm của provider nên ảnh biến mất sau vài giờ.
+
+**Hậu quả:** Backend quá tải, provider cost vượt ngân sách tuần trong một ngày, và team phải rebuild pipeline theo mô hình async job.
 </Callout>
 
-## Learning objectives
-
-Sau chương này, bạn sẽ có thể:
-
-1. Phân biệt các hệ sinh thái mô hình sinh ảnh hiện nay (DALL-E, Stable Diffusion, Midjourney, Flux).
-2. Xây dựng kỹ năng Prompt Engineering chuyên biệt cho hình ảnh (Negative Prompts, Lighting, Composition).
-3. Thiết kế kiến trúc Backend bất đồng bộ sử dụng Task ID và Webhooks.
-4. Cấu hình Polling Pattern an toàn để giảm tải I/O cho máy chủ.
-5. Triển khai đường ống kiểm duyệt nội dung an toàn (Safety & NSFW filtering).
-6. Viết mã FastAPI để xử lý luồng Webhook sinh ảnh tự động.
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Khái niệm cơ bản về HTTP Requests (POST, GET).
-- Hiểu kiến trúc RestAPI sử dụng FastAPI hoặc NodeJS.
-- Kiến thức cơ bản về mô hình Diffusion (để hiểu tại sao việc sinh ảnh lại tốn thời gian).
+Bài học rút ra: sinh ảnh là workload chậm, đắt và rủi ro. Production cần async architecture, moderation hai chiều, asset lifecycle và cost guardrails.
 
 ---
 
-## Các hệ sinh thái API phổ biến
+## 2. Architecture Blueprint (Async Image Generation Pipeline)
 
-Không có một API sinh ảnh nào là hoàn hảo cho mọi ứng dụng. Kỹ sư AI cần biết cách chọn công cụ theo đặc thù sản phẩm:
-
-### 1. DALL-E 3 (OpenAI API)
-- **Đặc điểm:** Tuân thủ cực tốt theo Text Prompt. Khả năng tích hợp text (chữ viết) vào trong ảnh rất tốt.
-- **Mức độ kiểm soát:** Thấp. Bạn không thể cung cấp Negative Prompts, không thể can thiệp sâu vào tỷ lệ khung hình hay hạt giống ngẫu nhiên (seed) linh hoạt.
-- **Cost:** Cao (khoảng $0.04/ảnh độ phân giải cao).
-
-### 2. Stable Diffusion / Flux (Replicate / HuggingFace)
-- **Đặc điểm:** Mã nguồn mở, cộng đồng lớn nhất, độ chân thực cực cao (Photorealism).
-- **Mức độ kiểm soát:** Cực cao. Cung cấp API cho ControlNet (sinh ảnh giữ nguyên tư thế nhân vật), Inpainting/Outpainting (thay đổi vùng nhỏ trong ảnh).
-- **Cost:** Có thể rẻ hơn hoặc tự Host (Self-hosting) trên máy chủ GPU riêng để tối ưu chi phí nếu lượng request siêu lớn.
-
-### 3. Midjourney (Qua các API không chính thức)
-- **Đặc điểm:** Phong cách nghệ thuật (artistic style) đẹp nhất thị trường.
-- **Mức độ kiểm soát:** Không cung cấp API REST chính thức (Phải chạy qua nền tảng Discord, các API trên mạng chủ yếu là hàng độ chế/unofficial).
-
----
-
-## Prompt Engineering chuyên sâu cho Hình ảnh
-
-Khác với LLM (nói chuyện bằng logic và ngôn ngữ tự nhiên), Prompt cho các hệ thống như Stable Diffusion thường mang cấu trúc các "từ khóa" xếp chồng lên nhau (Keyword-based structure).
-
-Cấu trúc một prompt hình ảnh chuyên nghiệp gồm 5 thành phần:
-
-1. **Subject (Chủ thể):** Cái gì đang xuất hiện? (Ví dụ: `A cyberpunk cat hacker`)
-2. **Medium (Phương tiện):** Chụp ảnh thật, tranh sơn dầu, render 3D? (Ví dụ: `Shot on 35mm lens, photorealistic, Unreal Engine 5`)
-3. **Lighting (Ánh sáng):** Yếu tố quyết định 50% độ đẹp của ảnh. (Ví dụ: `Cinematic lighting, volumetric lighting, neon glow, golden hour`)
-4. **Color & Vibe (Màu sắc & Không khí):** (Ví dụ: `Vibrant colors, dark moody, pastel`)
-5. **Resolution/Quality:** (Ví dụ: `8k resolution, highly detailed, sharp focus`)
-
-### Negative Prompts
-Đây là một tham số (parameter) riêng biệt truyền vào API, dùng để báo cho mô hình Diffusion biết **"không được phép"** sinh ra cái gì.
-
-- **Ví dụ Negative Prompts:** `ugly, blurry, extra fingers, mutated hands, poorly drawn face, bad anatomy, text, watermark`
-
----
-
-## System Architecture: Bất đồng bộ trong sinh ảnh
-
-Như đã cảnh báo ở trên, sinh ảnh tốn hàng chục giây. Việc giữ HTTP Request mở sẽ gây ra nghẽn cổ chai (Bottleneck). Ta có hai chiến lược giải quyết: **Polling** và **Webhooks**.
-
-### Kiến trúc 1: Polling (Hỏi vòng)
-
-Phù hợp cho các dự án cỡ vừa và nhỏ, dễ thiết lập.
-1. Frontend gửi yêu cầu sinh ảnh lên Backend.
-2. Backend gửi tín hiệu cho AI Provider (ví dụ: Replicate) và nhận lại một mã số công việc (`Task_ID` = 12345). Backend trả luôn mã này về cho Frontend kèm HTTP Status 202 (Accepted). Kết nối bị đóng.
-3. Cứ mỗi 3 giây, Frontend gọi API `GET /task/12345` lên Backend để hỏi "Ảnh xong chưa?".
-4. Backend kiểm tra Database hoặc gọi API Provider. Nếu chưa xong trả về `status: processing`. Nếu xong trả về đường dẫn hình ảnh (URL).
-
-### Kiến trúc 2: Webhooks (Gọi ngược)
-
-Chuẩn công nghiệp (Production-grade) cho hệ thống lớn, tiết kiệm toàn bộ tài nguyên của Backend.
-1. Frontend gửi yêu cầu sinh ảnh lên Backend.
-2. Backend đẩy job này vào một Message Queue (Redis/RabbitMQ). Backend trả HTTP 202 ngay lập tức cho Frontend.
-3. Worker của bạn lấy job từ Queue, gọi AI Provider và truyền kèm một URL gọi là `Webhook_URL` (ví dụ: `https://my-api.com/webhooks/image-done`).
-4. Ngay khi API Provider sinh ảnh xong, máy chủ của họ tự động bắn một HTTP POST request vào đường link Webhook của bạn chứa URL bức ảnh.
-5. Backend của bạn nhận Webhook, cập nhật Database và dùng Websocket/SSE báo hiệu thời gian thực thẳng xuống cho Frontend.
+Một hệ thống text-to-image production nên tách request khỏi generation job:
 
 ```text
-       [ FRONTEND ]                         [ AI PROVIDER ]
-            │                                     ▲
-            │ 1. POST /generate                   │ 3. Start Generation
-            ▼                                     │
-      [ BACKEND ] ── 2. Call API + Send Webhook ──┘
-            │
-            │ <─────── 4. POST /webhooks/image-done (Sau 15 giây)
-            │
-            ▼ 5. Gửi thông báo Websocket
-       [ FRONTEND ] (Hiển thị ảnh)
+[ Frontend request ]
+  - prompt
+  - style preset
+  - optional image/mask
+        │
+        ▼
+[ API Gateway ]
+  - auth
+  - quota/rate limit
+  - idempotency key
+        │
+        ▼
+[ Pre-generation safety ]
+  - prompt moderation
+  - brand/copyright rules
+  - policy decision
+        │
+        ▼
+[ Job queue ]
+  - status: queued/running/completed/failed
+  - retry policy
+  - timeout
+        │
+        ▼
+[ Worker ]
+  - prompt rewrite
+  - provider routing
+  - API/self-host call
+        │
+        ▼
+[ Output processing ]
+  - download provider asset
+  - upload to S3/R2/CDN
+  - output moderation
+  - watermark/provenance metadata
+        │
+        ▼
+[ Notify user ]
+  - polling
+  - webhook
+  - WebSocket/SSE
+```
+
+Mục tiêu: mỗi image request có lifecycle rõ, có thể retry an toàn, audit được và không làm nghẽn request path chính.
+
+---
+
+## 3. Provider Map: DALL-E, Stable Diffusion, Flux, Ideogram, Midjourney-style UX
+
+Không có provider nào tốt nhất cho mọi sản phẩm.
+
+| Provider / model family | Điểm mạnh | Giới hạn | Khi chọn |
+|---|---|---|---|
+| DALL-E-style APIs | Prompt adherence tốt, managed safety | Ít control sâu, cost cao hơn | App cần launch nhanh và UX ổn định |
+| Stable Diffusion / SDXL | ControlNet, LoRA, inpainting, self-host | Cần MLOps/GPU nếu tự host | Cần kiểm soát style/cost sâu |
+| Flux-style models | Chất lượng cao, text rendering tốt hơn ở một số case | Runtime/cost tùy provider | Marketing/creative output chất lượng cao |
+| Ideogram-style tools | Text-in-image và design assets mạnh | API/control tùy ecosystem | Poster/logo/social creative |
+| Midjourney-style UX | Artistic quality cao | API chính thức hạn chế, workflow khó automate | Human-in-the-loop creative ideation |
+
+Chọn provider theo constraint:
+
+1. Latency SLA.
+2. Cost per successful image.
+3. Control: seed, negative prompt, ControlNet, mask, image-to-image.
+4. Safety/compliance requirements.
+5. Data retention/privacy.
+6. Asset ownership và licensing.
+
+---
+
+## 4. Prompt Engineering cho Image Generation
+
+Một prompt ảnh tốt thường cụ thể hơn prompt text.
+
+```text
+Subject: premium ceramic coffee mug on wooden table
+Composition: centered product shot, shallow depth of field
+Lighting: soft natural window light, warm highlights
+Style: minimalist Scandinavian commercial photography
+Camera: 85mm lens, f/2.8, high detail
+Constraints: no text, no logo, no watermark
+```
+
+### Style controls
+
+Thay vì để user viết prompt tự do hoàn toàn, product nên cung cấp controls:
+
+| Control | Ví dụ | Lợi ích |
+|---|---|---|
+| Style preset | photorealistic, watercolor, 3D render | Giảm prompt ambiguity |
+| Aspect ratio | 1:1, 16:9, 9:16 | Phù hợp social channels |
+| Quality preset | fast, balanced, high | Kiểm soát cost/latency |
+| Brand palette | colors, fonts, mood | Consistency |
+| Negative prompt | watermark, blurry, extra fingers | Giảm lỗi phổ biến |
+
+### Negative prompts
+
+Negative prompt giúp mô hình tránh chi tiết không mong muốn:
+
+```text
+blurry, low quality, distorted hands, extra fingers, watermark, text artifacts, logo
+```
+
+Nhưng negative prompt quá dài có thể làm model mất focus hoặc tạo output cứng nhắc.
+
+---
+
+## 5. Image-to-Image, Inpainting và Control Inputs
+
+Text-to-image chỉ là một mode. Product creative thường cần chỉnh sửa ảnh có sẵn.
+
+| Mode | Input | Use case | Control chính |
+|---|---|---|---|
+| Image-to-image | image + prompt | biến đổi style, tạo variation | `strength` |
+| Inpainting | image + mask + prompt | sửa vùng nhỏ | mask quality |
+| Outpainting | image + canvas extension | mở rộng khung hình | boundary consistency |
+| ControlNet pose/depth/edge | control image + prompt | giữ layout/pose | control weight |
+
+### Strength trong image-to-image
+
+```text
+strength thấp -> giữ ảnh gốc nhiều, thay đổi nhẹ
+strength cao  -> sáng tạo nhiều, dễ mất identity/layout
+```
+
+Production cần lưu input image, mask, strength, seed và model version vì output phụ thuộc mạnh vào các tham số này.
+
+<Callout type="warning" title="Image-to-image có rủi ro deepfake và brand misuse">
+Khi user upload ảnh người thật, logo hoặc sản phẩm có bản quyền, hệ thống cần policy rõ: consent, face manipulation, trademark usage, retention và audit log.
+</Callout>
+
+---
+
+## 6. Safety, Moderation và Asset Lifecycle
+
+Image generation cần kiểm duyệt cả trước và sau generation.
+
+### Pre-generation controls
+
+- Prompt moderation.
+- Blocklist cho prohibited content.
+- Policy classifier cho face, minors, violence, sexual content, political persuasion.
+- Quota/rate limit theo user/tenant.
+- Brand/copyright rules.
+
+### Post-generation controls
+
+- NSFW/harmful image classifier.
+- Face/deepfake checks nếu có người thật.
+- Watermark/provenance metadata.
+- Human review cho high-risk outputs.
+- Store moderation scores và model metadata.
+
+### Asset lifecycle
+
+Không lưu URL tạm của provider làm source of truth.
+
+```text
+provider_url -> download -> virus/content scan -> upload to owned storage -> CDN URL -> database record
+```
+
+Database record nên có:
+
+```json
+{
+  "job_id": "img_123",
+  "user_id": "user_456",
+  "status": "completed",
+  "prompt_hash": "sha256:...",
+  "provider": "replicate",
+  "model": "sdxl",
+  "seed": 42,
+  "image_url": "https://cdn.example.com/img_123.png",
+  "moderation_status": "passed",
+  "cost_usd": 0.032,
+  "created_at": "2026-07-01T00:00:00Z"
+}
 ```
 
 ---
 
-## Safety & Moderation Pipeline
+## 7. Implementation Playbook: FastAPI Async Job Skeleton
 
-Luật pháp (như GDPR hoặc các điều khoản dịch vụ) cực kỳ nghiêm ngặt với việc sinh hình ảnh Deepfake hoặc nhạy cảm. Quá trình sinh ảnh phải đi kèm khâu kiểm duyệt trước và sau:
-
-- **Pre-generation Filter:** Cắt nghĩa prompt của người dùng, chạy qua API Moderation (ví dụ: OpenAI Moderation API) hoặc dùng danh sách từ cấm (Blocklist) để chặn ngay các từ khóa bạo lực/khiêu dâm.
-- **Post-generation Filter (NSFW Check):** Stable Diffusion thường tích hợp sẵn một mô hình phân loại ảnh (Safety Checker). Nếu ảnh sinh ra vi phạm, API sẽ trả về hình ảnh bị làm mờ (black image) hoặc cờ `nsfw_detected=True`. Bạn phải bắt cờ này để thông báo lỗi cho người dùng thay vì lưu ảnh đen vào CSDL.
-
----
-
-## Implementation lab: Async Webhook Flow với FastAPI
-
-**Nhiệm vụ:** Viết mã Python thiết lập một Endpoint bằng FastAPI nhận Webhook trả về từ dịch vụ Replicate API.
+Skeleton dưới đây minh họa API tạo job, polling status và worker giả lập.
 
 ```python
-from fastapi import FastAPI, Request, HTTPException
-from pydantic import BaseModel
-import httpx # Dùng để gọi API không đồng bộ
+from enum import Enum
+from uuid import uuid4
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 
 app = FastAPI()
 
-# Giả lập Database
-fake_db = {}
+
+class JobStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    rejected = "rejected"
+
 
 class GenerateRequest(BaseModel):
-    prompt: str
-    user_id: str
+    prompt: str = Field(min_length=3, max_length=2000)
+    style: str = "photorealistic"
+    aspect_ratio: str = "1:1"
+    idempotency_key: str | None = None
 
-# 1. API cho Frontend gọi để bắt đầu sinh ảnh
-@app.post("/api/v1/generate")
-async def start_generation(req: GenerateRequest):
-    # Bước 1: Gọi API Replicate
-    headers = {
-        "Authorization": "Token r8_YOUR_API_KEY",
-        "Content-Type": "application/json"
-    }
-    
-    # Payload yêu cầu Replicate bắn kết quả về Webhook của ta
-    payload = {
-        "version": "stability-ai/sdxl", # Model version
-        "input": {"prompt": req.prompt},
-        # Chú ý: Webhook url phải là URL public (ví dụ dùng ngrok khi test local)
-        "webhook": "https://my-production-server.com/api/v1/webhooks/replicate",
-        "webhook_events_filter": ["completed"]
-    }
-    
-    async with httpx.AsyncClient() as client:
-        response = await client.post("https://api.replicate.com/v1/predictions", json=payload, headers=headers)
-    
-    if response.status_code != 201:
-        raise HTTPException(status_code=500, detail="Lỗi kết nối AI Provider")
-        
-    data = response.json()
-    task_id = data["id"]
-    
-    # Bước 2: Lưu task_id vào Database dưới trạng thái Processing
-    fake_db[task_id] = {"status": "processing", "user_id": req.user_id, "image_url": None}
-    
-    # Bước 3: Trả về 202 Accepted cho Frontend kèm task_id
-    return {"status": "accepted", "task_id": task_id, "message": "Quá trình sinh ảnh đang diễn ra (10-20 giây)."}
 
-# 2. API Endpoint dành riêng cho Replicate bắn kết quả về (Webhook)
-@app.post("/api/v1/webhooks/replicate")
-async def replicate_webhook(request: Request):
-    # Lấy dữ liệu payload từ Replicate
-    data = await request.json()
-    
-    task_id = data.get("id")
-    status = data.get("status") # có thể là 'succeeded', 'failed', 'canceled'
-    
-    if task_id not in fake_db:
-        return {"message": "Task không tồn tại trong hệ thống"}
-        
-    if status == "succeeded":
-        # Ảnh được sinh ra thường nằm trong mảng output
-        image_url = data.get("output")[0]
-        # Cập nhật Database
-        fake_db[task_id] = {"status": "completed", "image_url": image_url}
-        
-        # Bước tiếp theo: Gắn code gọi Websocket/Push Notification ở đây để báo cho Frontend
-        # push_notification_to_user(fake_db[task_id]["user_id"], image_url)
-        
-    elif status == "failed":
-        fake_db[task_id] = {"status": "failed", "error": data.get("error")}
-        
-    return {"message": "Webhook processed successfully"}
+jobs = {}
+
+
+def moderate_prompt(prompt: str):
+    blocked_terms = ["explicit_unsafe_term", "private_person_deepfake"]
+    if any(term in prompt.lower() for term in blocked_terms):
+        return False, "prompt_policy_violation"
+    return True, None
+
+
+@app.post("/images/generate", status_code=202)
+def create_generation_job(req: GenerateRequest):
+    allowed, reason = moderate_prompt(req.prompt)
+    if not allowed:
+        return {"status": JobStatus.rejected, "reason": reason}
+
+    job_id = f"img_{uuid4().hex}"
+    jobs[job_id] = {
+        "status": JobStatus.queued,
+        "prompt": req.prompt,
+        "style": req.style,
+        "aspect_ratio": req.aspect_ratio,
+        "image_url": None,
+        "error": None,
+    }
+
+    # In production: enqueue job_id to Redis/Celery/RQ/SQS.
+    return {"job_id": job_id, "status": JobStatus.queued}
+
+
+@app.get("/images/jobs/{job_id}")
+def get_job(job_id: str):
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    return jobs[job_id]
+
+
+def worker_process_job(job_id: str):
+    job = jobs[job_id]
+    job["status"] = JobStatus.running
+    try:
+        # 1. Rewrite prompt with style preset.
+        # 2. Call provider/self-hosted model.
+        # 3. Download output asset.
+        # 4. Run output moderation.
+        # 5. Upload to owned storage.
+        job["image_url"] = "https://cdn.example.com/generated.png"
+        job["status"] = JobStatus.completed
+    except Exception as exc:
+        job["status"] = JobStatus.failed
+        job["error"] = str(exc)
 ```
+
+Production checklist:
+
+- Idempotency key để tránh duplicate jobs khi client retry.
+- Queue riêng cho fast/high-quality jobs.
+- Provider timeout và retry policy.
+- Webhook signature verification nếu dùng provider callbacks.
+- Download provider asset về storage của bạn.
+- Log cost và moderation status cho từng job.
 
 ---
 
-## Common mistakes & debugging checklist
+## 8. Project Guide: AI Image Generation Pipeline (Phase 11 Medium)
 
-<Callout type="warning" title="Mistake 1: Bị tính phí vì ảnh lỗi">
-Rất nhiều API sinh ảnh vẫn trừ tiền (credits) của bạn ngay cả khi bức ảnh bị đánh dấu là NSFW (bị làm đen toàn bộ). Đừng để người dùng liên tục bấm nút tạo ảnh bạo lực làm cạn sạch ngân sách của bạn. Hãy xây dựng bộ lọc Text Prompt nghiêm ngặt bằng RegExp hoặc LLM trước khi gọi API Sinh ảnh.
+Official project Phase 11 medium:
+
+```text
+AI Image Generation Pipeline
+- Build text-to-image app with style controls
+- Support image-to-image transformation
+- Add safety filtering and async job status
+- Stack: DALL-E 3, Stable Diffusion/Replicate, FastAPI, React
+```
+
+MVP deliverables:
+
+1. Frontend form:
+   - prompt,
+   - style preset,
+   - aspect ratio,
+   - optional negative prompt.
+2. Backend async job API:
+   - create job,
+   - check status,
+   - store result URL.
+3. Provider integration or mock provider:
+   - DALL-E/Replicate/HF endpoint,
+   - timeout/retry handling.
+4. Safety layer:
+   - prompt moderation,
+   - output moderation placeholder,
+   - quota/rate limit.
+5. Asset lifecycle:
+   - download provider output,
+   - upload to owned storage or local artifact folder,
+   - save metadata.
+6. Cost report:
+   - estimated cost per image,
+   - retry/re-roll assumptions,
+   - monthly budget estimate.
+
+Stretch goals:
+
+- Add image-to-image with strength control.
+- Add webhook/SSE notification.
+- Add admin dashboard for failed/moderated jobs.
+- Add style preset A/B testing.
+
+---
+
+## 9. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Backend timeout">
+**Triệu chứng:** Requests fail after 30-60 seconds, users retry repeatedly.
+
+**Nguyên nhân:** Generation chạy đồng bộ trong HTTP request path.
+
+**Cách khắc phục:** Dùng async jobs, queue, 202 Accepted, polling/webhook và idempotency key.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: Test Webhooks ở môi trường Localhost">
-Hệ thống Webhook yêu cầu AI Provider gửi HTTP POST về máy chủ của bạn. Nếu máy chủ của bạn chạy ở `http://localhost:8000`, API của Provider trên Internet không thể tìm thấy đường dẫn đó. Bạn bắt buộc phải dùng các công cụ như `ngrok` hoặc `localtunnel` để tạo một URL public tạm thời hướng về localhost của bạn.
+<Callout type="warning" title="Pitfall 2: Provider rate limit">
+**Triệu chứng:** Jobs fail hàng loạt khi traffic tăng hoặc provider trả lỗi quota.
+
+**Nguyên nhân:** Không có concurrency limit, backoff hoặc provider routing.
+
+**Cách khắc phục:** Thêm queue concurrency, exponential backoff, circuit breaker và fallback provider nếu phù hợp.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: Lưu trữ URL ảnh tạm thời của Provider">
-Các URL chứa ảnh do OpenAI hay Replicate trả về thường có tính thời vụ (hết hạn sau vài giờ hoặc 1 ngày). Nếu bạn lưu trực tiếp link này vào Database, ngày hôm sau toàn bộ ảnh trên ứng dụng của bạn sẽ bị "chết link" (404 Not Found). Khi nhận được Webhook, bạn phải thiết lập một luồng Tải ảnh về (Download) và Upload ngược lên kho lưu trữ đám mây của riêng bạn (như Amazon S3 Cloudflare R2).
+<Callout type="warning" title="Pitfall 3: Lưu URL tạm của provider">
+**Triệu chứng:** Ảnh hiển thị tốt hôm nay nhưng 404 ngày mai.
+
+**Nguyên nhân:** Provider URL hết hạn, không upload về storage của bạn.
+
+**Cách khắc phục:** Download asset sau khi job completed, upload S3/R2/CDN và lưu URL owned storage.
 </Callout>
 
-### Checklist vận hành Webhook:
-- [ ] Hàm xử lý Webhook có xử lý ngoại lệ (Try-Catch) chưa? Nếu Webhook code bị lỗi và trả về HTTP 500, Provider sẽ liên tục gửi lại (Retry) làm ngập máy chủ của bạn.
-- [ ] Bạn đã cấu hình Tải ảnh về S3 lưu trữ vĩnh viễn thay vì dùng link tạm của Provider chưa?
-- [ ] Đường dẫn Webhook của bạn có bảo mật không? Đã xác minh (verify signature) để đảm bảo request thực sự đến từ Replicate/OpenAI chứ không phải do hacker giả mạo bắn request rác vào chưa?
+<Callout type="warning" title="Pitfall 4: Cost spike vì re-roll">
+**Triệu chứng:** User bấm generate nhiều lần, cost tăng nhanh nhưng conversion không tăng.
+
+**Nguyên nhân:** Prompt UX kém, không có quota, không có preview/preset, không đo successful image rate.
+
+**Cách khắc phục:** Style presets, prompt suggestions, quota, cost budget, log re-rolls per accepted image.
+</Callout>
+
+---
+
+## 10. Cost & Product Unit Economics
+
+Image generation cost nên tính theo successful output, không chỉ per API call.
+
+| Cost driver | Ví dụ | Control |
+|---|---|---|
+| Provider call | per image / per GPU second | presets, routing, caching |
+| Re-rolls | user tạo lại nhiều lần | quota, prompt UX, variations |
+| Storage/CDN | lưu ảnh lâu dài | retention policy, compression |
+| Moderation | input/output classifiers | cascade cheap-first |
+| Human review | high-risk content | risk tiering |
+| Failed jobs | timeout, NSFW, rate limit | pre-checks, retry policy |
+
+Formula:
+
+```text
+cost_per_accepted_image = raw_generation_cost * average_generations_per_accepted_image
+                         + moderation_cost
+                         + storage_cost
+                         + support/incident_cost
+```
+
+Production takeaway: tối ưu prompt UX và giảm re-roll rate có thể tiết kiệm nhiều hơn việc đổi provider rẻ hơn 10%.
 
 ---
 
 ## Practice exercises
 
-1. **Thiết kế CSDL:** Hãy thiết kế một bảng dữ liệu (SQL Schema) để lưu trữ một Task Sinh Ảnh, bao gồm các cột như: `task_id`, `user_id`, `prompt`, `negative_prompt`, `status`, `image_url`, `cost`, và `created_at`.
-2. **Khắc phục lỗi đứt gãy:** Giả sử máy chủ của bạn bị mất điện trong đúng khoảng thời gian Provider bắn Webhook trả ảnh về (Webhook bị thất lạc). Hãy viết giả mã (pseudo-code) cho một chương trình chạy ngầm (Cronjob) để rà quét và tự động gọi API Provider kiểm tra lại trạng thái của các ảnh bị kẹt ở trạng thái "processing" quá 5 phút.
-3. **Phân tích chi phí:** Với chi phí là $0.03 cho một ảnh kích thước 1024x1024. Nếu bạn có 500 người dùng hàng ngày (DAU), mỗi người sinh trung bình 4 ảnh/ngày. Hãy tính tổng chi phí vận hành API này trong vòng 1 tháng. Bạn sẽ thiết kế mô hình thu phí người dùng như thế nào để hệ thống có lãi?
+1. Thiết kế database schema cho image generation jobs với status, prompt metadata, cost và moderation fields.
+2. Viết flow idempotency để tránh tạo duplicate jobs khi frontend retry.
+3. So sánh Polling, Webhook và WebSocket/SSE cho image job notification.
+4. Thiết kế safety policy cho image-to-image với ảnh người thật.
+5. Tính monthly cost nếu 10,000 users tạo trung bình 3.2 generations cho mỗi ảnh được chấp nhận.
 
 ---
 
 ## Knowledge check
 
-1. Vì sao không nên gọi API sinh ảnh theo cơ chế đồng bộ (Blocking I/O) trên luồng (thread) chính của máy chủ Backend?
-2. Ưu điểm cốt lõi của việc sử dụng Negative Prompts khi gọi API Stable Diffusion là gì?
-3. Mô hình kiến trúc Polling (Hỏi vòng) khác biệt với Webhooks (Gọi ngược) ở điểm nào?
-4. Nếu ảnh trả về bị hệ thống Safety Checker của Provider nhận diện là nhạy cảm (NSFW), bạn cần làm gì thay vì lưu trữ bức ảnh màu đen đó vào database?
-5. Tại sao cần sử dụng công cụ như `ngrok` trong quá trình phát triển ứng dụng nhận Webhook?
+1. Vì sao image generation nên chạy bất đồng bộ?
+2. Negative prompt dùng để làm gì?
+3. Vì sao không nên lưu provider temporary URL làm asset chính?
+4. Image-to-image `strength` điều khiển điều gì?
+5. Pre-generation moderation và post-generation moderation khác nhau thế nào?
 
 ---
 
 ## Answer key
 
-1. Quá trình sinh ảnh rất chậm (10-30s). Giữ kết nối đồng bộ sẽ làm treo số lượng lớn các luồng (threads) xử lý của máy chủ, gây lãng phí tài nguyên và có thể làm sập hệ thống (Timeout/Downtime) khi có nhiều người dùng.
-2. Nó cho phép nhà phát triển kiểm soát quá trình tạo ảnh một cách tiêu cực, loại bỏ các chi tiết không mong muốn (ví dụ: nhiễu, mờ, thừa ngón tay, watermark) mà không cần phải viết cấu trúc mô tả phòng thủ phức tạp trong Prompt chính.
-3. Polling đòi hỏi Frontend phải chủ động gửi request kiểm tra trạng thái liên tục (gây tốn băng thông và CPU máy chủ). Webhooks hoàn toàn bị động: máy chủ của bạn "ngủ" cho đến khi AI Provider chủ động đẩy kết quả về.
-4. Bắt cờ `nsfw_detected=True` từ JSON Payload của Provider, cập nhật trạng thái Task trong Database thành "Failed_Moderation", và gửi thông báo cho người dùng yêu cầu họ sửa đổi lại Prompt.
-5. Vì máy chủ phát triển (localhost) nằm trong mạng nội bộ, không có địa chỉ IP công khai. `ngrok` tạo ra một đường hầm an toàn và cung cấp một tên miền công cộng để máy chủ của AI Provider trên Internet có thể bắn kết quả về máy của bạn.
-
----
-
-## Mini-project: The Async Image Factory
-
-**Nhiệm vụ:** Xây dựng một đường ống (pipeline) Backend bằng Python (FastAPI) để xử lý việc sinh ảnh tốc độ cao từ Text.
-
-**Yêu cầu đầu ra:**
-- Định nghĩa 2 API endpoints: một để gửi Prompt, một để nhận Webhook từ Replicate (hoặc mock AI provider).
-- Tích hợp hàm kiểm duyệt Prompt: Dùng danh sách từ cấm nội bộ để từ chối ngay lập tức các Prompt vi phạm chính sách trước khi gửi lên API.
-- Tự động lưu trữ thông tin luồng công việc (Processing -> Completed -> Downloaded S3).
+1. Vì generation chậm và dễ timeout; async jobs giúp không giữ request thread, hỗ trợ queue, retry, polling/webhook và scale tốt hơn.
+2. Nó mô tả các chi tiết model nên tránh như blur, watermark, extra fingers hoặc artifacts.
+3. Vì URL đó có thể hết hạn hoặc bị provider xóa; cần download và lưu vào storage của hệ thống.
+4. Nó điều khiển mức độ output giữ ảnh gốc hay biến đổi mạnh theo prompt.
+5. Pre-generation moderation chặn prompt/input trước khi tốn tiền sinh ảnh; post-generation moderation kiểm tra output thực tế trước khi hiển thị/lưu hành.
 
 ---
 
 ## Điểm cần nhớ
 
-- Thế giới đồ họa sinh thành (Generative AI cho ảnh) chậm hơn văn bản rất nhiều, đòi hỏi các mẫu thiết kế hệ thống phần mềm bất đồng bộ (Task Queues, Polling, Webhooks).
-- Bạn không sở hữu URL ảnh được sinh ra bởi các API Provider. Chúng sẽ biến mất. Việc tải về lưu trữ độc lập là nguyên tắc sống còn.
-- Kiểm duyệt nội dung (Moderation) là bắt buộc. Hệ thống càng tự do, nguy cơ vi phạm chính sách và cạn kiệt ngân sách do người dùng lạm dụng càng cao.
-
----
+- Text-to-image production là async workflow, không phải một API call đồng bộ.
+- Provider selection phụ thuộc latency, cost, control, safety và licensing.
+- Style controls và presets giúp giảm prompt ambiguity và re-roll cost.
+- Image-to-image/inpainting tăng giá trị sản phẩm nhưng cũng tăng rủi ro consent, deepfake và brand misuse.
+- Asset lifecycle phải download về storage của bạn và lưu metadata đầy đủ.
+- Cost nên đo theo accepted image, bao gồm re-rolls, moderation, storage và failed jobs.
 
 ## Next chapter bridge
 
-API sinh ảnh mở ra cánh cửa giao tiếp qua hình ảnh, nhưng điều gì xảy ra nếu chúng ta muốn mô hình AI **hiểu** được hình ảnh như cách con người nhìn thế giới? Chuyện gì xảy ra nếu bạn tải một bức ảnh chụp hóa đơn lên và hỏi mô hình tổng số tiền cần thanh toán? Chương tiếp theo: **Multimodal AI** — đi sâu vào các mô hình Đa phương thức (Vision-Language Models) như GPT-4o, Claude 3 Vision, và cách kiến trúc toán học kết nối thị giác máy tính với ngôn ngữ tự nhiên.
+Bạn đã biết cách tạo ảnh. Nhưng sản phẩm AI hiện đại không chỉ tạo media; nó còn phải **hiểu** hình ảnh, tài liệu, biểu đồ và screenshot. Chương tiếp theo: **Multimodal AI** — nơi chúng ta xây VLM systems, multimodal RAG, visual QA và các guardrails cho prompt injection ẩn trong pixel.

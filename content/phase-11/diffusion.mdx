@@ -1,229 +1,425 @@
-Nếu VAE nén dữ liệu qua một nút cổ chai và GAN sử dụng trò chơi đối kháng không ổn định, thì **Diffusion Models** (Mô hình Khuếch tán) lại chọn một phương pháp vật lý: **Phá hủy rồi tái tạo**. Ý tưởng cốt lõi là lấy một bức ảnh, từ từ thêm nhiễu (noise) vào nó cho đến khi nó biến thành một mớ hỗn độn (Pure Gaussian Noise). Sau đó, ta huấn luyện một mạng Neural Network học cách "đảo ngược" quá trình này, từ từ gạt bỏ nhiễu để khôi phục lại bức ảnh ban đầu.
+Ở bài trước, GANs cho thấy adversarial training có thể tạo ảnh sắc nét nhưng khó ổn định. Diffusion Models chọn hướng ngược lại: biến generation thành quá trình denoising nhiều bước, train bằng objective đơn giản hơn và điều khiển bằng conditioning tốt hơn.
 
-Đứng sau DALL-E, Midjourney và Stable Diffusion, mô hình Khuếch tán đã giải quyết được cả bài toán độ phân giải cao của GAN và tính ổn định của VAE, đánh dấu một kỷ nguyên mới cho Generative AI.
-
-## Why this matters
-
-Trong thế giới sản xuất AI:
-
-- **Tính ổn định tuyệt đối:** Quá trình huấn luyện của Diffusion Model được định nghĩa bằng hàm Mean Squared Error (MSE) đơn giản (khác với hàm minimax bất định của GAN). Bạn có thể dễ dàng theo dõi sự hội tụ của mô hình.
-- **Điều khiển sinh ảnh (Controllability):** Bằng cơ chế Classifier-Free Guidance (CFG), các mô hình Diffusion cho phép bạn "lái" quá trình sinh ảnh đi theo một dòng text prompt cực kỳ chi tiết, điều mà các hệ thống cũ khó làm được.
-- **Latent Diffusion (Khuếch tán không gian ẩn):** Chạy quá trình khử nhiễu trực tiếp trên pixel cực kỳ chậm và ngốn phần cứng. Stable Diffusion đã áp dụng một thủ thuật kết hợp VAE và Diffusion: Nén ảnh vào không gian ẩn trước rồi mới khuếch tán. Điều này cho phép chạy mô hình đồ sộ ngay trên GPU máy tính cá nhân.
-
-<Callout type="danger" title="Tốc độ là điểm yếu chí mạng">
-Không giống như VAE hay GAN sinh ảnh chỉ trong 1 bước nhảy (one-shot), Diffusion Models đòi hỏi từ 20 đến 100 bước chạy mạng neural lặp đi lặp lại (iterative steps) mới ra được một bức ảnh. Điều này làm tăng độ trễ suy luận (latency) và chi phí vận hành API lên gấp hàng chục lần.
-</Callout>
-
-## Learning objectives
-
-Sau chương này, bạn sẽ có thể:
-
-1. Trình bày quá trình chuỗi Markov (Markov Chain) của Forward Process và Reverse Process.
-2. Giải thích kiến trúc U-Net được sử dụng để dự đoán nhiễu (Noise Prediction).
-3. Nắm bắt cơ chế toán học của DDPM (Denoising Diffusion Probabilistic Models).
-4. Phân tích lợi ích của DDIM so với DDPM trong việc giảm số bước suy luận.
-5. Giải thích cơ chế điều hướng Classifier-Free Guidance (CFG).
-6. Viết mã PyTorch cho một vòng lặp huấn luyện khử nhiễu (Denoising step).
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Khái niệm về Convolutional Neural Networks (đặc biệt là kiến trúc U-Net và Skip Connections).
-- Kiến thức về VAE (Không gian ẩn).
-- Phân phối chuẩn (Gaussian Distribution) và các tính chất cơ bản.
+Diffusion là nền tảng của DALL-E, Stable Diffusion, Midjourney-style systems, ControlNet, image-to-image và nhiều mô hình video hiện đại. Với AI Engineer, hiểu diffusion không chỉ để biết “thêm nhiễu rồi khử nhiễu”, mà để kiểm soát latency, sampling steps, guidance scale, scheduler, seed, safety và cost trong production.
 
 ---
 
-## Core intuition: Destroy and Rebuild
+## 1. The Incident (Tình huống sự cố)
 
-Hãy hình dung quá trình nhiễu hóa một bức ảnh giống như một giọt mực nhỏ vào ly nước. Ban đầu, hình dạng giọt mực rõ nét, theo thời gian (các bước $t$), giọt mực khuếch tán ra xung quanh, dần dần hòa tan hoàn toàn thành một màu đục ngầu. Quá trình vật lý này gọi là **Forward Process (Quá trình phá hủy)**.
+<Callout type="danger" title="Báo cáo sự cố: Ảnh đẹp nhưng latency và cost làm sập feature launch">
+**Bối cảnh:** Một product team tích hợp Stable Diffusion self-hosted để người dùng tạo ảnh marketing. Demo nội bộ dùng `50 steps`, resolution cao và CFG lớn cho ảnh rất đẹp.
 
-Thuật toán Diffusion cố gắng học cách đảo ngược thời gian. Bắt đầu từ một ly nước đục ngầu, nó tìm cách "hút" từng hạt mực lại để khôi phục hình dáng ban đầu. Đây là **Reverse Process (Quá trình tái tạo)**.
+**Sự cố:** Khi launch beta, queue tăng nhanh, GPU luôn 100%, p95 latency vượt 90 giây. Người dùng spam re-roll vì prompt không đúng ý, một số prompt unsafe lọt qua, và seed không được log nên không thể tái tạo ảnh gây khiếu nại.
+
+1. Không có cost model theo `steps * resolution * batch size`.
+2. CFG scale quá cao tạo artifact và tăng re-roll rate.
+3. Không log seed, scheduler, model version, prompt và negative prompt.
+4. Safety filtering chỉ chạy sau khi ảnh đã sinh, gây tốn tiền cho request bị chặn.
+
+**Hậu quả:** Team phải tắt feature, thêm async queue, pre-moderation, metadata logging và sampling presets trước khi mở lại.
+</Callout>
+
+Bài học rút ra: diffusion models tạo ảnh mạnh nhưng mỗi image là một workflow nhiều bước. Production phải kiểm soát sampling parameters, queueing, metadata và safety ngay từ thiết kế.
+
+---
+
+## 2. Architecture Blueprint (Diffusion Generation Pipeline)
+
+Một diffusion pipeline production gồm nhiều thành phần hơn một model call:
 
 ```text
-       Forward Process (Thêm nhiễu có kiểm soát) --->
-  [Ảnh gốc x_0] ---> [Ảnh hơi nhiễu x_t] ---> [Nhiễu hoàn toàn x_T]
-  
-       <--- Reverse Process (Mạng Neural khử nhiễu)
-  [Ảnh tái tạo x_0] <--- [Khử nhiễu bước t] <--- [Noise x_T]
+[ User prompt / control input ]
+  - text prompt
+  - negative prompt
+  - image/mask/depth/pose optional
+        │
+        ▼
+[ Safety + prompt processing ]
+  - input moderation
+  - style preset
+  - prompt rewrite
+  - seed assignment
+        │
+        ▼
+[ Conditioning encoders ]
+  - text encoder
+  - image/control encoder
+        │
+        ▼
+[ Initial noise / latent ]
+  - random seed
+  - latent resolution
+        │
+        ▼
+[ Denoising loop ]
+  - U-Net or DiT predicts noise/score
+  - scheduler updates latent
+  - CFG combines conditional/unconditional signals
+        │
+        ▼
+[ Decoder / VAE ]
+  - latent to pixels
+        │
+        ▼
+[ Output safety + artifact storage ]
+  - NSFW/brand/copyright checks
+  - watermark/provenance metadata
+  - store image + generation parameters
 ```
 
-### 1. Forward Process (Thêm nhiễu)
-Tại mỗi bước thời gian `t`, ta thêm một lượng nhiễu Gaussian có phương sai `beta_t` vào ảnh của bước trước đó `x_{t-1}`. 
-
-Toán học đằng sau quá trình này cho phép chúng ta **nhảy cóc** trực tiếp từ ảnh gốc `x_0` đến bất kỳ bước thời gian `t` nào mà không cần phải duyệt qua từng bước một. Nhờ sử dụng công thức tích lũy phân phối chuẩn, ta có thể biểu diễn `x_t` bằng phương trình:
-
-`x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1 - alpha_bar_t) * epsilon`
-
-Trong đó:
-- `epsilon` là ma trận nhiễu ngẫu nhiên được lấy mẫu từ chuẩn N(0, I).
-- `alpha_bar_t` là một hằng số giảm dần từ 1 về gần 0 theo thời gian. Ở bước T cuối cùng, `alpha_bar_t` tiến về 0, làm mất hoàn toàn `x_0` và chỉ giữ lại `epsilon`.
-
-### 2. Reverse Process (Khử nhiễu bằng U-Net)
-Mục tiêu là học cách đi từ `x_t` lùi về `x_{t-1}`. Tuy nhiên, vì việc khôi phục trực tiếp từng pixel rất khó, bài toán được thiết lập lại thành: **Huấn luyện một mạng Neural Network dự đoán xem lượng nhiễu (epsilon) nào đã được thêm vào bức ảnh x_t**.
-
-Mạng Neural được sử dụng là **U-Net** (vì nó nhận input và trả output có cùng kích thước, bảo toàn thông tin không gian).
-
-- **Input:** Bức ảnh bị nhiễu `x_t` VÀ thông tin về bước thời gian `t` (Time embedding).
-- **Output:** Lượng nhiễu dự đoán `epsilon_pred`.
-
-Hàm Loss cực kỳ đơn giản (Chỉ là Mean Squared Error giữa nhiễu thật và nhiễu dự đoán):
-
-`Loss = MSE(epsilon, epsilon_pred)`
+Mục tiêu: biến quá trình sampling lặp lại thành một job có metadata đầy đủ, tái tạo được, kiểm duyệt được và tính cost được.
 
 ---
 
-## Từ DDPM đến DDIM (Tăng tốc độ sinh ảnh)
+## 3. Forward Diffusion và Reverse Denoising
 
-Mô hình gốc **DDPM** (Ho et al., 2020) yêu cầu quá trình sinh ảnh (inference) phải trải qua chính xác số lượng bước `T` giống như lúc huấn luyện (ví dụ: 1000 bước). Quá trình này tuân theo một chuỗi Markov (Markov Chain), bước sau bắt buộc phụ thuộc vào bước trước. Điều này khiến việc sinh ra một bức ảnh có thể mất hàng chục giây.
+Diffusion học cách đảo ngược quá trình thêm nhiễu.
 
-**DDIM** (Denoising Diffusion Implicit Models, Song et al., 2020) là một sự đột phá toán học. Bằng cách định nghĩa lại công thức cập nhật thành một phương trình vi phân ngẫu nhiên (Implicit process), DDIM cho phép **bỏ qua các bước nhảy**. 
+### Forward process
 
-- Thay vì chạy từ 1000 lùi về 999, 998...
-- DDIM có thể nhảy từ 1000 lùi về 900, 800... rút ngắn tổng số bước xuống chỉ còn 20 - 50 bước mà vẫn giữ được chất lượng ảnh gần tương đương.
+Forward process là quá trình cố định, không học:
+
+```text
+x_0 -> x_1 -> x_2 -> ... -> x_T
+clean image -> slightly noisy -> more noisy -> pure Gaussian noise
+```
+
+Công thức intuition:
+
+```text
+x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1 - alpha_bar_t) * epsilon
+```
+
+Trong đó `epsilon` là noise lấy từ `Normal(0, 1)`.
+
+### Reverse process
+
+Reverse process là phần model học:
+
+```text
+x_T -> x_{T-1} -> ... -> x_0
+noise -> less noisy -> clean image
+```
+
+Model thường dự đoán noise đã được thêm vào:
+
+```text
+loss = MSE(epsilon_pred, epsilon_true)
+```
+
+| Thành phần | Training | Inference |
+|---|---|---|
+| Noise schedule | Chọn mức noise cho từng `t` | Xác định denoising path |
+| Denoiser | Học dự đoán noise/score | Chạy lặp lại nhiều steps |
+| Scheduler | Không phải neural net chính | Quyết định update latent |
+| Conditioning | Text/image/control signal | Điều khiển output |
 
 ---
 
-## Điều hướng sinh ảnh: Classifier-Free Guidance (CFG)
+## 4. DDPM, DDIM và Scheduler Trade-offs
 
-Nếu bạn chỉ cung cấp text prompt (như "Một chú mèo đi xe đạp"), mô hình U-Net đôi khi sẽ bỏ qua text và tự sinh ra một bức ảnh ngẫu nhiên. Để ép mô hình tuân thủ sát sao dòng text, kỹ thuật **Classifier-Free Guidance (CFG)** ra đời.
+### DDPM
 
-Tại mỗi bước khử nhiễu, mô hình được yêu cầu dự đoán nhiễu **hai lần**:
-1. Lần 1: Dự đoán có đi kèm điều kiện prompt (`epsilon_cond`).
-2. Lần 2: Dự đoán vô điều kiện, thay prompt bằng chuỗi rỗng (`epsilon_uncond`).
+DDPM gốc thường dùng rất nhiều steps, có tính Markov rõ:
 
-Sau đó, ta tính ra hướng đi cuối cùng bằng cách đẩy mạnh sự khác biệt giữa hai dự đoán này bằng một thang đo `w` (Guidance Scale):
+```text
+x_t depends on x_{t+1}, step by step
+```
 
-`epsilon_final = epsilon_uncond + w * (epsilon_cond - epsilon_uncond)`
+Ưu điểm:
 
-- Nếu `w = 1`: Mô hình sinh ảnh bình thường theo prompt.
-- Nếu `w > 1` (ví dụ `w = 7.5`): Mô hình bị ép cực mạnh vào việc theo sát dòng text, phớt lờ các tính năng ngẫu nhiên tự do. (Nếu w quá lớn, ảnh sinh ra sẽ bị quá bão hòa màu và mất tự nhiên).
+- Stable training.
+- Chất lượng tốt nếu đủ steps.
+
+Nhược điểm:
+
+- Inference chậm nếu dùng quá nhiều steps.
+
+### DDIM
+
+DDIM cho phép nhảy bước hiệu quả hơn:
+
+```text
+1000 -> 950 -> 900 -> ... -> 0
+```
+
+Thực tế inference thường dùng 20-50 steps tùy model/scheduler.
+
+| Scheduler | Khi dùng | Trade-off |
+|---|---|---|
+| DDPM | Hiểu baseline/training | Chậm |
+| DDIM | Deterministic-ish, tái tạo dễ hơn | Có thể kém texture tùy setup |
+| Euler / Euler a | Nhanh, phổ biến trong SD workflows | Nhạy parameters |
+| DPM-Solver | Ít steps, nhanh | Cần compatibility đúng |
+
+<Callout type="tip" title="Steps không miễn phí">
+Tăng `num_inference_steps` thường tăng chất lượng đến một ngưỡng rồi bão hòa. Sau ngưỡng đó, bạn chỉ tăng latency và cost.
+</Callout>
 
 ---
 
-## Implementation lab: U-Net Denoising Step
+## 5. Score Matching Intuition
 
-**Nhiệm vụ:** Viết mã giả mô phỏng quá trình huấn luyện cơ bản của một Diffusion Model. Thêm nhiễu vào ảnh và sử dụng mạng U-Net để dự đoán lỗi.
+Một cách nhìn khác về diffusion: model học hướng đi từ vùng noisy data về vùng dữ liệu thật.
+
+```text
+score = gradient_x log p_t(x)
+```
+
+Intuition:
+
+- Ở mỗi noise level `t`, dữ liệu có một phân phối bị làm mờ.
+- Score chỉ hướng tăng xác suất: “đi về phía dữ liệu thật hơn”.
+- Denoiser học vector field giúp sample từ noise trở về data manifold.
+
+Với AI Engineer, score matching quan trọng vì nó giải thích tại sao denoising có thể sinh sample mới: model không copy ảnh train, nó học hướng di chuyển trong không gian dữ liệu bị nhiễu.
+
+---
+
+## 6. Classifier-Free Guidance (CFG)
+
+CFG là cách ép model nghe prompt mạnh hơn mà không cần classifier riêng.
+
+Tại mỗi step, model dự đoán hai lần:
+
+```text
+epsilon_uncond = denoiser(latent, empty_prompt)
+epsilon_cond   = denoiser(latent, text_prompt)
+
+epsilon_final = epsilon_uncond + guidance_scale * (epsilon_cond - epsilon_uncond)
+```
+
+| Guidance scale | Hành vi thường thấy |
+|---:|---|
+| thấp | Tự nhiên hơn nhưng có thể lỏng prompt |
+| vừa | Cân bằng prompt adherence và realism |
+| quá cao | Cháy màu, artifact, anatomy lỗi, oversharpen |
+
+CFG không phải “càng cao càng tốt”. Nếu user phải re-roll nhiều vì ảnh artifact, cost production sẽ tăng.
+
+---
+
+## 7. Latent Diffusion và Stable Diffusion
+
+Stable Diffusion không denoise trực tiếp pixel 1024x1024. Nó dùng VAE để nén ảnh vào latent space.
+
+```text
+[ Text prompt ] -> [ Text encoder ] -> text conditioning
+
+[ Random latent noise ]
+        │
+        ▼
+[ U-Net denoising in latent space ]
+        │
+        ▼
+[ VAE decoder ] -> final image pixels
+```
+
+Lợi ích:
+
+- Latent nhỏ hơn pixel nhiều lần.
+- Training/inference rẻ hơn.
+- Có thể chạy trên GPU phổ thông hơn.
+
+Trade-off:
+
+- VAE artifacts có thể xuất hiện.
+- Chi tiết nhỏ/text trong ảnh khó hơn.
+- Decoder quality giới hạn output quality.
+
+---
+
+## 8. ControlNet và Image Conditioning
+
+Text prompt không đủ khi bạn cần kiểm soát layout, pose hoặc structure. ControlNet thêm conditioning từ ảnh/phân đoạn/pose.
+
+| Control input | Dùng cho | Ví dụ |
+|---|---|---|
+| Canny edge | Giữ đường nét | Product outline, architecture sketch |
+| Depth map | Giữ bố cục không gian | Interior design |
+| Pose skeleton | Giữ tư thế người | Fashion/model pose |
+| Segmentation map | Kiểm soát vùng vật thể | Scene generation |
+| Mask/inpainting | Sửa một vùng ảnh | Thay nền, xóa object |
+| Image-to-image strength | Biến đổi ảnh gốc | Style transfer, variation |
+
+Image-to-image có tham số quan trọng: `strength`.
+
+```text
+strength thấp: giữ ảnh gốc nhiều hơn
+strength cao: biến đổi mạnh hơn, dễ mất identity/layout
+```
+
+<Callout type="warning" title="Control không loại bỏ trách nhiệm safety">
+ControlNet và image-to-image có thể dùng để tạo biến thể deepfake, brand misuse hoặc unsafe content. Hãy chạy moderation trên cả input image, prompt và output.
+</Callout>
+
+---
+
+## 9. Implementation Playbook: Diffusers Generation Skeleton
+
+Một generation job nên log đủ metadata để reproduce.
 
 ```python
+from dataclasses import asdict, dataclass
+from diffusers import StableDiffusionPipeline, DDIMScheduler
 import torch
-import torch.nn.functional as F
+import uuid
 
-# Giả lập tham số
-batch_size = 8
-channels, height, width = 3, 64, 64
-T = 1000 # Tổng số bước thời gian
 
-# Khởi tạo hằng số alpha_bar theo lịch trình tuyến tính (linear schedule)
-beta = torch.linspace(0.0001, 0.02, T)
-alpha = 1.0 - beta
-alpha_bar = torch.cumprod(alpha, dim=0)
+@dataclass
+class GenerationConfig:
+    prompt: str
+    negative_prompt: str = "blurry, low quality, watermark, bad anatomy"
+    seed: int = 42
+    width: int = 768
+    height: int = 768
+    steps: int = 30
+    guidance_scale: float = 7.0
+    scheduler: str = "ddim"
+    model_id: str = "runwayml/stable-diffusion-v1-5"
 
-def diffusion_training_step(unet, images):
-    """
-    unet: Mô hình U-Net dự đoán nhiễu
-    images: Tensor kích thước [Batch, C, H, W]
-    """
-    # 1. Chọn ngẫu nhiên một bước thời gian t cho mỗi ảnh trong batch
-    t = torch.randint(0, T, (batch_size,), device=images.device).long()
-    
-    # Lấy giá trị alpha_bar tương ứng với bước t
-    a_bar_t = alpha_bar[t].view(-1, 1, 1, 1).to(images.device)
-    
-    # 2. Tạo nhiễu thuần túy epsilon từ N(0, 1)
-    epsilon = torch.randn_like(images)
-    
-    # 3. Phá hủy ảnh gốc (Forward Process)
-    # x_t = sqrt(a_bar) * x_0 + sqrt(1 - a_bar) * epsilon
-    noisy_images = torch.sqrt(a_bar_t) * images + torch.sqrt(1.0 - a_bar_t) * epsilon
-    
-    # 4. Dự đoán nhiễu bằng U-Net
-    # U-Net nhận vào ảnh nhiễu và thông tin về thời gian t
-    epsilon_pred = unet(noisy_images, t)
-    
-    # 5. Tính Loss (MSE giữa nhiễu thật và nhiễu U-Net đoán ra)
-    loss = F.mse_loss(epsilon_pred, epsilon)
-    
-    return loss
 
-# Trong vòng lặp thực tế:
-# optimizer.zero_grad()
-# loss = diffusion_training_step(unet, batch_images)
-# loss.backward()
-# optimizer.step()
+def generate_image(config: GenerationConfig):
+    generator = torch.Generator(device="cuda").manual_seed(config.seed)
+
+    pipe = StableDiffusionPipeline.from_pretrained(
+        config.model_id,
+        torch_dtype=torch.float16,
+        safety_checker=None,  # replace with explicit safety pipeline in production
+    ).to("cuda")
+
+    pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
+
+    image = pipe(
+        prompt=config.prompt,
+        negative_prompt=config.negative_prompt,
+        width=config.width,
+        height=config.height,
+        num_inference_steps=config.steps,
+        guidance_scale=config.guidance_scale,
+        generator=generator,
+    ).images[0]
+
+    job_id = str(uuid.uuid4())
+    metadata = {
+        "job_id": job_id,
+        "config": asdict(config),
+        "model_revision": getattr(pipe, "_name_or_path", config.model_id),
+    }
+    return image, metadata
 ```
+
+Production cần thêm:
+
+- Input moderation trước khi chạy GPU/API.
+- Output moderation sau khi sinh.
+- Queue + timeout + retry policy.
+- Model/version pinning.
+- Storage của image và metadata.
+- User quota/rate limit.
 
 ---
 
-## Common mistakes & debugging checklist
+## 10. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
-<Callout type="warning" title="Mistake 1: Sinh ảnh cực kỳ chậm trong Production">
-Việc chạy toàn bộ 1000 bước DDPM sẽ tốn vài chục giây cho mỗi bức ảnh. Trong sản xuất, hãy luôn cấu hình Scheduler chuyển sang DDIM hoặc Euler Ancestral (Euler a) và giảm số bước `num_inference_steps` xuống còn 20 - 30 bước.
+<Callout type="warning" title="Pitfall 1: Sinh ảnh quá chậm">
+**Triệu chứng:** Queue dài, p95 latency cao, GPU full.
+
+**Nguyên nhân:** Steps/resolution quá cao, không batching, scheduler chậm, request spam re-roll.
+
+**Cách khắc phục:** Tạo quality presets, giảm steps, dùng scheduler nhanh, async queue, quota và cache seed/config.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: Đặt Guidance Scale quá cao">
-Kỹ sư thường nghĩ đặt CFG (Guidance Scale) càng cao thì mô hình càng tuân thủ prompt. Thực tế, khi `CFG > 10`, hình ảnh sẽ bị vỡ, cháy sáng (burned) và biến dạng cấu trúc nghiêm trọng. Giá trị vàng thường nằm ở mức 7.0 - 8.5.
+<Callout type="warning" title="Pitfall 2: Prompt bị bỏ qua">
+**Triệu chứng:** Ảnh đẹp nhưng không đúng subject hoặc style.
+
+**Nguyên nhân:** CFG quá thấp, prompt mơ hồ, conditioning yếu hoặc model không phù hợp domain.
+
+**Cách khắc phục:** Prompt rewrite, tăng CFG vừa phải, dùng fine-tuned model/LoRA hoặc ControlNet cho layout.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: Huấn luyện Diffusion trên Pixel Space với ảnh phân giải cao">
-Huấn luyện Diffusion trực tiếp trên ảnh 1024x1024 tốn một lượng VRAM khổng lồ không thể đáp ứng. Các hệ thống hiện đại sử dụng **Latent Diffusion**: Ảnh được nén qua một mạng VAE xuống không gian ẩn (ví dụ: 64x64) rồi mới thực hiện quá trình thêm và khử nhiễu.
+<Callout type="warning" title="Pitfall 3: Over-CFG artifacts">
+**Triệu chứng:** Ảnh cháy sáng, màu gắt, anatomy lỗi, texture kỳ lạ.
+
+**Nguyên nhân:** Guidance scale quá cao ép model quá mạnh theo prompt.
+
+**Cách khắc phục:** Giảm CFG, giảm prompt overload, dùng negative prompt vừa phải và eval re-roll rate.
 </Callout>
 
-### Checklist vận hành:
-- [ ] Bạn đã tích hợp Time Embedding (tương tự Positional Encoding) vào mạng U-Net chưa? Nếu mô hình không biết nó đang khử nhiễu ở bước nào, nó sẽ học sai hoàn toàn.
-- [ ] Hàm Loss tính trên nhiễu (`epsilon`) hay tính trên ảnh gốc (`x_0`)? Thực nghiệm cho thấy dự đoán nhiễu mang lại độ sắc nét và ổn định cao hơn rất nhiều.
-- [ ] Trong quá trình Inference, bạn có đang tính thêm đạo hàm không? Đừng quên bật `torch.no_grad()` vì ta lặp lại U-Net hàng chục lần.
+<Callout type="warning" title="Pitfall 4: Không tái tạo được ảnh gây incident">
+**Triệu chứng:** User report ảnh vi phạm nhưng team không reproduce được.
+
+**Nguyên nhân:** Không log seed, scheduler, model version, prompt, negative prompt và control inputs.
+
+**Cách khắc phục:** Lưu generation metadata bắt buộc cho mọi job, kèm image hash và moderation scores.
+</Callout>
+
+---
+
+## 11. Cost & Sampling Unit Economics
+
+Chi phí diffusion tăng theo nhiều biến cùng lúc.
+
+| Decision | Lợi ích | Cost/Trade-off |
+|---|---|---|
+| Tăng steps | Có thể tăng quality | Latency/GPU cost tăng gần tuyến tính |
+| Tăng resolution | Ảnh chi tiết hơn | VRAM và thời gian tăng mạnh |
+| Tăng CFG | Prompt adherence tốt hơn | Artifact/re-roll risk |
+| Batch nhiều jobs | Throughput tốt hơn | Queueing và memory complexity |
+| Self-host GPU | Kiểm soát cost ở scale | Ops, autoscaling, cold start |
+| API provider | Launch nhanh | Unit cost và rate limit phụ thuộc vendor |
+
+Formula thực dụng:
+
+```text
+image_cost ≈ gpu_second_price * seconds_per_image
+seconds_per_image ≈ f(width, height, steps, scheduler, batch_size, model_size)
+monthly_cost ≈ images_per_month * image_cost * average_rerolls_per_success
+```
+
+Production takeaway: tối ưu diffusion không chỉ là làm ảnh đẹp hơn. Bạn cần giảm số lần re-roll để tạo một ảnh “acceptable”, vì re-roll mới là cost multiplier lớn trong product thật.
 
 ---
 
 ## Practice exercises
 
-1. **Toán học nhiễu:** Dựa vào công thức tính `alpha_bar`, hãy viết đoạn mã tính toán và in ra biểu đồ tỷ lệ giữa ảnh gốc và nhiễu trong suốt 1000 bước thời gian.
-2. **Khám phá CFG:** Viết giả mã minh họa cách tính toán `epsilon_final` nếu bạn được cung cấp hàm `unet_predict(image, text_prompt)`. Bạn sẽ xử lý trường hợp Unconditional prediction như thế nào?
-3. **Mở rộng Latent Space:** Vẽ lại sơ đồ luồng dữ liệu (Data flow) của một mô hình Latent Diffusion Models (LDM - nền tảng của Stable Diffusion) có sự tham gia của Encoder (VAE) ở đầu vào và Decoder (VAE) ở đầu ra.
+1. Thiết kế 3 quality presets cho image generation: fast, balanced, high-quality.
+2. Viết schema metadata cần lưu cho mỗi diffusion job để reproduce output.
+3. So sánh DDPM và DDIM theo chất lượng, latency và reproducibility.
+4. Thiết kế flow dùng ControlNet pose cho fashion image generation.
+5. Tính monthly GPU/API cost nếu mỗi ảnh trung bình cần 2.3 re-rolls mới được user chấp nhận.
 
 ---
 
 ## Knowledge check
 
-1. Sự khác biệt căn bản giữa quá trình Forward và Reverse trong Diffusion Models là gì?
-2. Tại sao chúng ta có thể nhảy cóc thẳng từ ảnh `x_0` đến ảnh nhiễu `x_t` mà không cần duyệt qua từng bước trung gian ở quá trình Forward?
-3. Đầu ra (Output) của mạng U-Net trong mô hình DDPM tiêu chuẩn là gì?
-4. Kỹ thuật Classifier-Free Guidance (CFG) có tác dụng gì trong việc sinh ảnh?
-5. Việc chuyển từ DDPM sang DDIM mang lại lợi ích thực tiễn nào lớn nhất cho hệ thống suy luận (Inference)?
+1. Forward process và reverse process khác nhau như thế nào?
+2. Denoiser trong DDPM thường dự đoán gì?
+3. CFG dùng `epsilon_cond` và `epsilon_uncond` để làm gì?
+4. Vì sao Latent Diffusion rẻ hơn pixel-space diffusion?
+5. ControlNet giải quyết hạn chế nào của text-only prompting?
 
 ---
 
 ## Answer key
 
-1. Forward process là quá trình thêm nhiễu vật lý có tính chất toán học đóng cố định (không học tập). Reverse process là quá trình khử nhiễu không xác định trước, phải dùng mạng Neural (U-Net) để học cách đảo ngược.
-2. Nhờ sử dụng đặc tính cộng dồn của phân phối chuẩn và tham số `alpha_bar`, ta có thể tính toán phân phối ở bất kỳ thời điểm `t` nào dưới dạng một phương trình toán học kín (closed-form formula).
-3. Nó không trả về bức ảnh tái tạo. Đầu ra của U-Net là dự đoán về lượng nhiễu (noise/epsilon) đã được thêm vào bức ảnh tại thời điểm `t`.
-4. CFG ép mô hình nghe lời dòng lệnh text (prompt) mạnh hơn bằng cách ngoại suy khoảng cách giữa tín hiệu sinh ảnh có điều kiện (có text) và tín hiệu vô điều kiện (không có text).
-5. Nó giải phóng quá trình sinh ảnh khỏi các bước nhảy Markov cứng nhắc, cho phép mô hình bỏ qua nhiều bước (nhảy cóc ngược) để ra được ảnh cuối cùng chỉ trong 20-50 vòng lặp thay vì 1000 vòng lặp.
-
----
-
-## Mini-project: The Denoising Loop Explorer
-
-**Nhiệm vụ:** Viết một script Python hoàn chỉnh (sử dụng thư viện HuggingFace `diffusers`) để tải một mô hình Stable Diffusion nhỏ và tự động hóa việc lưu lại hình ảnh sau mỗi bước khử nhiễu (mỗi step lưu 1 frame).
-
-**Yêu cầu đầu ra:**
-- Viết vòng lặp Inference thay vì gọi pipeline `.generate()` tiêu chuẩn.
-- Sử dụng DDIMScheduler.
-- Tự động hóa quá trình sinh ra một file ảnh GIF minh họa cách bức ảnh dần dần hiện ra từ mớ hỗn độn (pure noise) theo các bước từ t=50 về t=0.
+1. Forward process thêm noise theo lịch trình cố định; reverse process dùng neural network học cách khử noise để quay về dữ liệu sạch.
+2. Thường dự đoán noise `epsilon` đã được thêm vào sample tại timestep `t`.
+3. Nó ngoại suy khác biệt giữa dự đoán có điều kiện và vô điều kiện để ép output bám prompt mạnh hơn.
+4. Vì denoising diễn ra trên latent representation nhỏ hơn pixel image nhiều lần, giảm VRAM và compute.
+5. Nó thêm conditioning từ ảnh/pose/depth/edges/mask để kiểm soát layout, structure hoặc vùng cần sửa, thay vì chỉ mô tả bằng text.
 
 ---
 
 ## Điểm cần nhớ
 
-- Diffusion Models dựa trên quá trình vật lý phá hủy dữ liệu bằng nhiễu (Forward) và sử dụng mạng U-Net để học cách đảo ngược quá trình đó (Reverse).
-- Chúng hoạt động cực kỳ ổn định trong quá trình huấn luyện bằng hàm Loss MSE đơn giản.
-- Tốc độ suy luận chậm là nhược điểm chí mạng, được giải quyết một phần bằng Latent Diffusion (chạy trên không gian ẩn của VAE) và thuật toán DDIM (giảm số bước nhảy).
-
----
+- Diffusion Models học denoising nhiều bước, ổn định hơn GAN nhưng inference chậm hơn.
+- Scheduler, steps, resolution, seed và CFG là các tham số production-critical.
+- Score matching cung cấp intuition rằng model học hướng đi về data manifold.
+- Stable Diffusion dùng VAE latent space để giảm cost so với pixel-space diffusion.
+- ControlNet và image-to-image giúp kiểm soát structure nhưng tăng yêu cầu safety.
+- Mọi image generation job cần metadata để reproduce, audit và xử lý incident.
 
 ## Next chapter bridge
 
-Mô hình Diffusion đã giải quyết trọn vẹn bài toán sinh hình ảnh chất lượng cực cao. Nhưng trong môi trường Production, bạn sẽ không tự tay viết từng vòng lặp PyTorch để sinh ảnh. Bạn sẽ tích hợp các mô hình này dưới dạng các dịch vụ API bất đồng bộ. Chương tiếp theo: **Text-to-Image APIs** — khám phá hệ sinh thái DALL-E, Stable Diffusion, và cách kiến trúc ứng dụng web để xử lý sự chậm trễ của quá trình sinh hình ảnh trong thế giới thực.
+Bạn đã hiểu cơ chế diffusion bên dưới. Trong production, phần lớn team không tự viết denoising loop mà tích hợp model qua API hoặc inference service. Chương tiếp theo: **Text-to-Image APIs** — nơi chúng ta thiết kế async jobs, style controls, image-to-image, moderation, storage và cost controls cho sản phẩm sinh ảnh thật.

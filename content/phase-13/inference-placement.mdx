@@ -1,150 +1,369 @@
-Một trong những quyết định cấu trúc sâu sắc nhất trong AI System Design là: **"Chúng ta sẽ thực thi tính toán của mô hình (Inference) ở đâu?"** Đặt nó sâu trong Backend bảo mật, đẩy ra các Edge Node ở viền mạng, hay tải thẳng weights mô hình xuống trình duyệt web của người dùng? Đây là quyết định sẽ khóa cứng (lock-in) chi phí hạ tầng, độ trễ và chính sách bảo mật dữ liệu của toàn bộ dự án.
+Ở bài trước, bạn đã thấy các classic designs như chatbot memory, RAG, PDF Q&A và intent router. Nhưng mỗi design đều cần một quyết định nền tảng: **inference chạy ở đâu?** Backend server, GPU inference service riêng, edge node, browser/mobile client hay async worker?
+
+**Inference Placement Strategy** quyết định latency, cost, security, data residency, offline capability và complexity vận hành. Chọn sai placement có thể làm lộ model weights, làm user chờ 30 giây, đốt GPU 24/7 hoặc vi phạm compliance vì dữ liệu đi sai region.
 
 ---
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: Rò rỉ Mô hình độc quyền và Cháy máy điện thoại">
-**Bối cảnh:** Một tập đoàn ngân hàng phát hành ứng dụng nhận diện khuôn mặt khách hàng (eKYC) thế hệ mới. Để giảm độ trễ API và tiết kiệm chi phí máy chủ GPU, Kiến trúc sư trưởng quyết định thiết kế kiến trúc **Client-side Inference** (Suy luận tại thiết bị người dùng). Mô hình CNN cực kỳ phức tạp (trị giá hàng triệu đô nghiên cứu) được nén thành file `.tflite` và tải thẳng xuống điện thoại của khách hàng thông qua App Store.
+<Callout type="danger" title="Báo cáo sự cố: Đưa model eKYC xuống client làm nóng máy và lộ trọng số độc quyền">
+**Bối cảnh:** Một ngân hàng muốn giảm latency và tiết kiệm GPU server cho eKYC. Team nén model nhận diện khuôn mặt thành `.tflite` rồi bundle vào mobile app để chạy client-side.
 
-**Sự cố:** 
-1. Chỉ sau 2 ngày, cộng đồng mạng báo cáo điện thoại của họ bị nóng ran, sụt 20% pin chỉ sau 5 phút mở app để quét CCCD. App liên tục bị hệ điều hành iOS/Android đóng lại (Kill) vì tràn RAM.
-2. Vài ngày sau, một nhóm Hacker đã dịch ngược (Reverse Engineer) tệp tin APK của ứng dụng, trích xuất thành công file trọng số (weights) của mô hình eKYC. Hacker dùng chính mô hình này để nghiên cứu tạo ra các ảnh giả mạo vượt qua hệ thống an ninh của ngân hàng.
+**Sự cố:** Sau launch, điện thoại người dùng nóng, pin tụt nhanh và app bị OS kill trên thiết bị yếu. Hai ngày sau, hacker reverse engineer APK, trích xuất model weights, phân tích decision boundary và tạo ảnh giả vượt qua eKYC.
 
-**Hậu quả:** Ứng dụng phải gỡ khẩn cấp. Công nghệ độc quyền của ngân hàng bị phơi bày hoàn toàn ra Internet.
+1. Model quá nặng cho thiết bị client phổ thông.
+2. Model weights là IP/security asset nhưng bị phân phối công khai.
+3. Không có server-side verification fallback.
+4. Không phân tầng: client nên chỉ làm pre-check nhẹ, quyết định cuối nên server-side.
+
+**Hậu quả:** App bị gỡ khẩn cấp, model độc quyền bị leak và security team yêu cầu redesign hybrid inference.
 </Callout>
 
-Bài học rút ra: Đừng bao giờ đẩy một mô hình (Model) có giá trị trí tuệ cốt lõi hoặc có dung lượng quá nặng xuống máy khách (Client-side) mà không có sự chuẩn bị phần cứng và mã hóa cực kì chuyên sâu.
+Bài học rút ra: client-side inference không miễn phí; bạn đổi cloud cost lấy battery cost, UX risk và model extraction risk. Placement là trade-off, không phải tối ưu một chiều.
 
 ---
 
-## 2. Architecture Blueprint (Kiến trúc giải pháp)
+## 2. Architecture Blueprint (Inference Placement Decision Matrix)
 
-Trong thiết kế hệ thống AI, ta có 3 vị trí đặt bộ não suy luận (Inference Placement):
+Một hệ thống AI có thể đặt inference ở nhiều vị trí:
 
-### Chiến lược 1: Server-side Inference (Suy luận tại Máy chủ tập trung)
-Kiến trúc tiêu chuẩn cho LLM và các mô hình khổng lồ.
 ```text
-[ Client (Trình duyệt) ] ---> HTTP/gRPC ---> [ API Gateway ] ---> [ Model Inference Server (GPU) ]
-(Chỉ gửi Text/Ảnh)                                                (Chứa Model Weights > 10GB)
+[ Client device ]
+  - mobile NPU / WebGPU / browser
+  - offline, privacy, low server cost
+        │
+        ▼
+[ Edge runtime ]
+  - Cloudflare Workers AI / regional functions
+  - low network latency, stateless tasks
+        │
+        ▼
+[ Backend API ]
+  - secure orchestration, business logic
+  - calls provider/self-host endpoint
+        │
+        ▼
+[ Dedicated inference service ]
+  - vLLM/TGI/TensorRT on GPU
+  - batching, KV cache, autoscaling
+        │
+        ▼
+[ Async worker / batch job ]
+  - long-running analysis/generation
+  - queue, task id, webhooks
 ```
-- **Bảo mật:** 100% tuyệt đối. Người dùng không thấy được Model Weights.
-- **Scale:** Dễ dàng. Khi Traffic tăng, mở thêm máy chủ GPU ở Backend.
 
-### Chiến lược 2: Edge Inference (Suy luận tại Rìa mạng - Cloudflare Workers AI)
-Đưa mô hình ra sát vị trí vật lý của người dùng nhất, nằm ở các máy chủ CDN (Content Delivery Network).
-```text
-[ Client (Việt Nam) ] ---> (Gọi API 20ms) ---> [ Máy chủ Edge Cloudflare tại Việt Nam (Chạy LLaMA-8B) ]
-                                                   (Không cần gọi vòng về Máy chủ chính ở Mỹ)
-```
-- **Độ trễ:** Rất thấp. Giảm độ trễ định tuyến mạng toàn cầu.
-- **Giới hạn:** Chỉ hỗ trợ các mô hình nhỏ (Small Language Models) đã được tối ưu hóa.
-
-### Chiến lược 3: Client-side Inference (Suy luận tại thiết bị)
-Mô hình chạy hoàn toàn bằng CPU/NPU trên điện thoại hoặc WebGL/WebGPU trên trình duyệt (thông qua ONNX hoặc WebNN).
-```text
-[ Server Đám mây ] ── (Tải Model Weights 50MB 1 lần) ──> [ Client (Điện thoại/Web) ]
-                                                                 │
-                                                    (Chạy mô hình nội bộ bằng WebGPU)
-                                                                 │
-                                                       [ Hiển thị Kết quả ]
-```
-- **Chi phí máy chủ:** Bằng $0. Điện thoại của khách hàng là máy chủ tính toán.
-- **Riêng tư:** Không có dữ liệu cá nhân nào được gửi lên mạng Internet.
+Không phải chọn một. Production thường dùng hybrid placement: client prefilter, edge classify, backend route, GPU service generate, async worker xử lý tác vụ dài.
 
 ---
 
-## 3. Tooling Landscape (Ma trận công cụ & kiến trúc)
+## 3. Server-Side Inference
 
-| Chiến lược Vị trí | Công cụ / Nền tảng | SRE Trade-offs | Use-case lý tưởng |
-|---|---|---|---|
-| **Server-side (Đám mây)** | vLLM, TensorRT-LLM, HuggingFace TGI | **Pro:** Bảo mật cao, xử lý được mô hình 70B+. **Con:** Độ trễ mạng (Network Latency) cao, chi phí duy trì GPU 24/7 cực đắt. | Các ứng dụng RAG doanh nghiệp, hệ thống Chatbot thông minh, y tế/tài chính. |
-| **Edge Computing (Rìa mạng)** | Cloudflare Workers AI, AWS Lambda@Edge | **Pro:** Độ trễ mạng gần bằng 0 (Global low-latency), Auto-scale cực nhanh. **Con:** Bị giới hạn thời gian chạy (Execution timeout). | Phân loại Intent (Intent Routing) trước khi vào Backend, dịch thuật thời gian thực. |
-| **Client-side (Thiết bị)** | ONNX Runtime Web, TensorFlow Lite, WebLLM | **Pro:** Offline support, Zero Cloud Inference Cost, Quyền riêng tư 100%. **Con:** Nóng máy, hao pin, dễ bị hack trộm mô hình, chỉ chạy được mô hình siêu nhỏ (< 3B). | Bộ lọc từ cấm (Profanity Filter) trên màn hình gõ chat, Nhận diện giọng nói siêu tốc (Wake word). |
+Server-side inference là lựa chọn mặc định cho LLM/RAG/agent production.
+
+```text
+client -> API gateway -> backend/router -> inference endpoint/provider -> response
+```
+
+Ưu điểm:
+
+- bảo vệ model weights và prompts,
+- kiểm soát auth, rate limit, logging,
+- dễ dùng model lớn,
+- tích hợp RAG/database/tools an toàn hơn,
+- dễ cập nhật model mà không ép user update app.
+
+Nhược điểm:
+
+- cloud/API cost cao,
+- network latency,
+- cần autoscaling và reliability,
+- dữ liệu user đi qua server/provider.
+
+Server-side phù hợp khi:
+
+- model lớn hoặc proprietary,
+- cần RAG/tools/private data,
+- domain regulated,
+- cần audit và centralized guardrails,
+- output ảnh hưởng quyết định quan trọng.
 
 ---
 
-## 4. Implementation Playbook (Thực thi)
+## 4. Edge Inference
 
-Hãy cùng thiết kế một kịch bản kết hợp hoàn hảo (**Hybrid Inference Placement**): **"Bảo vệ cổng vào bằng Client-side, Xử lý não bộ bằng Server-side"**. Đây là một ADR (Architecture Decision Record) mẫu mà Kỹ sư hệ thống trình bày cho Ban giám đốc.
+Edge inference chạy gần user hơn: CDN edge, regional functions, lightweight model endpoints.
 
-### Ngữ cảnh thiết kế (Design Prompt)
-Hệ thống Chatbot AI của công ty đang bị một lượng lớn người dùng (User) cố tình nhập các câu chửi bới, đe dọa (Toxicity). Hiện tại, Backend đang gửi toàn bộ các câu này lên API GPT-4 để chạy hệ thống kiểm duyệt, gây tốn hàng ngàn USD mỗi tháng chỉ để phát hiện câu chửi thề.
+```text
+user in Vietnam -> edge node Singapore/HCMC -> small model classify/moderate -> backend if needed
+```
 
-### Quyết định Kiến trúc (Architectural Decision)
-Chúng ta sẽ đẩy tác vụ **Toxicity Classification (Phân loại độc hại)** xuống thẳng Trình duyệt web của người dùng (Client-side) sử dụng mô hình ONNX siêu nhẹ (15MB). Chỉ khi câu nói được kết luận là An toàn, nó mới được gửi lên Server-side để gọi GPT-4.
+Phù hợp cho tác vụ:
+
+- intent classification,
+- language detection,
+- toxicity prefilter,
+- lightweight rewrite,
+- personalization đơn giản,
+- low-latency global routing.
+
+Không phù hợp khi:
+
+- cần state/database ở một region xa,
+- cần model lớn/GPU mạnh,
+- cần job dài vượt timeout edge runtime,
+- cần transaction phức tạp.
+
+<Callout type="warning" title="Edge không thắng nếu dữ liệu nằm ở origin xa">
+Nếu edge model xử lý 20ms nhưng vẫn phải gọi database ở `us-east-1` mất 250ms, tổng latency không giảm. Data gravity quyết định placement không kém model latency.
+</Callout>
+
+---
+
+## 5. Client-Side / On-Device Inference
+
+Client-side inference chạy trên browser/mobile/desktop:
+
+- TensorFlow Lite,
+- ONNX Runtime Mobile/Web,
+- Core ML,
+- WebGPU/WebNN,
+- WebLLM cho mô hình nhỏ/quantized.
+
+Phù hợp cho:
+
+| Use case | Lý do |
+|---|---|
+| wake word / local STT nhẹ | cần phản hồi tức thì, privacy |
+| toxicity/profanity prefilter | giảm request rác trước server |
+| OCR/vision precheck nhẹ | giảm upload dữ liệu không cần thiết |
+| autocomplete nhỏ/offline | latency thấp |
+| accessibility features | offline và privacy |
+
+Không phù hợp cho:
+
+- model IP rất nhạy cảm,
+- model nhiều GB trên web,
+- thiết bị user yếu,
+- output high-risk cần audit server-side,
+- logic cần secrets/private data.
+
+Client-side guardrail không phải security control cuối cùng. User có thể sửa JS, bypass mobile hook hoặc gọi API trực tiếp.
+
+---
+
+## 6. Async Worker Inference
+
+Một placement hay bị quên: inference không nằm trong request path mà nằm trong worker.
+
+```text
+POST /generate-video -> task_id
+queue -> GPU worker -> storage -> webhook/status
+```
+
+Phù hợp cho:
+
+- image/video generation,
+- PDF/contract analysis,
+- long agent workflows,
+- batch summarization,
+- data ingestion/embedding,
+- evaluations.
+
+Lợi ích:
+
+- tránh HTTP timeout,
+- batch GPU tốt hơn,
+- scale workers theo queue,
+- retry/resume dễ hơn,
+- UX có progress/status.
+
+Trade-off: hệ thống cần task state, idempotency, cancellation, retries và notification.
+
+---
+
+## 7. Placement Decision Matrix
+
+| Tiêu chí | Server-side | Edge | Client-side | Async worker |
+|---|---|---|---|---|
+| Model size lớn | tốt | kém | kém | tốt |
+| Model IP cần bảo vệ | tốt | trung bình | kém | tốt |
+| Latency global thấp | trung bình | tốt | tốt | kém cho realtime |
+| Offline support | kém | kém | tốt | kém |
+| Private data/server secrets | tốt | tùy region | kém | tốt |
+| Long-running tasks | trung bình | kém | kém | tốt |
+| Cloud cost thấp | kém | trung bình | tốt | trung bình |
+| Observability/audit | tốt | trung bình | kém | tốt |
+| Device/battery risk | không | không | cao | không |
+
+Quy tắc nhanh:
+
+- Realtime + model nhỏ + privacy: client/edge.
+- Model lớn + private data: server-side/dedicated inference.
+- Job > 3-5 giây: async worker.
+- Global low-latency stateless: edge.
+- Security-critical decision: server-side verification.
+
+---
+
+## Implementation Playbook: Hybrid Placement ADR
+
+### Scenario
+
+Chatbot public có nhiều prompt độc hại. Team muốn giảm cost moderation nhưng vẫn giữ security.
+
+### Architecture
+
+```text
+[ Browser ]
+  - lightweight toxicity prefilter
+  - debounce input
+        │ safe enough
+        ▼
+[ API Gateway ]
+  - auth, rate limit, server-side moderation sample
+  - token budget
+        │
+        ▼
+[ Backend Router ]
+  - easy FAQ -> small model
+  - complex RAG -> server-side LLM
+  - long document -> async task
+```
+
+### ADR example
+
+```md
+# ADR-004: Use Hybrid Client + Server Inference for Chat Safety
+
+## Status
+Accepted
+
+## Context
+A large percentage of requests are obvious toxic/spam prompts. Sending all of them to paid moderation and LLM APIs increases cost. However, client-side checks can be bypassed.
+
+## Decision
+Run a lightweight toxicity classifier in the browser for UX/cost optimization. Keep server-side rate limits, anomaly detection, and sampled moderation as the security boundary. All high-risk actions remain server-side.
+
+## Consequences
+- Reduces avoidable API calls.
+- Improves perceived latency for blocked content.
+- Does not eliminate server-side guardrails.
+- Requires model size under 50MB and fallback if browser lacks WebGPU.
+```
+
+### Browser prefilter sketch
 
 ```javascript
-// ĐOẠN MÃ GIẢ LẬP CHẠY TRÊN TRÌNH DUYỆT (JAVASCRIPT / WEBGPU)
-import { pipeline, env } from '@xenova/transformers';
+async function submitMessage(message) {
+  const localVerdict = await runLocalToxicityClassifier(message);
 
-// 1. Tải mô hình phân loại cực nhỏ (15MB) xuống bộ nhớ đệm của Trình duyệt (Chỉ tải 1 lần)
-env.allowLocalModels = false;
-const classifier = await pipeline('text-classification', 'Xenova/toxic-bert');
+  if (localVerdict.label === "toxic" && localVerdict.score > 0.9) {
+    showWarning("Vui lòng chỉnh lại nội dung trước khi gửi.");
+    return;
+  }
 
-async function handleUserChatSubmit(userInput) {
-    // 2. Chạy quá trình suy luận ngay trên CPU/GPU của máy tính khách hàng
-    // Không tốn 1 đồng chi phí máy chủ nào của công ty!
-    const result = await classifier(userInput);
-    
-    if (result[0].label === 'toxic' && result[0].score > 0.8) {
-        alert("Tin nhắn vi phạm tiêu chuẩn cộng đồng. Xin vui lòng sửa lại.");
-        return; // Chặn đứng tại cửa, không gửi lên Backend
-    }
-    
-    // 3. Nếu an toàn, gửi câu hỏi lên Server-side (GPT-4) để xử lý trí tuệ sâu
-    const response = await fetch("https://api.mycompany.com/chat", {
-        method: "POST",
-        body: JSON.stringify({ message: userInput })
-    });
-    
-    displayAnswer(await response.json());
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({message}),
+  });
+
+  render(await response.json());
 }
 ```
 
----
+### Server-side enforcement remains mandatory
 
-## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+```python
+def server_chat_handler(user, message):
+    enforce_rate_limit(user.id)
+    enforce_token_budget(user.id, estimate_tokens(message))
 
-Quyết định đặt mô hình ở đâu luôn mang lại những cái bẫy kỹ thuật đặc thù.
+    if looks_like_abuse(message):
+        return safe_rejection()
 
-<Callout type="warning" title="Pitfall 1: Ảo ảnh 'Edge Computing' không trạng thái">
-**Triệu chứng:** Kiến trúc sư quyết định đẩy mô hình LLM nhỏ ra Cloudflare Workers AI ở rìa mạng để tăng tốc độ. Tuy nhiên, tính năng Chatbot thỉnh thoảng báo lỗi kết nối với CSDL Lịch sử chat nằm ở trung tâm (AWS us-east-1).
-**Nguyên nhân:** Máy chủ Edge ở Việt Nam xử lý AI siêu nhanh (10ms), nhưng lại phải gọi API về máy chủ Database ở Mỹ để lấy Context (mất 250ms). Cuối cùng, tổng độ trễ mạng còn tệ hơn việc đặt chung cả AI và DB ở Mỹ.
-**Cách khắc phục (Fix):** Edge Inference chỉ có ý nghĩa (make sense) đối với các tác vụ Phi trạng thái (Stateless), ví dụ như Dịch thuật (Translation) hay Tóm tắt văn bản một lần. Nếu bài toán yêu cầu State (Database), Edge không giải quyết được vấn đề.
-</Callout>
-
-<Callout type="warning" title="Pitfall 2: Client-side Download nghẽn mạng">
-**Triệu chứng:** Triển khai mô hình WebLLM (chạy mô hình LLaMA-3-8B 4-bit) thẳng trên trình duyệt. Người dùng truy cập trang web lần đầu tiên bị treo màn hình Loading suốt 5 phút.
-**Nguyên nhân:** Mô hình 8B đã bị nén 4-bit vẫn nặng tới khoảng 4.5 Gigabyte. Tải 4.5GB qua mạng WiFi hoặc 4G để mở một trang Web là một thảm họa UX.
-**Cách khắc phục (Fix):** Client-side Inference (Đặc biệt là Web) CHỈ nên giới hạn cho các mô hình Encoder nhỏ (dưới 50MB) như BERT, MobileNet. Các mô hình LLM lớn chỉ nên cân nhắc đưa xuống Client dưới dạng ứng dụng cài đặt (Native App) trên máy tính/điện thoại cục bộ.
-</Callout>
-
-<Callout type="danger" title="Pitfall 3: Hacker thao túng Client-side Guardrails">
-**Triệu chứng:** Một tin tặc chặn bắt (Intercept) mã nguồn Javascript trên trình duyệt, xóa bỏ dòng lệnh `if (result.label === 'toxic') return;`, và tiếp tục spam tin nhắn rác lên máy chủ GPT-4.
-**Cách khắc phục (Fix):** Client-side Inference là công cụ Tối ưu hóa (Optimization/Cost-saving), **Không bao giờ là công cụ Bảo mật (Security)**. Server-side vẫn phải có lớp Rate Limiting và các bộ lọc phát hiện đột biến (Anomaly Detection) để chặn chặn các đợt tấn công cố tình vượt rào trình duyệt.
-</Callout>
+    return route_to_model(message)
+```
 
 ---
 
-## 6. Cost & Performance Unit Economics
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
-Chiến lược vị trí Inference là một bản giao hưởng về tài chính.
+<Callout type="warning" title="Pitfall 1: Edge inference vẫn gọi DB ở region xa">
+**Triệu chứng:** Edge model chạy nhanh nhưng p95 latency không giảm.
 
-| Vị trí triển khai | Phân tích SRE (Ý nghĩa kinh tế) | Tối ưu hóa (Optimization) |
-|---|---|---|
-| **Server-side (Cloud)** | Chi phí phần cứng cao nhất. Bạn trả tiền cho Compute (GPU), Bandwidth, và Storage. 1 cụm GPU giá $10,000/tháng. | Ứng dụng mô hình **Batching** (Gom nhóm request). Máy chủ GPU có ROI cao nhất khi nó chạy hết công suất 100%. Nếu GPU chỉ tải 10%, bạn đang đốt tiền. |
-| **Edge (Cloudflare/Lambda)** | Tính phí theo "Per Request" hoặc "Compute Time". Rất đắt nếu chạy mô hình sinh văn bản dài (Long text generation). | Tuyệt đối không sinh văn bản quá dài ở Edge. Chỉ dùng Edge cho các luồng xử lý nhẹ (Phân loại, Kiểm duyệt, Embedding nhỏ). |
-| **Client-side (Mobile/Web)** | **Chi phí máy chủ bằng $0**. Bạn đang tận dụng NPU/GPU có sẵn trên iPhone/Macbook của khách hàng. | Đầu tư nhân lực vào việc học cách Lượng hóa (Quantization) mô hình (đưa về chuẩn ONNX INT8) để giảm kích thước file tải xuống, tối đa hóa tỷ lệ người dùng cài đặt thành công. |
+**Fix:** Chỉ đưa stateless tasks ra edge, hoặc replicate state/config gần edge nếu compliance cho phép.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Model client-side quá lớn làm UX tải lần đầu tệ">
+**Triệu chứng:** User web phải tải hàng trăm MB/GB trước khi dùng feature.
+
+**Fix:** Chỉ dùng model nhỏ/quantized, lazy load, cache model, hoặc chuyển sang native app/server-side.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Tin tưởng client-side guardrail như security boundary">
+**Triệu chứng:** Attacker bypass JS classifier và gọi API trực tiếp.
+
+**Fix:** Client-side chỉ là optimization. Server vẫn phải có auth, quota, moderation/anomaly detection và policy validation.
+</Callout>
+
+---
+
+## Cost / Latency / Security Unit Economics
+
+| Placement | Cost profile | Latency profile | Security profile |
+|---|---|---|---|
+| Server-side provider | pay per token/API | network + provider latency | tốt nếu data policy đúng |
+| Self-host GPU | fixed GPU cost | tốt khi batched | kiểm soát cao, vận hành khó |
+| Edge | pay per request/compute | network thấp | state/secrets hạn chế |
+| Client-side | server cost thấp | tốt sau khi tải model | model weights lộ, bypass được |
+| Async worker | optimize batching | không realtime | audit tốt nếu queue/state chuẩn |
+
+Placement tốt thường là hybrid: đặt tác vụ nhẹ gần user, đặt logic nhạy cảm ở server, đặt job dài vào worker.
+
+---
+
+## Practice exercises
+
+1. Chọn placement cho tính năng autocomplete trong editor và giải thích trade-off.
+2. Thiết kế hybrid placement cho eKYC gồm client precheck và server final verification.
+3. Viết ADR chọn async worker cho video summarization.
+4. Liệt kê 5 câu hỏi cần hỏi trước khi đưa model xuống client.
+5. So sánh edge inference và server-side inference cho intent classification global.
+
+---
+
+## Knowledge check
+
+1. Vì sao client-side inference không phải security boundary?
+2. Data gravity ảnh hưởng edge inference thế nào?
+3. Khi nào async worker là placement phù hợp nhất?
+4. Server-side inference có lợi thế gì với model proprietary?
+5. Hybrid inference nghĩa là gì?
+
+---
+
+## Answer key
+
+1. User có thể sửa client, bypass JS/mobile checks hoặc gọi API trực tiếp; server vẫn phải enforce policy.
+2. Nếu dữ liệu/state nằm xa edge, edge phải gọi về origin làm latency tổng không giảm.
+3. Khi tác vụ dài, dễ timeout, cần queue, batching, retry/resume hoặc progress UI.
+4. Model weights không bị phân phối cho user, dễ kiểm soát access, logging và update.
+5. Dùng nhiều vị trí inference cho các phần khác nhau: client/edge cho nhẹ, server cho nhạy cảm, worker cho dài.
 
 ---
 
 ## Điểm cần nhớ
 
-- Vị trí Inference quyết định tính kinh tế của hệ thống. Bạn không nhất thiết phải chọn 1 vị trí. **Hybrid Inference** (Lai ghép) là tương lai: Đẩy tác vụ nhẹ (Phân loại, Kiểm duyệt, Xử lý giọng nói sơ bộ) xuống Client/Edge, giữ tác vụ suy luận lõi (RAG, Core Logic) ở Server.
-- Edge Computing giải quyết bài toán độ trễ toàn cầu (Global Latency) nhưng lại tạo ra nút thắt cổ chai về dữ liệu (Data Gravity). Mô hình ở Edge sẽ vô dụng nếu nó phải liên tục gọi về Database ở trung tâm.
-- Client-side Inference bảo vệ quyền riêng tư 100% (không có dữ liệu nào rời khỏi thiết bị), nhưng đi kèm rủi ro bảo mật lộ trọng số mô hình (Model extraction attacks).
+- Inference placement quyết định latency, cost, privacy, security và vận hành.
+- Server-side là mặc định cho model lớn, private data và audit.
+- Edge chỉ hiệu quả cho stateless/low-latency tasks; data gravity rất quan trọng.
+- Client-side tốt cho offline/privacy/cost nhưng có rủi ro model extraction và bypass.
+- Job dài nên chuyển sang async worker thay vì giữ HTTP request mở.
+
+---
 
 ## Next chapter bridge
 
-Dù bạn đặt cỗ máy tính toán ở Server, Edge hay Client, việc phải liên tục tính toán đi tính toán lại cùng một câu hỏi cho hàng ngàn người dùng vẫn là một sự lãng phí tài nguyên khủng khiếp. Trong kỹ thuật phần mềm, cách tốt nhất để tính toán nhanh là... không tính toán gì cả. Chương tiếp theo: **Caching Strategies** — nơi chúng ta sẽ thiết kế nhiều tầng bộ nhớ đệm, từ Exact Match siêu tốc trên Redis cho đến Semantic Caching (Bộ nhớ đệm ngữ nghĩa) trên Vector Database để cắt giảm 80% hóa đơn OpenAI của bạn.
+Dù inference nằm ở đâu, cách rẻ và nhanh nhất vẫn là tránh gọi model khi có thể. Nếu nhiều request giống nhau hoặc tương đương về nghĩa, cache có thể giảm latency và cost rất mạnh. Chương tiếp theo: **Caching Strategies** — nơi chúng ta thiết kế exact cache, semantic cache, prompt cache và invalidation an toàn cho AI systems.

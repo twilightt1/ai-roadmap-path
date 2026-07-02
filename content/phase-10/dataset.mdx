@@ -1,306 +1,525 @@
-Dữ liệu là yếu tố quyết định 90% chất lượng của một mô hình fine-tuned. Trong kỷ nguyên của các mô hình nền tảng mạnh mẽ, câu châm ngôn kinh điển của ngành khoa học dữ liệu đã dịch chuyển từ "Garbage in, Garbage out" sang **"Quality over Quantity"**. Một tập dữ liệu gồm 1,000 ví dụ được làm sạch thủ công, lọc trùng lặp bằng thuật toán, và căn chỉnh định dạng chính xác sẽ mang lại hiệu quả vượt trội so với 100,000 ví dụ thu thập tự động từ Internet bị dính nhiều nhiễu.
+Ở bài trước, bạn đã có toolchain để chạy fine-tuning lặp lại. Nhưng fine-tuning không bắt đầu từ GPU; nó bắt đầu từ dữ liệu. Một model nhỏ fine-tuned trên 2,000 ví dụ sạch, đúng template, không leakage và có rubric nhất quán thường tốt hơn một model lớn train trên 200,000 ví dụ nhiễu.
 
-## Why this matters
-
-Trong thực tế xây dựng dữ liệu huấn luyện, AI Engineer thường gặp các vấn đề nghiêm trọng:
-
-- Mô hình bị lặp lại các câu trả lời sáo rỗng hoặc từ chối trả lời do dữ liệu huấn luyện chứa nhiều câu mẫu bị trùng lặp (data duplication).
-- Định dạng dữ liệu không khớp với Chat Template của mô hình nền khiến mô hình bị mất khả năng nhận diện điểm dừng (stop tokens), dẫn đến hiện tượng sinh ra văn bản vô tận (infinite generation).
-- Định dạng dữ liệu Preference (Chosen vs Rejected) cho DPO bị gán nhãn sai khiến mô hình học trực tiếp các hành vi độc hại hoặc sai lệch thông tin.
-- Dữ liệu bị mất cân bằng (class imbalance) khiến mô hình chỉ tập trung vào một số task dễ và bỏ qua các task khó.
-
-<Callout type="danger" title="Hãy chú ý tới phân phối độ dài (Sequence Length Distribution)">
-Nếu dataset của bạn chứa một vài ví dụ có độ dài cực đoan (ví dụ: 8,000 tokens) trong khi 99% còn lại chỉ dưới 500 tokens, quá trình huấn luyện sẽ bị chậm đi đáng kể hoặc gây sập nguồn bộ nhớ (OOM) nếu bạn cấu hình `max_seq_length` quá lớn để bao phủ các ngoại lệ đó.
-</Callout>
-
-## Learning objectives
-
-Sau chương này, bạn sẽ có thể:
-
-1. Phân biệt các định dạng dữ liệu huấn luyện phổ biến: Alpaca, ShareGPT, DPO.
-2. Xây dựng pipeline làm sạch, loại bỏ trùng lặp (deduplication) và lọc chất lượng dữ liệu.
-3. Giải thích toán học và implement thuật toán MinHash LSH để lọc trùng lặp văn bản.
-4. Thiết kế chiến lược trộn dữ liệu (dataset mixing) để giữ vững năng lực tổng quát của mô hình.
-5. Sử dụng kỹ thuật Self-Instruct để tự động tăng cường (augment) dữ liệu bằng LLM.
-6. Kiểm soát phân phối độ dài (length distribution) của dataset trước khi train.
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Khái niệm Tokenization và Special Tokens ở Phase 5.
-- Cấu trúc Chat Templates (ChatML, LLaMA) ở các chương trước.
-- Cách sử dụng thư viện `pandas` và `datasets` cơ bản.
+Dataset preparation là nơi AI Engineer biến raw conversations, tickets, documents, tool traces và human feedback thành training artifacts có thể audit. Nếu dữ liệu chứa PII, license mơ hồ, duplicate, bad labels hoặc template sai, model sẽ học chính những lỗi đó với tốc độ rất cao.
 
 ---
 
-## Common Dataset Formats
+## 1. The Incident (Tình huống sự cố)
 
-Khi chuẩn bị dữ liệu cho Supervised Fine-Tuning (SFT) hoặc Preference Optimization (DPO), bạn cần đưa dữ liệu về một trong các cấu trúc chuẩn sau:
+<Callout type="danger" title="Báo cáo sự cố: Model memorized secrets từ dataset support">
+**Bối cảnh:** Một công ty fine-tune customer-support assistant bằng ticket lịch sử. Dataset được export nhanh từ helpdesk, chuyển sang JSONL và train QLoRA trong một đêm.
 
-### 1. Alpaca Format (Instruction-based)
-Định dạng này phù hợp cho các tác vụ đơn lập (single-turn), cấu trúc gồm 3 trường chính:
-- `instruction`: Nhiệm vụ yêu cầu mô hình thực hiện.
-- `input` (tùy chọn): Ngữ cảnh hoặc dữ liệu bổ sung.
-- `output`: Câu trả lời mong muốn.
+**Sự cố:** Trong red-team test, model đôi khi sinh ra email khách hàng thật, order ID thật và một đoạn API token từng xuất hiện trong ticket debug. Ngoài ra, model lặp lại câu trả lời boilerplate vì nhiều ticket duplicate được đưa vào train.
+
+1. Không chạy PII/secrets scan trước training.
+2. Không dedup near-duplicate tickets.
+3. Train/test split bị leakage theo cùng customer thread.
+4. Không có dataset card hoặc data owner phê duyệt.
+
+**Hậu quả:** Dự án bị dừng để điều tra privacy incident. Team phải xóa checkpoint, rebuild dataset pipeline và thêm data governance gate trước mọi training run.
+</Callout>
+
+Bài học rút ra: dữ liệu fine-tuning là production asset. Nếu bạn không thể giải thích nguồn, license, cleaning steps, split và rủi ro privacy của dataset, bạn chưa sẵn sàng train.
+
+---
+
+## 2. Architecture Blueprint (Fine-Tuning Data Factory)
+
+Một data factory tốt biến raw data thành dataset artifact có version:
+
+```text
+[ Raw sources ]
+  - support tickets
+  - expert answers
+  - tool traces
+  - documents
+  - preference labels
+        │
+        ▼
+[ Ingestion + normalization ]
+  - canonical schema
+  - role mapping
+  - language/domain tags
+        │
+        ▼
+[ Quality filters ]
+  - empty/low-quality removal
+  - PII/secrets scan
+  - toxicity/safety filters
+  - license checks
+        │
+        ▼
+[ Dedup + leakage checks ]
+  - exact dedup
+  - near-dedup with MinHash
+  - group split by user/thread/doc
+        │
+        ▼
+[ Template validation ]
+  - chat template
+  - tool-call schema
+  - length distribution
+  - stop tokens
+        │
+        ▼
+[ Dataset splits ]
+  - train
+  - validation
+  - test
+  - red-team/regression
+        │
+        ▼
+[ Dataset card + manifest ]
+  - source/license/PII
+  - stats
+  - known limitations
+  - owner approval
+```
+
+Mục tiêu: dataset không chỉ “train được”, mà còn có thể audit, reproduce và defend trước incident.
+
+---
+
+## 3. Common Dataset Formats
+
+### Instruction format
+
+Dùng cho SFT đơn giản:
 
 ```json
 {
-  "instruction": "Trích xuất tên công ty từ đoạn văn sau.",
-  "input": "Hôm nay, tập đoàn VinGroup công bố báo cáo tài chính quý 2.",
-  "output": "VinGroup"
+  "instruction": "Tóm tắt policy hoàn tiền trong 3 bullet points.",
+  "input": "Khách hàng mua gói annual và yêu cầu refund sau 10 ngày...",
+  "output": "- Khách hàng đủ điều kiện..."
 }
 ```
 
-### 2. ShareGPT Format (Multi-turn Chat)
-Định dạng này phù hợp cho các cuộc hội thoại nhiều lượt (multi-turn), mô phỏng trực tiếp tương tác giữa User và Assistant.
+Ưu điểm: dễ tạo, dễ đọc. Nhược điểm: không biểu diễn nhiều turn hoặc tool calls tốt.
+
+### Chat format
+
+Dùng cho instruct/chat models:
 
 ```json
 {
-  "conversations": [
-    {"from": "human", "value": "Xin chào, bạn là ai?"},
-    {"from": "gpt", "value": "Tôi là trợ lý AI được huấn luyện bởi công ty của bạn."},
-    {"from": "human", "value": "Giúp tôi tóm tắt tài liệu này."}
+  "messages": [
+    {"role": "system", "content": "You are a support assistant."},
+    {"role": "user", "content": "Tôi muốn hoàn tiền."},
+    {"role": "assistant", "content": "Mình cần kiểm tra ngày mua và gói dịch vụ của bạn."}
   ]
 }
 ```
 
-### 3. DPO Format (Preference-based)
-Dùng cho thuật toán Direct Preference Optimization (DPO), cấu trúc gồm prompt kèm hai lựa chọn: câu trả lời tốt hơn (`chosen`) và câu trả lời kém hơn (`rejected`).
+Đây là format an toàn nhất cho SFT chat nếu bạn dùng đúng tokenizer `apply_chat_template`.
+
+### Tool-calling format
+
+Dùng khi model cần học gọi function/API:
 
 ```json
 {
-  "prompt": "Giải thích thuyết tương đối rộng của Einstein bằng 1 câu.",
-  "chosen": "Thuyết tương đối rộng mô tả trọng lực không phải là một lực mà là sự uốn cong của không-thời gian do khối lượng và năng lượng gây ra.",
-  "rejected": "Thuyết tương đối rộng nói rằng mọi vật đều chuyển động tương đối so với nhau trong vũ trụ."
+  "messages": [
+    {"role": "user", "content": "Kiểm tra đơn hàng ORD-123"},
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "name": "lookup_order",
+          "arguments": {"order_id": "ORD-123"}
+        }
+      ]
+    },
+    {"role": "tool", "name": "lookup_order", "content": "{\"status\":\"delivered\"}"},
+    {"role": "assistant", "content": "Đơn hàng ORD-123 đã được giao."}
+  ]
+}
+```
+
+Tool data cần schema validation nghiêm ngặt vì downstream tool có thể gây side effects.
+
+### Preference format cho DPO/RLHF-style training
+
+```json
+{
+  "prompt": "Giải thích lỗi này cho user không chuyên.",
+  "chosen": "Lỗi này nghĩa là ứng dụng không kết nối được máy chủ...",
+  "rejected": "Bạn cấu hình sai rồi. Tự kiểm tra lại đi."
+}
+```
+
+Preference data không chỉ cần “chosen tốt hơn rejected”; nó cần rubric rõ: helpfulness, correctness, safety, tone, conciseness, evidence.
+
+---
+
+## 4. Data Quality Gates
+
+### Schema validation
+
+Trước khi tokenization, validate từng record:
+
+| Gate | Fail nếu |
+|---|---|
+| Required fields | Thiếu `messages`, `instruction`, `output` |
+| Role order | Assistant trả lời trước user hoặc role không hợp lệ |
+| Empty content | Message rỗng hoặc chỉ whitespace |
+| Tool schema | Arguments không parse được JSON/schema |
+| Label consistency | `chosen` và `rejected` giống nhau |
+
+### Length distribution
+
+Một vài outliers dài có thể làm training chậm hoặc OOM.
+
+```python
+import numpy as np
+
+lengths = [count_tokens(example) for example in dataset]
+print({
+    "p50": int(np.percentile(lengths, 50)),
+    "p90": int(np.percentile(lengths, 90)),
+    "p95": int(np.percentile(lengths, 95)),
+    "p99": int(np.percentile(lengths, 99)),
+    "max": max(lengths),
+})
+```
+
+Rule of thumb:
+
+- Nếu p99 quá dài nhưng phần lớn sample ngắn, cân nhắc truncate hoặc tách riêng long-context training.
+- Đừng chọn `max_seq_length` chỉ vì 1% outliers.
+- Luôn log truncation rate.
+
+### PII and secrets filtering
+
+Scan tối thiểu:
+
+- Email, phone, address.
+- API keys, tokens, private keys.
+- Customer IDs nếu không được phép train.
+- Health/financial/legal sensitive data.
+- Internal URLs hoặc credentials trong logs.
+
+<Callout type="danger" title="Checkpoint cũng là dữ liệu nhạy cảm">
+Nếu model đã train trên secrets/PII, việc xóa raw dataset là chưa đủ. Checkpoint hoặc adapter có thể đã memorized thông tin đó. Hãy xử lý checkpoint như một artifact nhạy cảm và có policy xóa/rotate rõ.
+</Callout>
+
+---
+
+## 5. Deduplication và Leakage Prevention
+
+Duplicate làm model overfit và làm eval giả cao. Leakage xảy ra khi cùng một thông tin xuất hiện trong train và test.
+
+### Exact dedup
+
+```python
+import hashlib
+
+seen = set()
+unique = []
+
+for ex in examples:
+    text = normalize_for_dedup(ex["text"])
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if digest not in seen:
+        seen.add(digest)
+        unique.append(ex)
+```
+
+### Near-dedup với MinHash intuition
+
+MinHash ước lượng Jaccard similarity giữa các tập shingles:
+
+```text
+text -> shingles -> minhash signature -> LSH buckets -> candidate duplicates
+```
+
+Ví dụ:
+
+```python
+from datasketch import MinHash, MinHashLSH
+
+def shingles(text, n=5):
+    tokens = text.lower().split()
+    return {" ".join(tokens[i:i+n]) for i in range(max(0, len(tokens)-n+1))}
+
+def make_minhash(text, num_perm=128):
+    m = MinHash(num_perm=num_perm)
+    for shingle in shingles(text):
+        m.update(shingle.encode("utf-8"))
+    return m
+
+lsh = MinHashLSH(threshold=0.85, num_perm=128)
+
+for idx, ex in enumerate(examples):
+    mh = make_minhash(ex["text"])
+    duplicates = lsh.query(mh)
+    if not duplicates:
+        lsh.insert(str(idx), mh)
+        keep(ex)
+```
+
+### Split theo group, không split random mù
+
+Nếu một customer thread có 10 messages liên quan, split random có thể đưa 8 messages vào train và 2 messages vào test. Eval sẽ bị leakage.
+
+Split tốt hơn:
+
+```text
+Group key examples:
+- customer_id
+- ticket_id
+- document_id
+- repository_id
+- conversation_thread_id
+```
+
+---
+
+## 6. Dataset Mixing và Curriculum
+
+Fine-tuning trên một domain hẹp dễ gây forgetting. Dataset mixing giúp giữ năng lực nền.
+
+| Mix component | Vai trò |
+|---|---|
+| Domain task data | Tăng chất lượng task chính |
+| General instruction data | Giữ khả năng follow instruction chung |
+| Safety/refusal data | Giữ policy behavior |
+| Format/schema data | Tăng output validity |
+| Hard negatives | Giảm lỗi phổ biến |
+
+Ví dụ mix:
+
+```text
+70% domain support examples
+15% general instruction examples
+10% safety/refusal examples
+5% format/tool-call edge cases
+```
+
+Curriculum đơn giản:
+
+1. Bắt đầu với examples sạch, ngắn, rõ.
+2. Thêm cases dài/phức tạp.
+3. Thêm edge cases và adversarial prompts.
+4. Eval từng checkpoint để phát hiện regression.
+
+<Callout type="tip" title="Data mix là một hyperparameter">
+Tỷ lệ dataset mix ảnh hưởng behavior mạnh như learning rate. Hãy version nó trong config và sweep khi cần.
+</Callout>
+
+---
+
+## 7. Synthetic Data và Self-Instruct
+
+Synthetic data hữu ích khi thiếu examples, nhưng nó dễ khuếch đại bias hoặc tạo câu trả lời nghe hay mà sai.
+
+Pipeline an toàn hơn:
+
+```text
+[ Seed examples by experts ]
+        │
+        ▼
+[ Generate synthetic variations ]
+        │
+        ▼
+[ Automatic filters ]
+  - schema
+  - toxicity/PII
+  - length
+  - duplicate
+        │
+        ▼
+[ Strong model critique / judge ]
+        │
+        ▼
+[ Human spot-check ]
+        │
+        ▼
+[ Add to training mix with weight cap ]
+```
+
+Rules:
+
+- Không để synthetic data chiếm 100% dataset nếu task có rủi ro cao.
+- Luôn giữ seed set do expert tạo.
+- Gắn tag `synthetic=true` để phân tích eval theo nguồn dữ liệu.
+- Dùng human review cho high-impact samples.
+
+---
+
+## 8. Implementation Playbook: Dataset Validator
+
+Một validator tối thiểu nên chạy trước mọi training job:
+
+```python
+import json
+import re
+from collections import Counter
+
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+SECRET_RE = re.compile(r"(sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})")
+
+VALID_ROLES = {"system", "user", "assistant", "tool"}
+
+def validate_chat_record(record):
+    errors = []
+    messages = record.get("messages")
+
+    if not isinstance(messages, list) or not messages:
+        return ["missing_or_empty_messages"]
+
+    for i, msg in enumerate(messages):
+        role = msg.get("role")
+        content = msg.get("content", "")
+
+        if role not in VALID_ROLES:
+            errors.append(f"invalid_role_at_{i}")
+        if role != "assistant" and not str(content).strip():
+            errors.append(f"empty_content_at_{i}")
+        if EMAIL_RE.search(str(content)):
+            errors.append(f"email_pii_at_{i}")
+        if SECRET_RE.search(str(content)):
+            errors.append(f"secret_at_{i}")
+
+    if messages[0].get("role") == "assistant":
+        errors.append("assistant_starts_conversation")
+
+    return errors
+
+stats = Counter()
+valid = []
+
+with open("data/raw/chat.jsonl", "r", encoding="utf-8") as f:
+    for line_no, line in enumerate(f, start=1):
+        record = json.loads(line)
+        errors = validate_chat_record(record)
+        if errors:
+            for err in errors:
+                stats[err] += 1
+        else:
+            valid.append(record)
+
+print("valid_records", len(valid))
+print("errors", dict(stats))
+```
+
+### Dataset card template
+
+```json
+{
+  "dataset_id": "support_sft_2026_07_01",
+  "owner": "support-ai-team",
+  "sources": ["helpdesk_export", "expert_written_examples"],
+  "license": "internal_approved",
+  "contains_pii": false,
+  "pii_method": "regex_scan_plus_manual_review",
+  "dedup_method": "exact_sha256_plus_minhash_0.85",
+  "split_method": "group_by_ticket_id",
+  "train_count": 18000,
+  "validation_count": 1000,
+  "test_count": 1000,
+  "synthetic_ratio": 0.15,
+  "known_limitations": [
+    "English and Vietnamese only",
+    "No medical/legal advice coverage"
+  ],
+  "approved_by": ["data_owner", "security_reviewer"]
 }
 ```
 
 ---
 
-## Data Cleaning & Deduplication Pipeline
+## 9. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
-Dữ liệu thô từ database hoặc scraping cần đi qua các bước tiền xử lý nghiêm ngặt:
+<Callout type="warning" title="Pitfall 1: Train/test leakage">
+**Triệu chứng:** Eval rất cao offline nhưng production kém.
 
-```text
-Raw Data → Lọc ký tự lạ/HTML → Lọc trùng lặp (Exact & Near-dup) → Lọc theo độ dài (Tokens) → Quality Filtering (LLM-as-judge) → Final Dataset
-```
+**Nguyên nhân:** Duplicate hoặc cùng thread/document xuất hiện ở train và test.
 
-### Toán học của MinHash LSH (Locality-Sensitive Hashing)
-Để lọc trùng lặp ở quy mô lớn, việc so khớp chuỗi chính xác (exact match) sẽ bỏ sót các văn bản gần giống nhau (near-duplicates - ví dụ chỉ khác nhau dấu câu hoặc một vài từ nối). Phép so sánh cặp đôi toàn bộ (all-pairs comparison) có độ phức tạp $O(N^2)$ là bất khả thi khi dữ liệu lớn. Ta sử dụng **MinHash LSH** để đưa độ phức tạp về mức tuyến tính $O(N)$.
+**Cách khắc phục:** Dedup trước split, split theo group key, chạy similarity check giữa train/test.
+</Callout>
 
-#### 1. Jaccard Similarity (Độ tương đồng Jaccard)
-Độ tương đồng giữa hai văn bản được biểu diễn dưới dạng hai tập hợp từ (hoặc n-grams) A và B:
+<Callout type="warning" title="Pitfall 2: Chat template sai">
+**Triệu chứng:** Model sinh role tokens, không dừng hoặc trả lời lẫn nhiều turn.
 
-`J(A, B) = |A ∩ B| / |A ∪ B|`
+**Nguyên nhân:** Dataset format không khớp tokenizer/chat template của base model.
 
-#### 2. MinHashing
-Ta băm (hash) các phần tử của tập hợp bằng `k` hàm băm ngẫu nhiên khác nhau. Ký hiệu `h_min(A)` là giá trị băm nhỏ nhất của tập hợp A dưới hàm băm `h`. Một tính chất toán học quan trọng là: **Xác suất để hai tập hợp có cùng giá trị MinHash bằng chính độ tương đồng Jaccard của chúng**:
+**Cách khắc phục:** Dùng `apply_chat_template`, inspect tokenized samples và test generation trước training dài.
+</Callout>
 
-`P(h_min(A) = h_min(B)) = J(A, B)`
+<Callout type="warning" title="Pitfall 3: Synthetic data chất lượng thấp">
+**Triệu chứng:** Model trả lời nghe mượt nhưng sai facts hoặc lặp style máy móc.
 
-Bằng cách chọn `k` hàm băm (ví dụ `k=128`), ta có thể biểu diễn mỗi văn bản dưới dạng một vector chữ ký (signature vector) gồm `k` số nguyên. Độ tương đồng giữa hai văn bản được ước lượng bằng tỷ lệ các phần tử trùng nhau giữa hai signature vectors.
+**Nguyên nhân:** Synthetic data không được critique/human review, tỷ lệ quá cao.
 
-#### 3. Locality-Sensitive Hashing (LSH)
-Để tìm các cặp trùng lặp mà không cần so sánh chéo, ta chia signature vector của mỗi văn bản thành `b` dải (bands), mỗi dải chứa `r` dòng (`k = b * r`). 
+**Cách khắc phục:** Giới hạn synthetic ratio, dùng judge/rubric, human spot-check và eval theo data source.
+</Callout>
 
-Ta băm mỗi dải vào một hash table. Các văn bản có cùng giá trị băm trong **ít nhất một dải** sẽ được coi là ứng viên trùng lặp (candidate pairs) và chỉ cần so sánh chi tiết các ứng viên này.
+<Callout type="warning" title="Pitfall 4: Preference labels không nhất quán">
+**Triệu chứng:** DPO làm model xấu hơn SFT hoặc học tone sai.
 
-Xác suất để hai văn bản có độ tương đồng Jaccard `s` trở thành ứng viên trùng lặp là:
+**Nguyên nhân:** Annotators chọn `chosen` theo tiêu chí khác nhau.
 
-`P(candidate) = 1 - (1 - s^r)^b`
-
-Đồ thị của hàm số này có dạng hình chữ S (S-curve), giúp lọc cực kỳ sắc nét các văn bản có độ tương đồng vượt ngưỡng `s* ≈ (1/b)^(1/r)`.
-
-```python
-from datasketch import MinHash, MinHashLSH
-
-# Thiết lập LSH với ngưỡng tương đồng Jaccard > 0.8
-lsh = MinHashLSH(threshold=0.8, num_perm=128)
-
-def get_minhash(text):
-    m = MinHash(num_perm=128)
-    # Tokenize câu bằng cách tách từ (shingling)
-    for word in text.lower().split():
-        m.update(word.encode('utf-8'))
-    return m
-
-sentences = [
-    "Hôm nay trời nắng đẹp quá, tôi muốn đi chơi.",
-    "Hôm nay thời tiết nắng đẹp quá, tôi muốn đi chơi.", # Near-duplicate (>80% Jaccard)
-    "Làm thế nào để reset mật khẩu tài khoản?"
-]
-
-clean_sentences = []
-for idx, text in enumerate(sentences):
-    m = get_minhash(text)
-    # Truy vấn các ứng viên trùng lặp trong index LSH
-    result = lsh.query(m)
-    if not result:
-        lsh.insert(f"id_{idx}", m)
-        clean_sentences.append(text)
-
-print("Cleaned dataset:", clean_sentences)
-# Output: Chỉ giữ lại câu 1 và câu 3. Câu 2 bị loại bỏ do trùng lặp gần với câu 1.
-```
-
----
-
-## Dataset Mixing & General Capabilities Preservation
-
-Khi fine-tune mô hình trên một tác vụ chuyên biệt (domain-specific), mô hình rất dễ bị **Catastrophic Forgetting** (sụp đổ năng lực tổng quát). Để khắc phục, ta bắt buộc phải áp dụng chiến lược trộn dữ liệu (**Dataset Mixing**).
-
-Công thức thiết lập tỷ lệ trộn tối ưu trong công nghiệp:
-
-`D_train = λ * D_specialized + (1 - λ) * D_general`
-
-Trong đó:
-- `D_specialized`: Dữ liệu tác vụ mục tiêu (ví dụ: SQL, Y tế).
-- `D_general`: Dữ liệu chat/lập luận tổng quát chất lượng cao (ví dụ: ShareGPT, SlimOrca, Alpaca-GPT4).
-- `λ` (Tỷ lệ pha trộn): Thường dao động từ 0.7 đến 0.9. Nếu `λ` quá lớn, mô hình sẽ bị forgetting. Nếu `λ` quá nhỏ, mô hình không học đủ sâu tác vụ chuyên biệt.
-
----
-
-## Data Augmentation: Self-Instruct
-
-Khi số lượng dữ liệu gán nhãn thực tế quá ít (dưới 100 mẫu), ta có thể sử dụng kỹ thuật **Self-Instruct** (Wang et al., 2022) để dùng các LLM mạnh hơn sinh thêm dữ liệu huấn luyện một cách tự động.
-
-### Quy trình Self-Instruct nâng cao:
-1. **Seed Tasks:** Chuẩn bị 100 ví dụ chất lượng cao do con người viết.
-2. **Task Generation:** Prompt LLM mạnh (như GPT-4o) sinh ra 10-20 nhiệm vụ mới tương tự nhưng không trùng lặp với các ví dụ mẫu.
-3. **Classification & Input Generation:** Xác định xem tác vụ đó cần input hay không, và tự động sinh ra input phù hợp.
-4. **Output Generation:** Dùng LLM sinh ra output chuẩn xác cho các nhiệm vụ mới.
-5. **Quality Filtering (LLM-as-judge):** Dùng một prompt độc lập để yêu cầu LLM lọc bỏ các câu trả lời bị trùng lặp, thiếu thông tin hoặc sai logic.
-
-<Callout type="warning" title="Cảnh giác với chất lượng dữ liệu tổng hợp (Synthetic Data)">
-Dữ liệu sinh ra bởi LLM có thể chứa các lỗi logic lặp đi lặp lại hoặc thiên kiến (bias) của mô hình sinh. Hãy luôn có bước lọc thủ công hoặc dùng các bộ lọc cấu trúc (JSON schema validators) để đảm bảo chất lượng.
+**Cách khắc phục:** Viết rubric, đo inter-annotator agreement, audit sample disagreement và retrain labelers.
 </Callout>
 
 ---
 
-## Implementation lab: Dataset Analyzer and Tokenizer Guard
+## 10. Data Governance & Dataset Unit Economics
 
-**Nhiệm vụ:** Viết một script phân tích tệp dữ liệu huấn luyện, vẽ phân phối độ dài (sequence length) của các câu sau khi token hóa, và tự động loại bỏ các câu quá dài hoặc quá ngắn để bảo vệ VRAM khi train.
+Dữ liệu tốt tốn tiền, nhưng dữ liệu xấu làm hỏng model và tạo incident.
 
-```python
-import numpy as np
-from transformers import AutoTokenizer
-from datasets import load_dataset
+| Quyết định | Lợi ích | Trade-off |
+|---|---|---|
+| Human-written expert data | Chất lượng cao | Đắt, chậm |
+| Synthetic augmentation | Nhanh, đa dạng | Cần filter/review |
+| Dedup nghiêm ngặt | Giảm overfit/leakage | Có thể xóa nhầm near-duplicates hữu ích |
+| PII review | Giảm privacy risk | Tốn thời gian/security process |
+| Group split | Eval trung thực hơn | Ít random, cần metadata |
+| Dataset card | Audit tốt | Cần discipline |
 
-model_id = "Qwen/Qwen2.5-1.5B-Instruct"
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-# Load dataset mẫu từ HuggingFace
-dataset = load_dataset("tatsu-lab/alpaca", split="train")
-
-def analyze_and_filter_dataset(dataset, tokenizer, max_tokens=1024, min_tokens=10):
-    lengths = []
-    clean_indices = []
-
-    print("Analyzing dataset token lengths...")
-    for idx, example in enumerate(dataset):
-        # Ghép các trường lại thành một chuỗi duy nhất để giả lập đầu vào của mô hình
-        full_text = f"{example['instruction']} {example['input']} {example['output']}"
-        tokens = tokenizer.encode(full_text, add_special_tokens=True)
-        length = len(tokens)
-        lengths.append(length)
-
-        if min_tokens <= length <= max_tokens:
-            clean_indices.append(idx)
-
-    lengths = np.array(lengths)
-    print(f"Original dataset size: {len(dataset)}")
-    print(f"Average length: {np.mean(lengths):.2f} tokens")
-    print(f"95th percentile length: {np.percentile(lengths, 95):.2f} tokens")
-    print(f"Max length found: {np.max(lengths)} tokens")
-
-    # Lọc dataset
-    filtered_dataset = dataset.select(clean_indices)
-    print(f"Filtered dataset size: {len(filtered_dataset)} (Removed {len(dataset) - len(filtered_dataset)} examples)")
-
-    return filtered_dataset
-
-filtered_data = analyze_and_filter_dataset(dataset, tokenizer, max_tokens=512)
-```
-
----
-
-## Common mistakes & debugging checklist
-
-<Callout type="warning" title="Mistake 1: Không strip khoảng trắng và ký tự thừa ở đầu/cuối">
-Dữ liệu thu thập từ web hoặc database thường chứa các ký tự xuống dòng `\n` hoặc khoảng trắng thừa ở đầu/cuối. Điều này khiến tokenizer sinh ra các tokens không cần thiết và làm nhiễu quá học tập của mô hình.
-</Callout>
-
-<Callout type="warning" title="Mistake 2: Trộn dữ liệu mất cân bằng nghiêm trọng">
-Nếu bạn trộn 10,000 câu hỗ trợ khách hàng với 500 câu viết code, mô hình sẽ bị thiên lệch hoàn toàn về hướng hỗ trợ khách hàng và gần như không học được kỹ năng viết code. Hãy cân bằng tỷ lệ trộn (downsampling hoặc upsampling).
-</Callout>
-
-<Callout type="danger" title="Mistake 3: Rò rỉ dữ liệu (Data Leakage) từ tập Train sang tập Test">
-Nếu bạn không lọc trùng lặp kỹ càng, các ví dụ trong tập test có thể đã xuất hiện trong tập train. Điều này làm cho chỉ số đánh giá (evaluation metrics) cực kỳ đẹp nhưng mô hình thực tế sẽ fail khi gặp dữ liệu thực của người dùng.
-</Callout>
-
-### Checklist chuẩn bị dữ liệu:
-
-- [ ] Đã chạy lọc trùng lặp (exact & near-dedup) trên toàn bộ dataset bằng MinHash LSH chưa?
-- [ ] Định dạng dữ liệu đã khớp hoàn toàn với Chat Template của mô hình đích chưa?
-- [ ] Đã loại bỏ các ví dụ có độ dài vượt quá giới hạn VRAM (`max_seq_length`) cấu hình chưa?
-- [ ] Đã thêm tỷ lệ dữ liệu tổng quát (general dataset) để chống catastrophic forgetting chưa?
-- [ ] Các nhãn của User prompt đã được cấu hình ẩn (`-100`) trong quá trình tính loss chưa?
-- [ ] Đã kiểm tra tính cân bằng của các class/intent trong dataset chưa?
+Production takeaway: dataset prep thường chiếm phần lớn thời gian fine-tuning. Đó không phải overhead; đó là chất lượng model.
 
 ---
 
 ## Practice exercises
 
-1. **Thiết kế Pipeline:** Thiết kế một hệ thống pipeline Python tự động tải dữ liệu từ 3 nguồn khác nhau (JSON, CSV, Parquet), chuẩn hóa chúng về định dạng ShareGPT, và lưu thành một file `.jsonl` duy nhất.
-2. **Loại bỏ trùng lặp gần:** Sử dụng thư viện `datasketch` để viết một script loại bỏ các câu trùng lặp trong một tập dữ liệu 5,000 dòng và đo lường tỷ lệ dữ liệu bị giảm đi.
-3. **Prompt Self-Instruct nâng cao:** Viết prompt Self-Instruct nâng cao để sinh ra 200 cặp dữ liệu huấn luyện cho bài toán trích xuất thông tin thực thể (Named Entity Recognition - NER) từ các văn bản tài chính tiếng Việt.
+1. Chuyển 5 Q&A examples của bạn sang chat format với `system`, `user`, `assistant`.
+2. Viết 10 validation rules cho tool-calling dataset.
+3. Thiết kế split strategy cho support tickets sao cho tránh leakage theo customer/thread.
+4. Tạo dataset card cho một dataset nội bộ giả định.
+5. Đề xuất data mix cho legal assistant cần giữ safety behavior.
 
 ---
 
 ## Knowledge check
 
-1. Tại sao chất lượng dữ liệu (data quality) lại quan trọng hơn số lượng dữ liệu (data quantity) trong fine-tuning?
-2. Sự khác biệt giữa định dạng dữ liệu Alpaca và ShareGPT là gì?
-3. Jaccard similarity là gì và nó được dùng như thế nào trong lọc trùng lặp dữ liệu?
-4. Tại sao ta phải thực hiện Dataset Mixing khi fine-tune mô hình cho một task chuyên biệt?
-5. Rủi ro lớn nhất khi sử dụng hoàn toàn dữ liệu tổng hợp (Synthetic Data) để huấn luyện mô hình là gì?
+1. Vì sao exact random split có thể gây leakage trong conversation dataset?
+2. Near-dedup khác exact dedup ở điểm nào?
+3. Vì sao cần scan PII/secrets trước training?
+4. Preference dataset cần gì ngoài cặp `chosen` và `rejected`?
+5. Synthetic data nên được kiểm soát như thế nào?
 
 ---
 
 ## Answer key
 
-1. Vì mô hình nền đã có sẵn năng lực ngôn ngữ mạnh mẽ; fine-tuning chỉ cần một lượng nhỏ dữ liệu cực sạch để căn chỉnh hành vi (alignment). Dữ liệu rác sẽ làm mô hình bị loạn biểu diễn và hallucinate.
-2. Alpaca thiết kế cho single-turn tasks (Instruction -> Input -> Output); ShareGPT thiết kế cho multi-turn chat (danh sách các lượt hội thoại của human và gpt).
-3. Jaccard similarity đo tỉ lệ giữa phần giao và phần hợp của hai tập hợp từ. Nó dùng để phát hiện các câu gần giống nhau (near-duplicates) để loại bỏ.
-4. Để giữ vững năng lực suy luận tổng quát và khả năng ngôn ngữ tự nhiên của mô hình nền, ngăn ngừa hiện tượng catastrophic forgetting.
-5. Mô hình có thể kế thừa và phóng đại các lỗi logic, thiên kiến (bias) hoặc phong cách viết sáo rỗng của mô hình sinh ra dữ liệu đó.
-
----
-
-## Mini-project: Data Ingestion and Cleaning Pipeline
-
-### Nhiệm vụ:
-Xây dựng một pipeline hoàn chỉnh bằng Python để xử lý tệp dữ liệu hội thoại thô của khách hàng.
-
-### Yêu cầu đầu ra:
-- Đọc dữ liệu từ file JSON thô.
-- Loại bỏ các ký tự HTML, khoảng trắng thừa, và các câu chào hỏi vô nghĩa bằng regex.
-- Sử dụng MinHash LSH để loại bỏ các câu trùng lặp hoặc gần trùng lặp.
-- Lọc bỏ các cuộc hội thoại quá ngắn (dưới 2 lượt nói) hoặc quá dài (hơn 1024 tokens).
-- Xuất ra file dữ liệu định dạng ShareGPT chuẩn sẵn sàng để đưa vào `SFTTrainer`.
+1. Vì các message cùng thread/customer/document có thể bị chia giữa train và test, làm eval thấy các thông tin gần giống training.
+2. Exact dedup xóa bản giống hệt; near-dedup phát hiện các mẫu rất giống nhau dù khác một vài từ hoặc format.
+3. Vì model/checkpoint có thể memorize và sinh lại thông tin nhạy cảm; checkpoint sau training cũng trở thành artifact nhạy cảm.
+4. Cần rubric rõ, consistency giữa annotators, metadata nguồn và validation để tránh model học preference sai.
+5. Gắn tag nguồn, filter tự động, judge/critique, human spot-check và giới hạn tỷ lệ trong data mix.
 
 ---
 
 ## Điểm cần nhớ
 
-- Chất lượng dữ liệu quyết định thành bại của dự án Fine-Tuning.
-- Lựa chọn định dạng dữ liệu phù hợp: Alpaca cho single-turn, ShareGPT cho multi-turn, DPO cho preference alignment.
-- Luôn thực hiện lọc trùng lặp bằng MinHash LSH để làm sạch dữ liệu.
-- Sử dụng chiến lược Dataset Mixing để bảo vệ năng lực tổng quát của mô hình.
-
----
+- Dataset quality quyết định phần lớn kết quả fine-tuning.
+- Mọi dataset production cần schema validation, PII/secrets scan, license review, dedup và leakage check.
+- Chat template/tokenization phải được kiểm tra trước khi training dài.
+- Preference data cần rubric và label consistency, không chỉ cặp chosen/rejected.
+- Synthetic data hữu ích nhưng phải được gắn nhãn, lọc và giới hạn tỷ lệ.
+- Dataset card và manifest là điều kiện cần để audit, reproduce và rollback.
 
 ## Next chapter bridge
 
-Sau khi đã chuẩn bị một tập dữ liệu huấn luyện cực kỳ sạch và chạy các công cụ tối ưu để train mô hình, câu hỏi quan trọng cuối cùng là: Làm thế nào để chứng minh mô hình sau khi fine-tune tốt hơn mô hình ban đầu? Chương tiếp theo: **Evaluation After Fine-Tuning** — tìm hiểu sâu về các hệ thống benchmark MMLU, HumanEval, MT-Bench, cách thiết lập LLM-as-judge và quy trình chạy regression testing trong production.
+Bạn đã có dữ liệu sạch và pipeline train được. Nhưng model mới chỉ có giá trị nếu nó vượt baseline một cách đo được và không phá vỡ hành vi khác. Chương tiếp theo là **Evaluation After Fine-Tuning**: eval harness, LLM-as-judge, regression tests, release gates và Phase 10 wrap-up.

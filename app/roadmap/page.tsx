@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import { Timeline } from "@/components/roadmap/timeline";
+import { Reveal } from "@/components/shared/reveal";
 
 export const metadata: Metadata = {
-  title: "Roadmap — Lộ trình AI Engineer 2026",
+  title: "Roadmap · Lộ trình AI Engineer 2026",
   description:
     "Timeline đầy đủ 17 phases + Capstone. Mỗi phase có thể mở rộng xem chủ đề chi tiết và 3 dự án thực hành.",
 };
@@ -19,7 +20,9 @@ export default function RoadmapPage() {
           Hoặc nhấp vào &quot;Chi tiết phase&quot; để xem trang riêng biệt.
         </p>
       </div>
-      <Timeline />
+      <Reveal>
+        <Timeline />
+      </Reveal>
     </div>
   );
 }

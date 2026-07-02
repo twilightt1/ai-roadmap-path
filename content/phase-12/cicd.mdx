@@ -1,183 +1,414 @@
-Continuous Integration & Continuous Deployment (CI/CD) trong AI không chỉ là việc đóng gói mã nguồn (code) và tải lên máy chủ. Một hệ thống MLOps hoàn chỉnh yêu cầu một "luồng ba ngã" (3-way pipeline): Code thay đổi, Data thay đổi, và Model thay đổi. Việc bấm nút Deploy một mô hình mới mà không trải qua bộ lưới lọc tự động (Automated Evaluation Gates) là hành động đánh cược sự an toàn của toàn bộ doanh nghiệp.
+Bạn đã có monitoring để biết hệ thống đang làm gì. Nhưng production không đứng yên: prompt thay đổi, code thay đổi, dataset thay đổi, model thay đổi và infrastructure thay đổi. Nếu mỗi thay đổi đều deploy thủ công, sớm muộn gì một prompt “nhỏ” cũng phá production.
+
+**CI/CD for AI** mở rộng CI/CD truyền thống bằng eval gates, dataset/model artifact checks, prompt regression tests, security scans, canary rollout và automated rollback. Mục tiêu không phải deploy nhanh bằng mọi giá; mục tiêu là deploy có kiểm soát, đo được và quay lui được.
 
 ---
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: Dòng Code 'Hủy Diệt' Ngày Thứ Sáu">
-**Bối cảnh:** Chiều thứ Sáu, một kỹ sư Prompt Engineering quyết định sửa nhẹ (tweak) dòng System Prompt của Chatbot hỗ trợ tài chính từ *"Hãy trả lời lịch sự"* thành *"Hãy đưa ra lời khuyên tài chính quyết đoán hơn"*. Anh ta cam kết (commit) mã nguồn trực tiếp vào nhánh `main`. Pipeline CI/CD truyền thống (vốn chỉ chạy Unit Test để kiểm tra lỗi cú pháp Python) trả về màu xanh (Passed). Ứng dụng tự động cập nhật lên Production.
+<Callout type="danger" title="Báo cáo sự cố: Một dòng prompt merge chiều thứ Sáu gây incident tài chính">
+**Bối cảnh:** Chatbot hỗ trợ ngân hàng có system prompt: “Hãy hướng dẫn người dùng thao tác tài khoản, không đưa lời khuyên đầu tư.” Một prompt engineer sửa thành “Hãy đưa ra lời khuyên quyết đoán hơn” để làm chatbot tự tin hơn. PR chỉ chạy unit test Python và pass.
 
-**Sự cố:** Suốt hai ngày cuối tuần, Chatbot liên tục khuyên khách hàng... bán khống cổ phiếu (short selling) thay vì hướng dẫn họ cách đổi mật khẩu thẻ tín dụng. Không một cảnh báo nào được phát ra vì mã nguồn vẫn "chạy không lỗi".
+**Sự cố:** Cuối tuần, chatbot bắt đầu đưa khuyến nghị mua/bán cổ phiếu khi user hỏi về tài khoản đầu tư. Không có prompt regression test, không có compliance eval và deploy bật 100% traffic ngay sau merge.
 
-**Hậu quả:** Công ty bị Ủy ban Chứng khoán điều tra vì tội "Tư vấn tài chính không phép". Kỹ sư bay việc.
+1. CI chỉ kiểm tra syntax, không kiểm tra semantic behavior.
+2. Prompt không được version và review như code.
+3. Không có golden dataset cho câu hỏi regulated domain.
+4. Không có canary hoặc feature flag để rollback nhanh.
+
+**Hậu quả:** Tính năng bị tắt, compliance mở điều tra và team bắt buộc đưa AI eval vào release pipeline.
 </Callout>
 
-Bài học rút ra: Unit Test thông thường vô dụng đối với LLM. Mã nguồn không lỗi (No Exception) không có nghĩa là đầu ra có ý nghĩa (Semantic Correctness). Bạn phải xây dựng **CI/CD cho AI**, nơi đánh giá chất lượng tự động (Automated Evals) được nhúng sâu vào đường ống triển khai.
+Bài học rút ra: Lỗi code làm app crash; lỗi prompt/model có thể làm app vẫn chạy nhưng trả lời nguy hiểm. CI/CD cho AI phải test **hành vi** chứ không chỉ test cú pháp.
 
 ---
 
-## 2. Architecture Blueprint (Kiến trúc giải pháp)
+## 2. Architecture Blueprint (CT/CI/CD Pipeline for AI)
 
-Trong CI/CD cho phần mềm truyền thống, bạn biên dịch (build) và kiểm thử (test) mã nguồn. Trong CI/CD cho AI (hay còn gọi là **CT/CI/CD** - Continuous Training, Continuous Integration, Continuous Deployment), quy trình mở rộng ra rất nhiều:
+AI pipeline có ba dòng thay đổi: code, data và model/prompt.
 
 ```text
-[ GitHub / GitLab ] (Code / Prompt Update)
-       │
-       ▼
-==================== [ CI: CONTINUOUS INTEGRATION ] ====================
-  ├── 1. Code Linting & Security Scan (Bandit / Flake8)
-  ├── 2. Traditional Unit Tests (PyTest cho Logic Backend)
-  └── 3. LLM Regression Tests (Chạy Prompt mới trên 500 Golden Dataset cases)
-       └──> So sánh điểm số (Score) qua LLM-as-a-judge (VD: >= 4.5/5.0 mới Pass)
-========================================================================
-       │
-       ▼ (Nếu PASS)
-==================== [ CD: CONTINUOUS DEPLOYMENT ] =====================
-  ├── 1. Build Docker Image (Gắn Tag Version: v1.2.3)
-  ├── 2. Push Image -> Container Registry (ECR / DockerHub)
-  └── 3. Kubernetes / ArgoCD Sync (Triển khai không gián đoạn)
-         ├── Canary Release (Chỉ chuyển 5% User sang Prompt mới)
-         └── Monitor Error Rate (Theo dõi 15 phút, nếu OK -> 100% User)
-========================================================================
+[ Pull request ]
+  - app code
+  - prompts
+  - eval cases
+  - infra manifests
+        │
+        ▼
+[ CI: checks ]
+  - lint/unit tests
+  - security scan
+  - prompt regression tests
+  - small golden eval
+  - schema/data checks
+        │
+        ▼
+[ Build ]
+  - Docker image
+  - SBOM / vulnerability scan
+  - tag with git SHA
+        │
+        ▼
+[ Release gates ]
+  - eval score threshold
+  - cost/latency budget
+  - model registry status
+  - approval for high-risk changes
+        │
+        ▼
+[ CD: progressive delivery ]
+  - deploy staging
+  - smoke tests
+  - canary 5%
+  - monitor metrics
+  - promote 100% or rollback
+```
+
+CT (Continuous Training) có thể được thêm vào khi dataset mới kích hoạt training/eval/model registry. Nhưng không phải team nào cũng cần continuous training ngay từ đầu.
+
+---
+
+## 3. What Makes AI CI/CD Different
+
+| Truyền thống | AI/LLM |
+|---|---|
+| Unit test deterministic | output stochastic và semantic |
+| Code là artifact chính | code + prompt + data + model + index |
+| Build pass thì deploy được | eval gate mới quyết định deploy |
+| Rollback image là đủ | có thể cần rollback prompt/model/index |
+| Monitoring là error/latency | thêm hallucination, cost, toxicity, tool loops |
+
+Vì vậy pipeline AI phải biết artifact nào thay đổi:
+
+```text
+prompt changed -> run prompt regression
+retriever changed -> run RAG eval
+model changed -> run full eval + latency test
+data changed -> run data validation + train/eval
+infra changed -> run security/resource checks
 ```
 
 ---
 
-## 3. Tooling Landscape (Ma trận công cụ)
+## 4. Prompt, Dataset and Model Versioning in CI/CD
 
-| Lớp công cụ | Đại diện tiêu biểu | Vai trò trong CI/CD (SRE Use-case) |
-|---|---|---|
-| **Pipeline Orchestrator** | GitHub Actions, GitLab CI | Trái tim của hệ thống. Kích hoạt tự động khi có thao tác gộp nhánh (Merge PR). |
-| **Model Registry / Evals** | W&B Models, MLflow | Quản lý vòng đời mô hình (Model Lifecycle). Ngăn chặn việc deploy mô hình nếu trạng thái không phải là `Production-Ready`. |
-| **Prompt Testing Framework** | Promptfoo, DeepEval | Công cụ chuyên biệt chạy trong CI/CD để tự động gọi API, tính toán điểm số (Groundedness, Toxicity) và xuất báo cáo (Report) đính kèm vào Pull Request. |
-| **Progressive Delivery** | Argo Rollouts, Flagger | Quản lý Kubernetes để thực hiện Blue/Green Deployment hoặc Canary Release, giúp rollback (lùi phiên bản) ngay lập tức nếu AI "bị ngáo" trên production. |
+Một release AI nên có version bundle:
+
+```json
+{
+  "release_id": "support-ai-2026.07.02",
+  "app_image": "registry/ai-api:7c9f2ab",
+  "prompt_version": "support-v14",
+  "model_version": "customer-support-sft-v12",
+  "retriever_index": "kb-index-2026-07-01",
+  "dataset_hash": "sha256:...",
+  "eval_report": "s3://eval-reports/support-ai-2026.07.02.json"
+}
+```
+
+Rollback cần quay về bundle trước đó, không chỉ Docker image. Nếu bạn rollback app nhưng vẫn dùng prompt/index/model mới, incident có thể tiếp tục.
 
 ---
 
-## 4. Implementation Playbook (Thực thi)
+## 5. Test Pyramid for AI Systems
 
-Hãy cùng thiết lập một đường ống (Pipeline) GitHub Actions cực kỳ thực dụng. Khi một kỹ sư tạo Pull Request (PR) thay đổi Prompt, GitHub Actions sẽ tự động chạy bộ đánh giá chất lượng (Eval) và bình luận kết quả thẳng vào PR đó.
+```text
+                 [ Human review / red team ]
+               [ Online canary / A/B tests ]
+             [ Full golden eval / nightly ]
+          [ PR semantic sanity eval ]
+       [ Unit tests / schema tests / lint ]
+```
 
-### Bước 1: Viết Script chạy Eval (Python + DeepEval)
-Tạo file `ci_eval.py`. Kịch bản này sẽ kiểm tra xem Prompt mới có trả lời đúng các câu hỏi hóc búa (Golden Dataset) hay không.
+| Tầng | Chạy khi nào | Mục tiêu |
+|---|---|---|
+| Unit/schema | mọi PR | nhanh, deterministic |
+| Semantic sanity | mọi PR prompt/model logic | phát hiện regression rõ ràng |
+| Full eval | nightly hoặc release candidate | chất lượng rộng hơn |
+| Canary | sau staging | kiểm tra traffic thật |
+| Human review | high-risk domain | compliance và nuance |
+
+Không nên chạy 10,000 eval cases trong mọi PR nếu làm developer chờ 5 giờ. Dùng tiered testing.
+
+---
+
+## Implementation Playbook: GitHub Actions AI Eval Gate
+
+### Bước 1: Script eval tối giản
 
 ```python
-# ci_eval.py
-import os
+# scripts/ci_eval.py
+import json
 import sys
-from deepeval import evaluate
-from deepeval.test_case import LLMTestCase
-from deepeval.metrics import AnswerRelevancyMetric
+from pathlib import Path
 
-def run_ci_eval():
-    # 1. Tải Golden Dataset (Ví dụ: 100 câu hỏi khó đã được dán nhãn chuẩn)
-    # 2. Sinh câu trả lời từ mô hình với đoạn Prompt MỚI vừa được lập trình viên sửa
-    # (Giả lập kết quả)
-    test_case = LLMTestCase(
-        input="Làm thế nào để đổi mật khẩu?",
-        actual_output="Truy cập mục Cài đặt -> Đổi mật khẩu.",
-        expected_output="Vào Cài đặt -> Bảo mật -> Đổi mật khẩu."
-    )
-    
-    # Sử dụng LLM-as-a-judge để chấm điểm độ liên quan (Relevancy)
-    metric = AnswerRelevancyMetric(threshold=0.8)
-    
-    try:
-        # Chạy đánh giá
-        evaluate([test_case], [metric])
-        print("✅ LLM Eval Passed! Hệ thống đáp ứng tiêu chuẩn.")
-        sys.exit(0) # Trả về 0 -> GitHub Actions báo Xanh (Success)
-    except Exception as e:
-        print(f"❌ LLM Eval Failed! Lỗi suy giảm chất lượng (Regression detected): {e}")
-        sys.exit(1) # Trả về 1 -> GitHub Actions báo Đỏ (Failed)
+THRESHOLD = 4.0
+
+
+def generate_answer(query: str) -> str:
+    # In real CI: call staging model or local mocked pipeline.
+    # Keep PR sanity set small and deterministic where possible.
+    return "Bạn có thể đổi mật khẩu trong Cài đặt > Bảo mật."
+
+
+def judge_answer(case: dict, answer: str) -> float:
+    # In real CI: call LLM-as-a-judge or semantic metric.
+    # Here we use a placeholder to show pipeline shape.
+    required = case["expected_keyword"].lower()
+    return 5.0 if required in answer.lower() else 1.0
+
+
+def main():
+    cases = json.loads(Path("eval/sanity_set.json").read_text(encoding="utf-8"))
+    scores = []
+    failures = []
+
+    for case in cases:
+        answer = generate_answer(case["query"])
+        score = judge_answer(case, answer)
+        scores.append(score)
+        if score < THRESHOLD:
+            failures.append({"id": case["id"], "score": score, "answer": answer})
+
+    avg = sum(scores) / len(scores)
+    report = {"average_score": avg, "failures": failures}
+    Path("eval_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    if failures:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        sys.exit(1)
+
+    print("AI eval passed", report)
+
 
 if __name__ == "__main__":
-    run_ci_eval()
+    main()
 ```
 
-### Bước 2: Tích hợp vào GitHub Actions
-Tạo file cấu hình YAML tại `.github/workflows/ai_ci.yml`.
+### Bước 2: GitHub Actions workflow
 
 ```yaml
-name: AI CI Pipeline - Prompt Regression Test
+name: AI CI
 
 on:
   pull_request:
-    branches: [ "main" ] # Chạy mỗi khi có ai muốn gộp code vào nhánh Main
+    branches: ["main"]
 
 jobs:
-  run-evals:
+  test-and-eval:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.11"
 
-      - name: Cài đặt thư viện AI
-        run: pip install deepeval openai
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-      - name: Chạy LLM Evaluation Script
+      - name: Unit tests
+        run: pytest
+
+      - name: AI semantic sanity eval
         env:
-          # Bắt buộc: Kéo API Key từ GitHub Secrets một cách an toàn
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} 
-        run: python ci_eval.py
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python scripts/ci_eval.py
 
-      # (Tùy chọn nâng cao) Gửi thông báo Slack / Bình luận thẳng vào PR nếu thất bại
+      - name: Upload eval report
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: eval_report.json
 ```
 
-Với đường ống này, lập trình viên không thể tự ý đẩy một Prompt kém chất lượng lên hệ thống. Nó tạo ra một hàng rào tự động hóa (Automated Guardrail).
+### Bước 3: Build image with immutable tag
+
+```yaml
+  build:
+    needs: test-and-eval
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t registry.example.com/ai-api:${{ github.sha }} .
+```
 
 ---
 
-## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## Project Guide: Production AI Platform on Kubernetes (Phase 12 Hard)
 
-Triển khai CI/CD cho AI là một nghệ thuật cân bằng giữa "Sự an toàn" và "Tốc độ". 
+Mục tiêu project: xây platform AI production nhỏ nhưng đầy đủ vòng đời: gateway, router, LLM proxy, storage, monitoring, CI/CD và Kubernetes deployment.
 
-<Callout type="warning" title="Pitfall 1: Pipeline chạy mất... 5 tiếng đồng hồ">
-**Triệu chứng:** Kỹ sư tạo một PR đơn giản (sửa lỗi chính tả), nhưng GitHub Actions chạy mất 5 giờ để hoàn thành. Lập trình viên phẫn nộ vì phải chờ đợi.
-**Nguyên nhân:** Tập kiểm thử nội bộ (Golden Dataset) quá khổng lồ (hàng ngàn câu). Gọi API GPT-4 cho từng câu tuần tự làm thời gian chạy (Execution time) phình to.
-**Cách khắc phục (Fix):**
-1. **Tiered Testing (Kiểm thử phân tầng):** Trên mỗi PR, chỉ chạy bộ test nhỏ (Sanity Set - 50 câu quan trọng nhất). Nếu Pass thì cho Merge. Chỉ chạy toàn bộ 10,000 câu (Full Suite) vào lúc nửa đêm (Nightly build).
-2. **Concurrency (Đồng thời):** Sử dụng các thư viện hỗ trợ gọi API bất đồng bộ (Asyncio) hoặc Bulk/Batch API để chấm điểm hàng loạt (Parallel Evaluation).
-</Callout>
+### Services
 
-<Callout type="warning" title="Pitfall 2: 'Flaky Tests' (Lúc Đỏ lúc Xanh)">
-**Triệu chứng:** Kỹ sư không thay đổi dòng code nào, ấn chạy lại CI Pipeline 3 lần thì 2 lần Failed, 1 lần Passed.
-**Nguyên nhân:** Bản chất của mô hình LLM là có tính ngẫu nhiên (Stochastic). Dù đặt `temperature=0`, cấu trúc câu trả lời vẫn có thể sai lệch nhẹ, làm hệ thống Regex/Metric truyền thống chấm trượt.
-**Cách khắc phục (Fix):** Ngừng việc sử dụng các hàm so sánh chuỗi tĩnh (như `exact_match` hoặc `assert "cảm ơn" in response`). Bắt buộc chuyển sang dùng LLM-as-a-judge (với Metric Semantic Similarity) để đánh giá hệ thống dựa trên ý nghĩa (Meaning) thay vì chữ viết (Tokens).
-</Callout>
+```text
+api-gateway
+  - auth, rate limit, request ids
 
-<Callout type="danger" title="Pitfall 3: Triển khai trực tiếp 100% Traffic (Big Bang Deployment)">
-**Triệu chứng:** Pipeline CI báo Xanh. Code được Merge. 100% người dùng trên Production lập tức sử dụng Prompt mới. Server ngay lập tức quá tải (Rate limit) do Prompt mới dài gấp đôi Prompt cũ.
-**Cách khắc phục (Fix):** Áp dụng **Canary Release** kết hợp với **Feature Flags**.
-- Ngày 1: Bật Feature Flag chỉ cho luồng Traffic nội bộ của công ty thử nghiệm.
-- Ngày 2: Bật cho 5% người dùng miễn phí (Free tier). Theo dõi lỗi.
-- Ngày 3: Bật cho 100% người dùng. Nếu có lỗi, chỉ cần tắt cờ (Feature Flag = False) để đưa ứng dụng về lại trạng thái cũ ngay lập tức (Rollback) thay vì phải chờ biên dịch lại Code.
-</Callout>
+llm-router
+  - choose provider/model
+  - fallback policy
+  - cost/latency budget
+
+llm-proxy
+  - OpenAI-compatible client
+  - retries, timeouts, circuit breaker
+
+observability
+  - Langfuse/Helicone traces
+  - Prometheus metrics
+  - Grafana dashboard
+
+data layer
+  - Postgres for app metadata
+  - Redis for cache/queue
+```
+
+### Kubernetes requirements
+
+- Docker image cho từng service.
+- Helm chart hoặc Kustomize overlays cho staging/prod.
+- ConfigMap/Secret tách khỏi image.
+- HPA cho gateway/router theo RPS/CPU.
+- Optional GPU node pool cho vLLM.
+- Prometheus + Grafana dashboard.
+- Readiness/liveness probes.
+- Network policy tối thiểu.
+
+### CI/CD requirements
+
+- PR: lint, unit tests, prompt sanity eval.
+- Main: build images, scan vulnerabilities, push registry.
+- Staging deploy tự động.
+- Smoke tests staging.
+- Manual approval hoặc eval gate để production.
+- Canary rollout 5% rồi promote.
+- Rollback bằng image + prompt/model bundle version.
+
+### Acceptance criteria
+
+- Một request có request id xuyên qua gateway/router/proxy.
+- Dashboard thấy latency, cost, tokens và error rate.
+- Pipeline chặn PR nếu eval sanity fail.
+- Kubernetes có thể rolling update không downtime.
+- Có runbook rollback trong README.
+
+Stretch goal: dùng ArgoCD hoặc Argo Rollouts để canary tự động dựa trên Prometheus metrics.
 
 ---
 
-## 6. Cost & Performance Unit Economics
+## 6. Progressive Delivery: Canary, Blue/Green, Feature Flags
 
-Tự động hóa có thể đốt tiền nhanh hơn con người. Một kỹ sư SRE phải canh gác hóa đơn Cloud trong các luồng CI/CD.
-
-| Hoạt động CI/CD | Phân tích SRE (Ý nghĩa kinh tế) | Tối ưu hóa (Optimization) |
+| Pattern | Cách hoạt động | Khi dùng |
 |---|---|---|
-| **API Costs trong Testing** | 1 PR chạy 1,000 test cases dùng GPT-4. Một ngày có 50 PRs = 50,000 API calls chỉ để test. Cost: $500/ngày. | Dùng mô hình rẻ hơn (như GPT-4o-mini hoặc LLaMA-3 8B tự host) làm Judge cho các khâu kiểm thử cơ bản trên PR. Chỉ dùng GPT-4o cho bản Nightly Build cuối ngày. |
-| **Model Pulls / Egress Costs** | Mỗi lần CI/CD build Docker Image, nó tải mô hình 30GB từ Hugging Face. Một ngày build 20 lần = 600GB băng thông tải xuống. Tốn thời gian (30 phút/build) và tiềm ẩn lỗi nghẽn mạng. | Không nướng mô hình vào Docker Image trong lúc Build. Thay vào đó, tải mô hình 1 lần lưu sẵn trên đĩa mạng (AWS EFS) và Mount trực tiếp đĩa này vào Pod Kubernetes khi Container khởi chạy. |
+| Canary | 1-5% traffic dùng version mới | kiểm tra production thật với rủi ro thấp |
+| Blue/Green | chạy song song hai environment, switch traffic | rollback nhanh, release lớn |
+| Feature flag | bật/tắt logic theo user/tenant | prompt/model changes, A/B testing |
+| Shadow | version mới nhận traffic nhưng không trả cho user | đánh giá model trước exposure |
+
+AI release nên ưu tiên feature flags cho prompt/model/index, vì rollback image có thể chậm hơn tắt flag.
+
+---
+
+## 7. Security in CI/CD
+
+CI/CD giữ secrets và quyền deploy, nên là mục tiêu tấn công.
+
+Checklist:
+
+- secrets chỉ trong GitHub Secrets/secret manager,
+- không in secrets ra logs,
+- OIDC federation thay vì long-lived cloud keys nếu có thể,
+- scan dependencies và Docker image,
+- protect main branch,
+- require eval report artifact,
+- sign images/SBOM cho môi trường enterprise,
+- giới hạn ai được approve production deploy.
+
+Prompt/dataset cũng cần review nếu thuộc domain regulated. Đừng cho mọi PR tự động deploy prompt tài chính/y tế/pháp lý.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Pipeline chạy 5 giờ làm developer né CI">
+**Triệu chứng:** PR nhỏ phải chờ full eval quá lâu.
+
+**Fix:** Tiered testing: sanity set trên PR, full eval nightly/release, cache artifacts và chạy parallel/batch.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Flaky LLM tests đỏ xanh ngẫu nhiên">
+**Triệu chứng:** Rerun cùng commit cho kết quả khác.
+
+**Fix:** Freeze model/judge version, temperature 0, semantic thresholds có margin, retry/majority vote cho case critical.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Rollback image nhưng prompt mới vẫn active">
+**Triệu chứng:** Sau rollback Docker image, behavior nguy hiểm vẫn còn.
+
+**Nguyên nhân:** Prompt được lưu trong database/config service và không rollback theo release bundle.
+
+**Fix:** Version bundle gồm image + prompt + model + index; rollback bundle nguyên khối.
+</Callout>
+
+---
+
+## Cost / Velocity / Safety Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Full eval mọi PR | an toàn cao | chậm, đắt, developer friction |
+| Sanity eval PR | nhanh | miss lỗi hiếm |
+| Nightly full eval | bao phủ rộng | phát hiện muộn hơn |
+| Canary rollout | giảm blast radius | vận hành phức tạp |
+| Manual approval | hợp regulated domain | chậm release |
+| Auto rollback | giảm downtime | cần metrics đáng tin |
+
+CI/CD tốt tối ưu cả tốc độ phát triển và độ an toàn. Pipeline quá chậm sẽ bị bỏ qua; pipeline quá lỏng sẽ gây incident.
+
+---
+
+## Practice exercises
+
+1. Thiết kế pipeline cho thay đổi prompt chatbot y tế.
+2. Viết release bundle JSON gồm image, prompt, model và index version.
+3. Đề xuất sanity eval set 20 câu cho PR và full eval nightly 2,000 câu.
+4. Mô tả rollback khi model mới tăng cost/request 50%.
+5. Vẽ canary rollout 5% -> 25% -> 100% với metrics cần theo dõi.
+
+---
+
+## Knowledge check
+
+1. CI/CD cho AI khác CI/CD truyền thống ở điểm nào lớn nhất?
+2. Vì sao rollback chỉ Docker image có thể không đủ?
+3. Tiered testing giải quyết vấn đề gì?
+4. Canary release giảm blast radius như thế nào?
+5. Vì sao secrets trong CI/CD đặc biệt nhạy cảm?
+
+---
+
+## Answer key
+
+1. Nó phải kiểm tra hành vi semantic của prompt/model/data, không chỉ code pass unit tests.
+2. Behavior còn phụ thuộc prompt/model/index/config bên ngoài image.
+3. Cân bằng tốc độ và độ bao phủ: test nhỏ trên PR, test lớn định kỳ/release.
+4. Chỉ expose version mới cho một phần nhỏ traffic và rollback nếu metrics xấu.
+5. CI/CD có quyền deploy và truy cập cloud/provider; lộ secret có thể dẫn đến takeover hoặc bill shock.
 
 ---
 
 ## Điểm cần nhớ
 
-- Lỗi cú pháp thì sập phần mềm, lỗi Prompt thì sập công ty. CI/CD cho AI bắt buộc phải có bước đánh giá ngữ nghĩa (LLM-as-a-judge) được tự động hóa.
-- Tốc độ Pipeline là sinh mệnh của nhóm phát triển. Phân tầng kiểm thử (Tiered Testing) để đảm bảo PR chạy nhanh gọn, dồn các tác vụ nặng vào ban đêm.
-- Deploy ra Production không bao giờ là "Tất cả hoặc Không có gì". Hãy sử dụng Canary Release và Feature Flags để có đường lui (Rollback) trong vòng 1 giây.
+- AI CI/CD phải version và test code, prompt, data, model và index.
+- Eval gates là phần bắt buộc của release, không phải bước thủ công sau deploy.
+- Release bundle giúp rollback đúng toàn bộ behavior.
+- Project Phase 12 Hard là platform Kubernetes có gateway, router, proxy, monitoring và CI/CD.
+- Progressive delivery và feature flags giảm rủi ro cho model/prompt changes.
+
+---
 
 ## Next chapter bridge
 
-Mô hình đã tự động hóa kiểm thử, tự động hóa đóng gói và tự động hóa triển khai thành công. Tuy nhiên, hệ thống của bạn càng tự động và càng quyền lực, nó càng trở thành miếng mồi ngon cho các cuộc tấn công mạng. Điều gì xảy ra khi một kẻ tấn công lợi dụng lỗ hổng Prompt Injection để khiến hệ thống của bạn tiết lộ toàn bộ thông tin nội bộ của công ty? Chương cuối cùng của Phase 12: **LLM Security & Safety** — nơi chúng ta khoác lên hệ thống AI những lớp giáp bảo mật kiên cố nhất.
+Pipeline đã tự động hóa build, eval và deploy. Nhưng càng tự động, hệ thống càng nguy hiểm nếu bị prompt injection, tool abuse, secret leakage hoặc dữ liệu độc hại. Chương cuối Phase 12: **LLM Security & Safety** — nơi chúng ta thiết kế guardrails, isolation, PII protection và least privilege để hệ thống AI sống sót trong môi trường thù địch.

@@ -1,158 +1,370 @@
-Trong kỹ nghệ phần mềm, cách tốt nhất để tối ưu hóa hiệu năng và chi phí của một phép tính phức tạp là... không tính toán gì cả, mà tái sử dụng kết quả cũ. Tuy nhiên, trong kỷ nguyên của LLMs, việc lưu bộ nhớ đệm (Caching) gặp phải một rào cản lớn: người dùng hiếm khi hỏi hai câu có từ ngữ giống hệt nhau từng chữ, mặc dù ý nghĩa của chúng hoàn toàn trùng khớp. Để giải quyết, AI System Design áp dụng **Semantic Caching (Bộ nhớ đệm ngữ nghĩa)** để lưu trữ câu trả lời dựa trên khoảng cách không gian vector (cosine similarity), biến Caching thành vũ khí tối thượng để tối ưu hóa chi phí.
+Ở bài trước, bạn đã chọn nơi inference chạy: server, edge, client hoặc async worker. Nhưng placement tốt vẫn không giải quyết một sự thật: nhiều request AI không cần tính lại. Nếu câu hỏi giống nhau, tài liệu giống nhau hoặc prompt prefix giống nhau, cách tối ưu nhất là **không gọi model**.
+
+**Caching Strategies** trong AI phức tạp hơn web caching truyền thống vì hai câu khác chữ có thể cùng nghĩa, answer có thể chứa dữ liệu cá nhân, context RAG có version, prompt thay đổi theo thời gian và provider có prompt cache riêng. Cache tốt có thể giảm 50-80% cost; cache sai có thể leak dữ liệu hoặc trả chính sách cũ.
 
 ---
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: Rò rỉ thông tin cá nhân vì Caching sai chìa khóa">
-**Bối cảnh:** Một công ty cung cấp dịch vụ Chatbot Quản lý Tài chính cho nhân viên. Họ triển khai Semantic Caching để lưu lại các câu hỏi/đáp về quy chế thuế và lương. Kịch bản lưu cache:
-`Key: Embedding(Query) -> Value: LLM_Answer`
+<Callout type="danger" title="Báo cáo sự cố: Semantic cache leak link bảng lương của HR director">
+**Bối cảnh:** Một chatbot HR dùng semantic cache để giảm chi phí. Cache key chỉ dựa trên embedding của câu hỏi. Value là answer cuối của LLM.
 
-**Sự cố:** 
-1. Lúc 9h sáng, Giám đốc Nhân sự (User A) hỏi: *"Tôi cần xem lại bảng lương của mình ở đâu?"*. LLM trả lời kèm theo một link Google Drive bảo mật chứa bảng lương của User A. Hệ thống tự động nhúng (embed) câu hỏi này và lưu vào bộ nhớ cache.
-2. Lúc 10h sáng, một nhân viên cấp dưới (User B) hỏi một câu tương đồng về mặt ngữ nghĩa: *"Làm sao để tôi kiểm tra bảng lương cá nhân?"*.
-3. Hệ thống kiểm tra Semantic Cache, nhận thấy câu hỏi của User B trùng khớp 98% (Cosine Similarity > 0.98) với câu hỏi của User A trước đó. Máy chủ Backend lập tức trả về kết quả lưu trong cache mà không gọi LLM hay kiểm tra phân quyền.
+**Sự cố:** HR director hỏi: “Tôi xem bảng lương cá nhân ở đâu?” LLM trả link Google Drive riêng của director. Một nhân viên khác hỏi: “Làm sao kiểm tra bảng lương của tôi?” Semantic similarity đạt 0.98, hệ thống trả lại answer cached của director cho nhân viên.
 
-**Hậu quả:** User B đọc được toàn bộ link bảng lương bảo mật của Giám đốc. Rò rỉ thông tin cá nhân nghiêm trọng (GDPR Violation). Hệ thống cache phải bị vô hiệu hóa khẩn cấp.
+1. Cache key không chứa `tenant_id`, `user_id`, role hoặc ACL context.
+2. Cache value chứa dữ liệu personalized nhưng được dùng như public answer.
+3. Không phân loại cacheable vs non-cacheable response.
+4. Không có DLP/safety check trước khi write cache.
+
+**Hậu quả:** Rò rỉ PII nghiêm trọng. Semantic cache bị tắt toàn hệ thống và team phải thiết kế lại tenant isolation.
 </Callout>
 
-Bài học rút ra: Caching trong AI là một bài toán nhạy cảm về bảo mật. Chìa khóa cache (Cache Key) không bao giờ được phép chỉ là câu hỏi; nó phải đi kèm thông tin định danh (User_ID, Tenant_ID, Access Control List) của người dùng.
+Bài học rút ra: AI caching là bài toán **performance + security + freshness**. Cache hit không đáng giá nếu nó trả dữ liệu sai người hoặc sai phiên bản tài liệu.
 
 ---
 
-## 2. Architecture Blueprint (Kiến trúc giải pháp)
+## 2. Architecture Blueprint (Multi-Tier AI Cache Gateway)
 
-Để vừa bảo mật, vừa tối ưu hóa chi phí, một hệ thống Caching cho AI phải được thiết kế theo mô hình **Thác nước đa tầng (Multi-tier Caching)**:
+Một cache gateway an toàn nên chạy theo tầng:
 
 ```text
-[ User Query ] (Ví dụ: "Làm thế nào để đổi pass?")
-      │
-      ▼
-======================= [ LỚP 1: EXACT MATCH CACHE (Redis) ] =======================
-  │  - Chìa khóa: SHA-256(User_ID + Prompt_v1 + Query_Text)
-  │  - Tốc độ: <1ms (O(1) complexity)
-  │
-  ├─── HÍT (Exact Hit) ──────────> Trả kết quả ngay!
-  └─── TRƯỢT (Exact Miss) ───────┐
-                                 ▼
-======================= [ LỚP 2: SEMANTIC CACHE (Vector DB) ] ======================
-  │  - Gọi API Embedding để chuyển Query thành Vector (Tốn ~100ms)
-  │  - Query Vector DB tìm các câu hỏi tương tự của CÙNG USER/TENANT
-  │
-  ├─── HÍT (Similarity > 0.96) ──> Trả kết quả!
-  └─── TRƯỢT (Semantic Miss) ────┐
-                                 ▼
-======================= [ LỚP 3: INFERENCE GATEWAY ] ===============================
-     - Gọi LLM (OpenAI/vLLM) suy luận (Tốn 15 giây, đắt tiền)
-     - Nhận phản hồi
-     - Lưu kết quả mới vào cả Lớp 1 (Redis) và Lớp 2 (Vector DB)
+[ Request ]
+  - tenant_id
+  - user_id / role
+  - prompt_version
+  - content_version
+  - model_version
+  - query
+        │
+        ▼
+[ Cache policy check ]
+  - cacheable task?
+  - personalized output?
+  - sensitive domain?
+        │
+        ▼
+[ L1: Exact cache - Redis ]
+  key = hash(scope + normalized query + versions)
+        │ miss
+        ▼
+[ L2: Semantic cache - Vector DB ]
+  filter by tenant/user/ACL/scope
+  similarity threshold + intent/action check
+        │ miss
+        ▼
+[ L3: Prompt/prefix cache / provider cache ]
+  stable prompt prefix, reusable context
+        │ miss
+        ▼
+[ LLM / RAG / Inference ]
+        │
+        ▼
+[ Safety + cache write policy ]
+  - no PII/private link unless user-scoped
+  - TTL and invalidation metadata
 ```
 
----
-
-## 3. Tooling Landscape (Ma trận công cụ Caching)
-
-| Loại Caching | Công cụ / Thư viện | SRE Use-case | Điểm cần lưu ý |
-|---|---|---|---|
-| **Exact Match** | Redis, Memcached | Lưu trữ các cặp Key-Value tĩnh tốc độ cực cao. Thích hợp cho Chatbot có System Prompt cố định hoặc các tác vụ phân loại. | Phải thiết lập cơ chế tự hủy dữ liệu (TTL) để tránh cạn kiệt RAM. |
-| **Semantic Cache** | GPTCache, Redis (Vector Search), Qdrant | Nhúng câu hỏi thành vector và tìm kiếm gần nhất. Thích hợp cho các câu hỏi dạng FAQ hoặc hội thoại tự do. | Cần điều chỉnh ngưỡng (Similarity Threshold) rất kỹ. Ngưỡng quá thấp sẽ trả về kết quả râu ông nọ cắm cằm bà kia. |
-| **Prompt Caching** | Cấu hình phía Provider (OpenAI, Anthropic, vLLM) | Tự động cache các token đầu tiên của Prompt (System Prompt, Context RAG dài) ngay trong VRAM của GPU. | Chỉ hoạt động khi các lượt gọi liên tiếp có phần đầu prompt giống hệt nhau chuẩn xác từng kí tự. |
+Mục tiêu: exact cache trước vì rẻ và nhanh, semantic cache sau vì tốn embedding/vector search, rồi mới gọi model.
 
 ---
 
-## 4. Implementation Playbook (Thực thi)
+## 3. Exact Cache
 
-Dưới đây là một kịch bản Python thiết lập một lớp **Semantic Cache** an toàn cho doanh nghiệp, đảm bảo cô lập dữ liệu người dùng (Tenant Isolation) sử dụng thư viện `Redis` (hỗ trợ Vector Search).
+Exact cache dùng hash của input đã normalize. Đây là tầng nên có trong hầu hết AI gateway.
+
+```text
+key = sha256(tenant_id + user_scope + prompt_version + model_version + content_version + normalized_query)
+```
+
+Nên include:
+
+- tenant/user scope,
+- prompt version,
+- model version nếu output thay đổi theo model,
+- RAG content/index version,
+- locale/language,
+- tool/config flags,
+- normalized query.
+
+Không nên include timestamp hiện tại nếu không cần, vì nó làm cache miss mọi lúc.
+
+Exact cache phù hợp cho:
+
+- FAQ public,
+- deterministic classification,
+- template generation,
+- repeated eval cases,
+- expensive but stable summaries.
+
+---
+
+## 4. Semantic Cache
+
+Semantic cache dùng embeddings để tìm request tương đương về nghĩa.
+
+```text
+query -> embedding -> vector search within allowed scope -> similar cached answer
+```
+
+Nhưng semantic similarity không hiểu business action đầy đủ. Ví dụ:
+
+- “kích hoạt tài khoản” vs “hủy tài khoản” có thể gần nhau,
+- “có được hoàn tiền không?” vs “làm sao từ chối hoàn tiền?” gần domain nhưng khác intent,
+- “bảng lương của tôi” là personalized.
+
+Vì vậy semantic cache cần guardrails:
+
+| Guardrail | Lý do |
+|---|---|
+| tenant/user/ACL filter | tránh leak chéo |
+| high threshold | giảm false hit |
+| intent/action check | tránh trả answer opposite action |
+| response cacheability label | không cache private output chung |
+| TTL ngắn cho policy data | tránh stale answer |
+| eval sample | đo false hit rate |
+
+Ngưỡng similarity phụ thuộc domain. FAQ public có thể `0.92-0.95`; tài chính/pháp lý/HR nên cao hơn hoặc tắt semantic cache cho output personalized.
+
+---
+
+## 5. Prompt / Prefix Cache
+
+Prompt caching có hai loại:
+
+1. **Application prompt cache:** bạn lưu result hoặc context ở Redis/DB.
+2. **Provider prefix cache:** OpenAI/Anthropic/vLLM cache token prefix giống hệt ở tầng model/KV cache.
+
+Provider prompt cache chỉ hoạt động tốt khi phần đầu prompt ổn định:
+
+```text
+GOOD:
+[ Long system instructions ]
+[ Stable policy document/context ]
+[ Few-shot examples ]
+[ User-specific question at the end ]
+
+BAD:
+[ Current timestamp / random request id ]
+[ User question ]
+[ Long stable context after dynamic text ]
+```
+
+Nếu bạn đặt timestamp hoặc user-specific data lên đầu prompt, prefix cache bị phá.
+
+---
+
+## 6. RAG Cache and Invalidation
+
+RAG có nhiều điểm cache:
+
+| Cache layer | Cache gì | Invalidation |
+|---|---|---|
+| Query rewrite cache | query normalized/rewrite | prompt version change |
+| Embedding cache | query embedding | embedding model version change |
+| Retrieval cache | top-k chunk IDs | index/content version change |
+| Rerank cache | ordered chunk IDs | reranker version change |
+| Answer cache | final answer | prompt/model/content/user scope change |
+| Citation cache | source snippets | document version change |
+
+RAG cache key nên include `index_version` hoặc `content_version_hash`. Khi tài liệu thay đổi, cache cũ tự miss.
+
+```text
+cache_key = hash(tenant_id, query_norm, prompt_v, model_v, index_v, acl_scope)
+```
+
+Không có invalidation thì cache sẽ trả chính sách cũ dù vector DB đã cập nhật.
+
+---
+
+## Implementation Playbook: Safe Exact + Semantic Cache
+
+### Bước 1: Cache scope và key builder
 
 ```python
 import hashlib
-import redis
-from redis.commands.search.query import Query
+import json
+from dataclasses import dataclass
 
-# Kết nối Redis
-r = redis.Redis(host='localhost', port=6379, db=0)
+@dataclass(frozen=True)
+class CacheScope:
+    tenant_id: str
+    user_id: str | None
+    role: str
+    prompt_version: str
+    model_version: str
+    content_version: str
+    locale: str = "vi"
 
-def generate_cache_key(user_id: str, query: str, prompt_version: str) -> str:
-    """
-    Tạo một khóa băm bảo mật kết hợp định danh người dùng.
-    Ngăn chặn tuyệt đối việc leak cache giữa các user khác nhau.
-    """
-    raw_key = f"{user_id}:{prompt_version}:{query.strip().lower()}"
-    return hashlib.sha256(raw_key.encode('utf-8')).hexdigest()
 
-def get_exact_cache(user_id: str, query: str, prompt_version: str) -> str | None:
-    key = generate_cache_key(user_id, query, prompt_version)
-    if cached_val := r.get(f"exact:{key}"):
-        return cached_val.decode('utf-8')
-    return None
+def normalize_query(query: str) -> str:
+    return " ".join(query.lower().strip().split())
 
-def set_cache(user_id: str, query: str, answer: str, prompt_version: str):
-    key = generate_cache_key(user_id, query, prompt_version)
-    # Lưu exact cache với TTL 24 tiếng (86400 giây)
-    r.set(f"exact:{key}", answer, ex=86400)
-    
-    # Ở đây có thể tích hợp thêm phần lưu Vector nhúng vào Redis Vector DB cho lớp Semantic Cache
-    # save_to_redis_vector_db(user_id, query, answer)
 
-# ----- Thử nghiệm chạy dòng chảy dữ liệu -----
-user_id = "user_employee_45"
-query = "Quy trình xin nghỉ phép năm như thế nào?"
-prompt_version = "hr_bot_v2.1"
+def exact_cache_key(scope: CacheScope, query: str) -> str:
+    payload = {
+        "tenant_id": scope.tenant_id,
+        "user_id": scope.user_id,
+        "role": scope.role,
+        "prompt_version": scope.prompt_version,
+        "model_version": scope.model_version,
+        "content_version": scope.content_version,
+        "locale": scope.locale,
+        "query": normalize_query(query),
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+```
 
-# 1. Kiểm tra lớp 1: Exact Cache
-response = get_exact_cache(user_id, query, prompt_version)
-if response:
-    print("Exact Cache Hit! Trả kết quả ngay lập tức.")
-else:
-    print("Exact Cache Miss. Chuyển sang gọi LLM/RAG pipeline...")
-    # response = call_llm_and_rag(query)
-    # set_cache(user_id, query, response, prompt_version)
+### Bước 2: Cacheability policy
+
+```python
+def is_cacheable_response(answer: str, metadata: dict) -> bool:
+    if metadata.get("contains_pii"):
+        return False
+    if metadata.get("personalized") and metadata.get("scope") != "user":
+        return False
+    if metadata.get("risk_domain") in {"medical", "legal", "financial"}:
+        return metadata.get("grounded") is True
+    return True
+```
+
+### Bước 3: Exact cache lookup/write
+
+```python
+def get_exact(redis_client, scope: CacheScope, query: str) -> str | None:
+    key = exact_cache_key(scope, query)
+    value = redis_client.get(f"ai:exact:{key}")
+    return value.decode("utf-8") if value else None
+
+
+def set_exact(redis_client, scope: CacheScope, query: str, answer: str, ttl_seconds: int = 3600):
+    key = exact_cache_key(scope, query)
+    redis_client.set(f"ai:exact:{key}", answer, ex=ttl_seconds)
+```
+
+### Bước 4: Semantic cache rules
+
+```python
+def semantic_cache_allowed(task_type: str, risk_domain: str, personalized: bool) -> bool:
+    if personalized:
+        return False
+    if risk_domain in {"hr", "medical", "legal", "financial"}:
+        return task_type in {"public_faq", "policy_summary"}
+    return True
+
+
+def semantic_threshold(risk_domain: str) -> float:
+    if risk_domain in {"hr", "medical", "legal", "financial"}:
+        return 0.97
+    return 0.93
+```
+
+Production semantic cache cần vector DB filter theo tenant/ACL:
+
+```text
+vector_search(
+  embedding=query_embedding,
+  filter={tenant_id, content_version, visibility="public"},
+  threshold=0.97
+)
 ```
 
 ---
 
-## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## 7. Cache Observability
 
-Triển khai bộ nhớ đệm trong AI là một bài toán đầy rẫy các điểm mù có thể phá hỏng logic nghiệp vụ của bạn.
+Bạn cần đo cache như một subsystem riêng:
 
-<Callout type="warning" title="Pitfall 1: Bẫy thay đổi chính sách (Stale Cache)">
-**Triệu chứng:** Công ty vừa thay đổi chính sách hoàn tiền từ 14 ngày lên 30 ngày. Tài liệu RAG đã được cập nhật, mô hình LLM đã được đổi prompt. Tuy nhiên, người dùng cũ hỏi vẫn nhận được câu trả lời: *"Chính sách hoàn tiền là 14 ngày"*.
-**Nguyên nhân:** Dữ liệu cũ đã bị khóa cứng trong cache của Redis với hạn sử dụng (TTL) quá dài, hệ thống không tự động dọn dẹp cache cũ khi có cập nhật tài liệu nguồn.
-**Cách khắc phục (Fix):** Luôn chèn thêm một tham số phiên bản nội dung (ví dụ: `content_version_hash` của database) vào chìa khóa băm của cache. Khi tài liệu nguồn thay đổi, hằng số hash này sẽ thay đổi, tự động làm trượt toàn bộ cache cũ (Auto cache invalidation).
+| Metric | Ý nghĩa |
+|---|---|
+| exact hit rate | phần trăm request được Redis trả ngay |
+| semantic hit rate | phần trăm request tương đương nghĩa |
+| false hit rate | cache hit nhưng user/judge đánh giá sai |
+| cost saved | tokens/API cost tránh được |
+| stale response incidents | trả dữ liệu cũ |
+| cache latency | overhead của embedding/vector search |
+| cache memory usage | Redis/vector DB capacity |
+
+Semantic cache hit rate cao nhưng false hit rate cao là thảm họa. Hãy sample eval cached responses.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Stale cache sau khi chính sách thay đổi">
+**Triệu chứng:** Người dùng vẫn nhận chính sách hoàn tiền 14 ngày dù tài liệu đã đổi thành 30 ngày.
+
+**Fix:** Include `content_version_hash` trong cache key, TTL hợp lý, và purge theo doc/version khi ingest cập nhật.
 </Callout>
 
-<Callout type="warning" title="Pitfall 2: 'Ngưỡng tương đồng' quá thấp trong Semantic Cache">
-**Triệu chứng:** Người dùng hỏi: *"Làm thế nào để HỦY tài khoản?"*. Hệ thống trả về hướng dẫn: *"Để kích hoạt tài khoản, bạn hãy..."* (Rất nguy hiểm).
-**Nguyên nhân:** Đặt ngưỡng Cosine Similarity quá thấp (ví dụ `threshold=0.85`). Trong không gian vector, hai câu mang hai hành động trái ngược nhau (Kích hoạt vs Hủy) vẫn nằm rất gần nhau vì chung nhiều từ khóa ngữ cảnh.
-**Cách khắc phục (Fix):** Đối với các tác vụ nhạy cảm, đặt ngưỡng Semantic Cache cực cao (`threshold >= 0.96`). Hoặc sử dụng thêm bộ lọc từ khóa (Regex/BM25) để kiểm tra chéo các từ khóa hành động (Verbs) trước khi cho phép hit cache.
+<Callout type="warning" title="Pitfall 2: Semantic threshold quá thấp trả nhầm intent">
+**Triệu chứng:** Hỏi “hủy tài khoản” nhưng cache trả hướng dẫn “kích hoạt tài khoản”.
+
+**Fix:** Tăng threshold, thêm intent/action check, hoặc tắt semantic cache cho intent có hành động đối nghịch/high-risk.
 </Callout>
 
-<Callout type="danger" title="Pitfall 3: Cache Poisoning (Đầu độc bộ nhớ đệm)">
-**Triệu chứng:** Hệ thống liên tục trả về câu trả lời nhảm nhí hoặc độc hại cho hàng loạt người dùng khác nhau.
-**Nguyên nhân:** Kẻ tấn công phát hiện ra hệ thống có dùng chung Semantic Cache cho tất cả người dùng (không phân mảnh tenant). Hắn liên tục hỏi các câu hỏi kỳ quái và lừa LLM trả lời bậy bạ. Câu trả lời bậy bạ đó được đưa vào cache và phát tán cho các user vô tội khác khi họ hỏi câu tương đồng.
-**Cách khắc phục (Fix):** Không bao giờ dùng chung bộ nhớ đệm cho các nội dung do người dùng tự định nghĩa (User-generated content). Bộ nhớ đệm dùng chung chỉ được phép áp dụng cho các tài liệu tĩnh công khai (Public FAQs) đã được kiểm duyệt nghiêm ngặt.
+<Callout type="danger" title="Pitfall 3: Cache poisoning">
+**Triệu chứng:** Nhiều user nhận answer độc hại/sai từ cache chung.
+
+**Fix:** Chỉ cache shared cho public/approved content, validate output trước write cache, isolate tenant/user scope và có purge tool khẩn cấp.
 </Callout>
 
 ---
 
-## 6. Cost & Performance Unit Economics
+## Cost / Latency / Safety Unit Economics
 
-Caching là công cụ tối ưu hóa FinOps hàng đầu cho các startup AI.
+| Cache strategy | Lợi ích | Chi phí/rủi ro | Best practice |
+|---|---|---|---|
+| Exact cache | Dưới 1ms, rất rẻ, an toàn hơn | hit rate thấp nếu query thay đổi | luôn đặt trước semantic cache |
+| Semantic cache | tiết kiệm lớn cho FAQ tương tự | embedding latency/cost, false hit | filter scope + threshold cao |
+| Prompt cache | giảm giá/latency token prefix | cần prompt prefix ổn định | đặt static prompt/context lên đầu |
+| Retrieval cache | giảm vector/rerank latency | stale chunks nếu index đổi | include index/content version |
+| Answer cache | giảm LLM calls mạnh nhất | privacy/staleness cao nhất | cacheability policy + TTL |
 
-| Chiến lược Caching | Phân tích SRE (Ý nghĩa kinh tế) | Tối ưu hóa (Optimization) |
-|---|---|---|
-- **Exact Match (Redis):** Chi phí cực rẻ. RAM 1GB của Redis có thể chứa hàng triệu keys. Trả kết quả trong dưới 1ms. | Luôn bọc toàn bộ User queries vào Exact Match trước tiên. Tỷ lệ hit cache chỉ cần đạt 20% đã giúp tiết kiệm 20% hóa đơn API và giảm tải đáng kể cho hạ tầng GPU của bạn.
-- **Prompt Caching (GPU VRAM):** Cấu hình phía Provider. Anthropic giảm tới 90% chi phí cho các tokens được cache. OpenAI giảm 50% chi phí. | Cấu trúc Prompt sao cho phần dữ liệu tĩnh (System Prompt, Few-shot, RAG context) luôn nằm ở **đầu prompt**. Nếu bạn chèn các thông tin động (như giờ hệ thống, câu hỏi của user) lên đầu, tính năng Prompt Caching của GPU sẽ bị vô hiệu hóa hoàn toàn.
+Caching tốt thường theo waterfall: exact trước, semantic có điều kiện, prompt cache qua prompt design, và LLM call cuối cùng.
+
+---
+
+## Practice exercises
+
+1. Thiết kế cache key cho RAG chatbot multi-tenant có prompt version và content version.
+2. Liệt kê 5 loại response không nên cache shared.
+3. Đề xuất threshold semantic cache cho FAQ public và HR personalized bot.
+4. Vẽ invalidation flow khi một tài liệu policy bị cập nhật.
+5. Tính cost saved nếu exact hit rate 20% và semantic hit rate 15% trên 1 triệu request/tháng.
+
+---
+
+## Knowledge check
+
+1. Vì sao cache key không nên chỉ dựa trên query text?
+2. Exact cache và semantic cache khác nhau thế nào?
+3. Prompt caching phía provider yêu cầu điều kiện gì?
+4. Stale cache trong RAG thường xảy ra khi nào?
+5. Cache poisoning là gì?
+
+---
+
+## Answer key
+
+1. Vì output phụ thuộc tenant/user/ACL, prompt version, model version, content version và locale.
+2. Exact cache dùng hash chuỗi giống hệt; semantic cache dùng embedding để tìm câu tương đương nghĩa.
+3. Prefix prompt phải giống hệt và ổn định, phần dynamic nên đặt sau.
+4. Khi tài liệu/index/prompt đổi nhưng cache key không include version hoặc không purge.
+5. Kẻ tấn công hoặc lỗi hệ thống đưa answer sai/độc hại vào cache shared khiến nhiều user nhận lại.
 
 ---
 
 ## Điểm cần nhớ
 
-- Caching trong AI gồm hai loại: Exact Match (SHA-256 băm) và Semantic Caching (Vector similarity).
-- **Security First:** Chìa khóa Cache (Cache Key) phải chứa thông tin định danh `User_ID`/`Tenant_ID` để tránh rò rỉ dữ liệu chéo.
-- **Prompt Caching:** Sắp xếp phần cứng/prompt sao cho dữ liệu tĩnh luôn nằm ở đầu chuỗi để tận dụng tối đa cơ chế giảm giá token của các Provider.
-- Luôn xây dựng cơ chế tự động làm mới bộ nhớ đệm (Cache Invalidation) khi tài liệu nguồn hoặc phiên bản prompt thay đổi.
+- AI cache phải cân bằng latency, cost, privacy và freshness.
+- Exact cache rẻ và nên đứng trước semantic cache.
+- Semantic cache phải filter theo tenant/user/ACL và dùng threshold phù hợp domain.
+- RAG cache cần content/index version để tránh stale answer.
+- Không cache shared cho output personalized hoặc chứa PII.
+
+---
 
 ## Next chapter bridge
 
-Hệ thống Caching giúp giải quyết 50-70% các câu hỏi lặp đi lặp lại. Tuy nhiên, đối với các request bắt buộc phải suy luận (Inference) mà thời gian xử lý kéo dài quá giới hạn timeout của HTTP (ví dụ: Agent chạy qua nhiều node hoặc mô hình phân tích video 1 phút), chúng ta bắt buộc phải cấu trúc lại toàn bộ luồng truyền tải dữ liệu của mạng. Chương tiếp theo: **Async AI Architecture** — thiết kế kiến trúc bất đồng bộ bằng Message Queues, Task IDs, và Webhooks để đảm bảo hệ thống không bao giờ bị nghẽn (non-blocking).
+Caching giúp tránh nhiều lần gọi model, nhưng vẫn có request bắt buộc phải xử lý lâu: phân tích PDF, sinh ảnh/video, chạy agent nhiều bước hoặc batch eval. Nếu giữ HTTP request mở, hệ thống sẽ timeout và worker bị nghẽn. Chương tiếp theo: **Async AI Architecture** — nơi chúng ta thiết kế queue, task lifecycle, polling/webhook/SSE và idempotency cho tác vụ AI dài.

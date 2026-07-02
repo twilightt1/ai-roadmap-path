@@ -1,0 +1,373 @@
+Phase 16 đã cho bạn công cụ để tối ưu hành vi model bằng reward, preference, PPO, DPO và multi-agent training. Nhưng tối ưu hành vi không tự động đồng nghĩa với an toàn. Một reward model lệch có thể tạo reward hacking; một evaluator yếu có thể thưởng hallucination; một agent được khuyến khích “hoàn thành task” có thể gọi tool quá quyền.
+
+AI Safety là lớp tư duy giúp bạn thiết kế hệ thống AI không chỉ thông minh, nhanh và rẻ, mà còn giảm thiểu harm, biết từ chối đúng lúc, biết nói “không chắc”, biết escalates to human, và có quy trình governance khi sự cố xảy ra.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Assistant 'helpful' đưa lời khuyên tài chính sai">
+**Bối cảnh:** Một công ty fintech triển khai trợ lý AI hỗ trợ khách hàng đọc điều khoản khoản vay. Model đã qua SFT và DPO để trở nên thân thiện, trả lời nhanh, ngắn gọn và “hữu ích”.
+
+**Sự cố:** Một khách hàng hỏi liệu họ có nên tái cấu trúc khoản vay hay không. Assistant trả lời tự tin như một cố vấn tài chính cá nhân, nhưng dựa trên thông tin thiếu ngữ cảnh và hallucinate một điều khoản không có trong hợp đồng.
+
+1. Hệ thống không phân loại đây là high-stakes financial advice.
+2. Không có chính sách abstention khi thiếu dữ liệu.
+3. Không có human escalation cho quyết định tài chính quan trọng.
+4. Evaluation chỉ đo helpfulness và CSAT, không đo potential harm.
+
+**Hậu quả:** Khách hàng đưa ra quyết định sai, khiếu nại lên bộ phận pháp lý. Team phát hiện model “hữu ích” theo reward proxy nhưng không an toàn theo ngữ cảnh sản phẩm.
+</Callout>
+
+Bài học rút ra: Safety không phải là “model lịch sự hơn”. Safety là khả năng nhận biết rủi ro, giới hạn năng lực, tránh harm và chuyển đúng tình huống sang quy trình kiểm soát phù hợp.
+
+---
+
+## 2. Architecture Blueprint (AI Safety Risk Loop)
+
+Một hệ thống AI an toàn cần nhìn risk theo toàn bộ vòng đời request:
+
+```text
+[ User / Context ]
+  - user intent
+  - domain risk
+  - vulnerable groups
+        │
+        ▼
+[ Input Risk Assessment ]
+  - prompt injection
+  - PII/secrets
+  - harmful request
+  - high-stakes classification
+        │
+        ▼
+[ Model / Agent Behavior ]
+  - hallucination
+  - sycophancy
+  - unsafe compliance
+  - over-refusal
+        │
+        ▼
+[ Tool / Action Risk ]
+  - irreversible action
+  - external side effects
+  - data access boundary
+        │
+        ▼
+[ Output & Escalation ]
+  - moderation
+  - uncertainty disclosure
+  - citations/evidence
+  - human review
+        │
+        ▼
+[ Monitoring & Incident Feedback ]
+  - safety metrics
+  - user reports
+  - postmortems
+  - regression tests
+```
+
+Safety không nằm ở một API moderation duy nhất. Nó là một risk loop gồm detection, mitigation, monitoring và governance.
+
+---
+
+## 3. Types of AI Harm
+
+Safety engineering bắt đầu bằng việc phân loại harm. Nếu harm không được đặt tên, nó sẽ không được đo, không có owner và không có release gate.
+
+| Loại harm | Ví dụ | Đặc điểm |
+|---|---|---|
+| Immediate harm | Toxic output, hướng dẫn nguy hiểm, advice sai trong y tế/tài chính | Xảy ra trực tiếp trong một interaction |
+| Systemic harm | Bias trong tuyển dụng, ranking bất công, exclusion của nhóm yếu thế | Tích lũy qua nhiều quyết định |
+| Privacy harm | Rò rỉ PII, training trên dữ liệu không có consent | Có thể khó phát hiện ngay |
+| Security harm | Prompt injection, tool abuse, data exfiltration | Có adversary hoặc attack path rõ |
+| Economic harm | Cost attack, sai khuyến nghị kinh doanh, automation error | Gây thiệt hại tài chính |
+| Long-term/strategic risk | Autonomy quá cao, uncontrolled optimization, misuse at scale | Khó đo, cần governance nghiêm túc |
+
+Một công thức thực dụng:
+
+```text
+Risk priority = severity × likelihood × exposure
+```
+
+- Severity: nếu lỗi xảy ra, harm nặng đến đâu?
+- Likelihood: lỗi có khả năng xảy ra bao nhiêu?
+- Exposure: bao nhiêu người/request chịu ảnh hưởng?
+
+<Callout type="tip" title="Không phải mọi feature AI có cùng mức safety">
+Một chatbot gợi ý emoji và một assistant tư vấn khoản vay không nên dùng cùng policy. Hãy phân loại domain risk trước khi chọn guardrails, human review và eval depth.
+</Callout>
+
+---
+
+## 4. Alignment Problem trong Production
+
+Alignment problem ở mức production là khoảng cách giữa:
+
+```text
+Điều doanh nghiệp/người dùng thật sự muốn
+          vs
+Metric/reward/proxy mà hệ thống đang tối ưu
+```
+
+Ví dụ:
+
+| Intended objective | Proxy metric nguy hiểm | Failure mode |
+|---|---|---|
+| Trả lời đúng | User bấm thumbs-up | Sycophancy, nói điều user muốn nghe |
+| Hữu ích | Response dài và chi tiết | Verbosity bias |
+| An toàn | Từ chối nhiều hơn | Over-refusal |
+| Rẻ | Dùng model nhỏ mọi case | Quality regression ở case khó |
+| Hoàn thành task | Số tool calls thành công | Excessive agency / tool spam |
+
+Các failure modes quen thuộc từ Phase 16:
+
+- **Reward hacking:** model tìm shortcut để đạt điểm.
+- **Sycophancy:** model đồng ý với user dù user sai.
+- **Over-refusal:** model từ chối cả yêu cầu hợp lệ.
+- **Under-refusal:** model hỗ trợ yêu cầu nguy hiểm.
+- **Mode collapse:** model lặp một template “an toàn” nhưng vô dụng.
+
+<Callout type="warning" title="RLHF không xóa alignment problem">
+RLHF/DPO chỉ tối ưu theo preference data hoặc reward model. Nếu dữ liệu preference có bias, reward model yếu hoặc eval thiếu domain risk, optimization sẽ khuếch đại lỗi thay vì sửa lỗi.
+</Callout>
+
+---
+
+## 5. Hallucination, Uncertainty và Abstention
+
+Hallucination là khi model tạo thông tin sai hoặc không được hỗ trợ bởi nguồn dữ liệu. Với AI Engineer, câu hỏi không phải “làm sao hallucination về 0?” mà là “hệ thống có nhận biết và kiểm soát hallucination trong domain rủi ro không?”.
+
+### Vì sao LLM hallucinate?
+
+- Pretraining tối ưu next-token likelihood, không tối ưu truth trực tiếp.
+- Model không có access mặc định tới dữ liệu mới/riêng tư.
+- Prompt thiếu ngữ cảnh nhưng yêu cầu câu trả lời chắc chắn.
+- Retrieval trả sai tài liệu hoặc thiếu evidence.
+- Reward/eval thưởng fluency hơn correctness.
+
+### Controls
+
+| Control | Tác dụng |
+|---|---|
+| Grounding bằng RAG | Gắn câu trả lời với nguồn cụ thể |
+| Citation requirement | Buộc model chỉ ra evidence |
+| Retrieval confidence threshold | Không trả lời nếu context yếu |
+| Abstention policy | Cho phép nói “không đủ thông tin” |
+| Domain-specific verifier | Kiểm tra claim bằng rules/tools |
+| Human escalation | Chuyển high-risk/low-confidence case cho người |
+
+<Callout type="info" title="Abstention là feature, không phải lỗi UX">
+Trong domain high-stakes, “Tôi không đủ thông tin để kết luận” thường an toàn hơn một câu trả lời tự tin nhưng sai. Hãy thiết kế product flow cho abstention và escalation.
+</Callout>
+
+---
+
+## 6. Bias và Fairness Preview
+
+Bias có thể xuất hiện dù không có adversary. Hệ thống có thể hoạt động “đúng spec” nhưng tạo outcome không công bằng.
+
+Nguồn bias:
+
+- Dữ liệu lịch sử phản ánh bất công xã hội.
+- Labeler bias.
+- Feature proxy như zip code, trường học, thiết bị.
+- Evaluation chỉ đo aggregate accuracy.
+- Feedback loop: nhóm được phục vụ kém ít tương tác hơn, làm data tương lai càng lệch.
+
+Ví dụ:
+
+```text
+Resume ranker có accuracy tổng thể 90%,
+nhưng false negative rate với một nhóm ứng viên là 2x nhóm khác.
+```
+
+Đây là lý do Phase 17 có bài riêng về Bias & Fairness.
+
+---
+
+## 7. Dual-Use Concerns
+
+Dual-use nghĩa là cùng một capability có thể dùng cho mục đích tốt hoặc xấu.
+
+| Capability | Use tốt | Misuse |
+|---|---|---|
+| Code generation | Tăng năng suất developer | Malware/phishing automation |
+| Chemistry/bio assistance | Nghiên cứu, giáo dục | Harmful synthesis guidance |
+| Web agents | Tự động hóa workflow | Spam, scraping, fraud |
+| RAG trên tài liệu nội bộ | Hỗ trợ nhân viên | Data exfiltration |
+| Voice/video generation | Accessibility, creative tools | Deepfake, impersonation |
+
+Controls:
+
+- Policy-based access control.
+- Rate limits và abuse detection.
+- Capability gating theo user trust level.
+- Logging và audit trail.
+- Human review cho domain nhạy cảm.
+- Red-team eval trước release.
+
+---
+
+## 8. Safety Evaluation Basics
+
+Safety eval cần tách khỏi benchmark chất lượng chung.
+
+| Eval type | Câu hỏi |
+|---|---|
+| Harmful request eval | Model có từ chối yêu cầu nguy hiểm không? |
+| Over-refusal eval | Model có từ chối yêu cầu hợp lệ không? |
+| Hallucination eval | Claim có được evidence hỗ trợ không? |
+| Bias/fairness eval | Subgroup outcomes có lệch không? |
+| Privacy eval | Model có rò PII/secrets không? |
+| Prompt injection eval | Model có tuân lệnh trong untrusted data không? |
+| Tool-use eval | Agent có gọi tool quá quyền không? |
+| Regression eval | Safety có giảm sau release mới không? |
+
+Safety eval nên là release gate, không phải dashboard trang trí.
+
+---
+
+## 9. Implementation Playbook: Safety Risk Register
+
+Safety Risk Register là artifact đầu tiên nên có trước khi release AI feature.
+
+```json
+{
+  "feature": "loan_assistant",
+  "owner": "ai-platform-team",
+  "domain_risk": "high_financial_impact",
+  "potential_harms": [
+    {
+      "harm": "incorrect_financial_advice",
+      "severity": 5,
+      "likelihood": 3,
+      "exposure": 4,
+      "detection_metric": "high_risk_answer_without_disclaimer_rate",
+      "mitigation": "retrieval_required + abstention + human_escalation",
+      "release_gate": "0 critical failures on finance safety eval"
+    },
+    {
+      "harm": "privacy_leak",
+      "severity": 5,
+      "likelihood": 2,
+      "exposure": 3,
+      "detection_metric": "pii_leak_rate",
+      "mitigation": "PII masking + output DLP + audit logging",
+      "release_gate": "pii_leak_rate = 0 on red-team set"
+    }
+  ]
+}
+```
+
+Bảng review tối thiểu:
+
+| Field | Câu hỏi |
+|---|---|
+| Feature | Tính năng nào? |
+| User group | Ai bị ảnh hưởng? |
+| Harm | Điều gì có thể sai? |
+| Severity | Sai thì nghiêm trọng thế nào? |
+| Likelihood | Khả năng xảy ra? |
+| Exposure | Bao nhiêu người/request? |
+| Detection metric | Đo bằng gì? |
+| Mitigation | Giảm rủi ro bằng gì? |
+| Owner | Ai chịu trách nhiệm? |
+| Release gate | Điều kiện để được ship? |
+
+---
+
+## 10. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Safety = Moderation API">
+**Triệu chứng:** Team thêm moderation endpoint rồi xem như xong safety.
+
+**Nguyên nhân:** Moderation chỉ chặn một số category nội dung. Nó không giải quyết hallucination, bias, privacy lineage, tool authorization hay governance.
+
+**Cách khắc phục:** Thiết kế safety như risk management loop: classify risk, add controls, evaluate, monitor, assign owner và run incident response.
+</Callout>
+
+<Callout type="danger" title="Pitfall 2: Không phân loại high-stakes domain">
+**Triệu chứng:** Cùng một assistant trả lời jokes, tài chính và y tế bằng cùng policy.
+
+**Nguyên nhân:** Không có domain risk classifier hoặc routing policy.
+
+**Cách khắc phục:** Tạo risk tiers. Với high-stakes: require evidence, disclaimer, abstention threshold và human escalation.
+</Callout>
+
+<Callout type="warning" title="Pitfall 3: Chỉ evaluate happy path">
+**Triệu chứng:** Demo tốt, nhưng user thật hỏi edge cases làm model sai nghiêm trọng.
+
+**Nguyên nhân:** Eval set chỉ chứa prompt sạch, dễ, không có adversarial, ambiguous hoặc high-risk examples.
+
+**Cách khắc phục:** Thêm red-team prompts, low-confidence cases, multilingual/noisy inputs và regression tests từ incidents.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Không có safety owner">
+**Triệu chứng:** Khi incident xảy ra, product, legal, infra và AI team đẩy trách nhiệm cho nhau.
+
+**Nguyên nhân:** Risk register không có owner và release gate không có người approve.
+
+**Cách khắc phục:** Mỗi risk category cần owner, escalation path và SLA xử lý incident rõ ràng.
+</Callout>
+
+---
+
+## 11. Risk & Governance Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/Trade-off |
+|---|---|---|
+| Safety eval trước release | Bắt lỗi sớm | Tốn thời gian tạo eval set |
+| Human escalation | Giảm harm ở case khó | Tăng latency/operation cost |
+| Strict refusal policy | Giảm unsafe compliance | Có thể tăng over-refusal |
+| RAG grounding bắt buộc | Giảm hallucination | Tốn retrieval latency và cần source quality |
+| Audit logs | Điều tra incident tốt | Privacy/storage overhead |
+| Red-team regression | Chống tái phát lỗi | Tốn inference/eval cost |
+
+Cost của safety controls phải so với cost của incident: pháp lý, mất niềm tin, churn, regulatory penalty và harm thật cho người dùng.
+
+---
+
+## Practice exercises
+
+1. Tạo safety risk register cho AI resume screener.
+2. Với medical chatbot, liệt kê 5 harm types và mitigation tương ứng.
+3. Thiết kế abstention policy cho RAG assistant khi retrieval confidence thấp.
+4. Cho ví dụ reward hacking trong AI tutor.
+5. Phân biệt over-refusal và under-refusal bằng ví dụ.
+
+---
+
+## Knowledge check
+
+1. Risk priority có thể ước lượng bằng ba yếu tố nào?
+2. Reward hacking là gì?
+3. Vì sao hallucination không thể giải quyết chỉ bằng prompt “đừng bịa”?
+4. Dual-use nghĩa là gì?
+5. Safety eval nên là dashboard hay release gate?
+
+---
+
+## Answer key
+
+1. Severity, likelihood và exposure.
+2. Agent/model đạt điểm reward cao bằng cách khai thác proxy metric thay vì đạt mục tiêu thật.
+3. Vì LLM tối ưu xác suất token, thiếu grounding và có thể sinh câu trả lời fluent nhưng sai; cần evidence, abstention, verifier và eval.
+4. Một capability có thể dùng cho mục đích tốt lẫn xấu, ví dụ code generation giúp developer nhưng cũng có thể hỗ trợ malware.
+5. Với production AI, safety eval nên là release gate có owner và threshold rõ ràng.
+
+---
+
+## Điểm cần nhớ
+
+- Safety là risk management loop, không phải một moderation API.
+- RLHF/DPO tối ưu theo preference/reward; nếu proxy sai, behavior vẫn nguy hiểm.
+- Harm có nhiều loại: immediate, systemic, privacy, security, economic và long-term.
+- High-stakes domains cần risk classification, grounding, abstention và human escalation.
+- Hallucination cần được kiểm soát bằng evidence, uncertainty policy, evaluation và monitoring.
+- Safety Risk Register là artifact nền tảng để biến “AI ethics” thành engineering process.
+
+## Next chapter bridge
+
+Safety fundamentals giúp bạn nhìn hệ thống theo risk. Nhưng nhiều sự cố AI không đến từ model “tự nhiên sai”, mà từ adversary cố tình khai thác prompt, RAG documents, tool outputs và agent permissions. Chương tiếp theo: **Prompt Injection & Security** — nơi chúng ta xây threat model và red-team framework cho LLM applications.

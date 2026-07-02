@@ -1,292 +1,423 @@
-Parameter-Efficient Fine-Tuning (PEFT) là phương pháp thích ứng các mô hình ngôn ngữ lớn (LLM) bằng cách chỉ huấn luyện một lượng nhỏ tham số bổ sung (thường dưới 1% tổng tham số) trong khi đóng băng (freezing) hoàn toàn mô hình nền (base model). Trong kỹ nghệ AI hiện đại, các phương pháp PEFT — đặc biệt là **LoRA** và **QLoRA** — đã trở thành chuẩn công nghiệp thực tế (de facto standard) vì chúng giải quyết triệt để bài toán thắt nút cổ chai về tài nguyên phần cứng (VRAM) và chi phí lưu trữ đa mô hình trong production.
+Ở bài trước, bạn đã thấy Full Fine-Tuning có thể mạnh nhưng đắt, khó vận hành và dễ gây regression. Trong thực tế, phần lớn dự án fine-tuning hiện đại không cần cập nhật 100% trọng số. Chúng ta chỉ cần thêm một lớp thích ứng nhỏ để điều chỉnh hành vi model theo domain hoặc task.
 
-## Why this matters
-
-Trong thực tế doanh nghiệp, làm chủ PEFT mang lại lợi thế vận hành rất lớn:
-
-- **Tối ưu hóa chi phí phần cứng cực hạn:** Bạn có thể fine-tune mô hình LLaMA-3-8B trên một GPU duy nhất có 16GB-24GB VRAM (như RTX 3090/4090 hoặc A10G) thay vì cần một cụm 4-8 GPU A100 chuyên dụng.
-- **Phục vụ đa tác vụ hiệu quả (Multi-tenant Serving):** Thay vì lưu trữ và load nhiều mô hình Full FT (mỗi bản nặng 15GB-30GB), bạn chỉ cần chạy một instance của mô hình nền duy nhất và chuyển đổi linh hoạt các file adapter LoRA cực nhẹ (chỉ vài chục Megabytes) tại runtime cho từng khách hàng hoặc tác vụ khác nhau.
-- **Chống Catastrophic Forgetting:** Vì trọng số gốc của mô hình nền được đóng băng 100%, các tri thức tổng quát đã học không bị ghi đè trực tiếp mà chỉ được bổ trợ bởi các biểu diễn học thêm từ adapter.
-
-<Callout type="info" title="LoRA là sự kết hợp hoàn hảo">
-LoRA và biến thể lượng hóa của nó là QLoRA hiện là lựa chọn mặc định cho 95% các dự án fine-tuning mã nguồn mở nhờ sự cân bằng hoàn hảo giữa chi phí huấn luyện thấp và chất lượng mô hình đầu ra tương đương với Full Fine-Tuning.
-</Callout>
-
-## Learning objectives
-
-Sau chương này, bạn sẽ có thể:
-
-1. Giải thích bản chất toán học của Low-Rank Adaptation (LoRA) và phép phân rã ma trận (Matrix Decomposition).
-2. Tính toán chính xác số lượng tham số huấn luyện dựa trên Rank r và Scaling Factor \alpha.
-3. Phân tích cơ chế hoạt động của QLoRA bao gồm NF4 (NormalFloat4), Double Quantization và Paged Optimizers.
-4. So sánh các kỹ thuật PEFT khác: Prefix Tuning, Prompt Tuning, và IA3.
-5. Cấu hình chính xác LoRA hyperparameters (`r`, `lora_alpha`, `target_modules`, `lora_dropout`) trong thư viện `peft`.
-6. Thực hiện merge adapter LoRA vào mô hình nền để triệt tiêu độ trễ suy luận (inference latency) trong production.
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Full Fine-Tuning pipeline và toán học phân bổ VRAM từ chương trước.
-- Các phép toán ma trận cơ bản (phép nhân ma trận, khái niệm rank của ma trận) ở Phase 3.
-- Khái niệm về lượng hóa (quantization) số thực cơ bản.
+Parameter-Efficient Fine-Tuning (PEFT) là nhóm kỹ thuật làm điều đó: đóng băng base model, chỉ train một số tham số nhỏ như adapter. Với AI Engineer, LoRA và QLoRA là lựa chọn mặc định khi cần thử nghiệm nhanh, tiết kiệm VRAM, version nhiều biến thể model và deploy theo tenant/task mà không nhân bản toàn bộ model.
 
 ---
 
-## Toán học của Low-Rank Adaptation (LoRA)
+## 1. The Incident (Tình huống sự cố)
 
-Ý tưởng cốt lõi của LoRA (Hu et al., 2021) dựa trên giả thuyết: **Sự thay đổi của các trọng số trong quá trình thích ứng tác vụ (\Delta W) có một số chiều bản chất thấp (low intrinsic dimension / low intrinsic rank).**
+<Callout type="danger" title="Báo cáo sự cố: Adapter train xong nhưng production trả lời như base model">
+**Bối cảnh:** Một team fine-tune LoRA cho coding assistant nội bộ. Training loss giảm, notebook demo sinh code đúng style công ty. Team copy adapter lên inference server và bật traffic canary.
 
-Giả sử một lớp tuyến tính (Linear Layer) trong Transformer có ma trận trọng số gốc là `W_0` thuộc `R^(d x k)` (với `d` là input dimension và `k` là output dimension). Trong Full Fine-Tuning, ta cập nhật `W = W_0 + ΔW`, với `ΔW` có cùng kích thước `(d x k)`.
+**Sự cố:** Production gần như không cải thiện so với base model. Một số request còn lỗi vì adapter không load được hoặc load nhầm revision của base model.
 
-LoRA đóng băng hoàn toàn `W_0` và biểu diễn ma trận cập nhật `ΔW` dưới dạng tích của hai ma trận có rank thấp `A` thuộc `R^(d x r)` và `B` thuộc `R^(r x k)`, với `r ≪ min(d, k)`:
+1. Adapter được train trên base model revision A nhưng deploy với revision B.
+2. Target modules trong config training khác với inference loader.
+3. Chat template training khác prompt template production.
+4. Không có eval gate so sánh base vs adapter trước khi canary.
 
-`ΔW = B * A`
+**Hậu quả:** Canary bị rollback. Team phải thêm adapter manifest, pin base model hash, chuẩn hóa chat template và chạy eval tự động trước deploy.
+</Callout>
+
+Bài học rút ra: PEFT giảm chi phí training, nhưng tăng yêu cầu quản lý artifact. Adapter chỉ có ý nghĩa khi base model, tokenizer, template, target modules và inference runtime khớp chính xác.
+
+---
+
+## 2. Architecture Blueprint (Adapter Lifecycle)
+
+PEFT production không chỉ là một file `adapter_model.safetensors`. Nó là một lifecycle:
 
 ```text
-               Input x (dimension d)
-                /                 \
-               /                   \
-        Freeze W_0 (d x k)      Train A (d x r) [Khởi tạo Gauss]
-              │                     │
-              │                     ▼  (Không gian ẩn rank r)
-              │                 Train B (r x k) [Khởi tạo 0]
-              │                     │
-              ▼                     ▼
-            W_0 * x        +     (B * A) * x
-                \                 /
-                 \               /
-               Output y (dimension k)
+[ Base model registry ]
+  - model id
+  - revision/hash
+  - tokenizer
+        │
+        ▼
+[ PEFT training config ]
+  - r, alpha, dropout
+  - target_modules
+  - quantization config
+        │
+        ▼
+[ Train adapter ]
+  - frozen base weights
+  - train LoRA matrices
+  - log metrics/config
+        │
+        ▼
+[ Adapter registry ]
+  - adapter weights
+  - base model hash
+  - dataset version
+  - chat template
+        │
+        ├──► [ Serve dynamically ]
+        │       - load base once
+        │       - route adapters by task/tenant
+        │
+        └──► [ Merge for deployment ]
+                - merge adapter into base
+                - export standalone checkpoint
+                - run eval again
 ```
 
-Công thức toán học của đầu ra `h` sau khi áp dụng LoRA là:
-
-`h = W_0 * x + ΔW * x = W_0 * x + (α / r) * (B * A) * x`
-
-Trong đó:
-- `r` (Rank) là số chiều của không gian ẩn trung gian. Giá trị phổ biến: 8, 16, 32, 64. Rank càng lớn, khả năng biểu diễn của adapter càng mạnh nhưng tốn nhiều VRAM hơn và dễ overfit.
-- `α` (Alpha) là hệ số tỉ lệ (scaling factor). Khi huấn luyện, các giá trị cập nhật của LoRA được nhân với `α / r`. Việc giữ nguyên tỉ số này giúp chúng ta không phải điều chỉnh lại Learning Rate khi thay đổi Rank `r`.
-- **Cơ chế khởi tạo (Initialization):** 
-  - Ma trận `A` được khởi tạo theo phân phối chuẩn Gaussian ngẫu nhiên `N(0, σ^2)`.
-  - Ma trận `B` được khởi tạo bằng tất cả các giá trị 0.
-  - Do đó, tại Step 0 của quá trình huấn luyện: `ΔW = B * A = 0`, mô hình hoạt động chính xác giống như mô hình nền gốc, tránh hiện tượng sốc gradient ban đầu.
+Điểm cần nhớ: adapter là delta so với một base model cụ thể, không phải model độc lập.
 
 ---
 
-## Toán học của QLoRA (Quantized LoRA)
+## 3. LoRA: Low-Rank Adaptation
 
-QLoRA (Dettmers et al., 2023) tích hợp kỹ thuật lượng hóa (quantization) để nén mô hình nền xuống **4-bit** trong khi vẫn duy trì chất lượng huấn luyện nhờ ba cải tiến toán học quan trọng:
+LoRA dựa trên giả thuyết rằng thay đổi cần thiết khi fine-tune có intrinsic rank thấp. Thay vì update trực tiếp ma trận lớn `W`, ta học một delta có rank thấp:
 
-### 1. Kiểu dữ liệu NF4 (NormalFloat 4)
-Kiểu dữ liệu lượng hóa 4-bit thông thường (FP4/INT4) chia đều các khoảng số thực. Tuy nhiên, các trọng số của mạng neural thường có phân phối chuẩn (Gaussian distribution) tập trung quanh trị số 0. 
+```text
+Original linear layer:
+y = W0 x
 
-NF4 thiết kế các khoảng lượng hóa sao cho mỗi khoảng chứa một số lượng tham số tương đương nhau (quantile quantization). Công thức xác định các điểm lượng hóa `q_i` của NF4 là:
+LoRA adapted layer:
+y = W0 x + scale * B A x
 
-`q_i = 1/2 * ( Q_X(i / 2^k) + Q_X((i + 1) / 2^k) )`
+where:
+A shape = r x input_dim
+B shape = output_dim x r
+scale = alpha / r
+r = LoRA rank
+```
 
-Với `Q_X` là hàm phân vị (quantile function) của phân phối chuẩn tắc `N(0, 1)` và `k=4` bits. NF4 giúp giảm thiểu tối đa sai số lượng hóa (quantization error) so với INT4.
+Base matrix `W0` bị freeze. Chỉ `A` và `B` được train.
 
-### 2. Double Quantization (DQ)
-Để lượng hóa mô hình, ta cần các hằng số lượng hóa (quantization constants) dạng FP32 cho mỗi block trọng số (ví dụ: cứ 64 trọng số có 1 hằng số). Bản thân các hằng số này cũng chiếm bộ nhớ VRAM lớn khi scale model. 
+### Vì sao tiết kiệm tham số?
 
-Double Quantization tiếp tục lượng hóa các hằng số này từ FP32 xuống FP8. Kỹ thuật này giúp tiết kiệm khoảng 0.37 bytes cho mỗi tham số, tương đương tiết kiệm ~3GB VRAM cho một mô hình 65B.
+Nếu một projection có kích thước `4096 x 4096`:
 
-### 3. Paged Optimizers
-Khi xử lý các chuỗi dài đột xuất (context spike), kích thước Activation Memory tăng vọt dễ gây lỗi OOM. Paged Optimizers sử dụng cơ chế unified memory của CUDA để tự động di chuyển các trạng thái của optimizer (AdamW states) từ VRAM sang RAM hệ thống (CPU RAM) khi bộ nhớ GPU đạt đỉnh, và tải ngược lại khi rảnh. Kỹ thuật này giúp quá trình huấn luyện không bị crash mà chỉ bị giảm nhẹ tốc độ.
+```text
+Full update params = 4096 * 4096 = 16,777,216
+LoRA r=16 params   = 16 * 4096 + 4096 * 16 = 131,072
+```
+
+Chỉ khoảng 0.78% số tham số của layer đó được train.
+
+### Target modules
+
+Trong Transformer, LoRA thường gắn vào các linear projections:
+
+| Module | Ý nghĩa | Khi target |
+|---|---|---|
+| `q_proj`, `k_proj`, `v_proj`, `o_proj` | Attention projections | Gần như mặc định |
+| `gate_proj`, `up_proj`, `down_proj` | MLP layers | Khi cần capacity cao hơn |
+| `lm_head` | Output vocabulary head | Cẩn thận, dễ tăng memory/risk |
+| Embeddings | Token representations | Chỉ khi thêm special tokens/domain vocab |
+
+Rule of thumb:
+
+- Bắt đầu với attention projections.
+- Nếu underfit, thêm MLP projections.
+- Nếu vẫn underfit, tăng rank hoặc cân nhắc Full FT.
 
 ---
 
-## So sánh các kỹ thuật PEFT phổ biến
+## 4. LoRA Hyperparameters
 
-| Kỹ thuật PEFT | Cơ chế tác động | Số tham số thêm vào | Ưu điểm | Nhược điểm |
-|---|---|---|---|---|
-| **LoRA** | Cộng thêm ma trận song song BA vào các lớp tuyến tính | 0.1% - 1% | Không tăng latency sau khi merge | Tăng dung lượng đĩa cứng lưu trữ |
-| **QLoRA** | LoRA trên nền mô hình lượng hóa 4-bit (NF4) | 0.1% - 1% | **Tiết kiệm VRAM nhất** (train 70B trên 1 GPU) | Tốc độ train chậm hơn LoRA FP16 ~20% |
-| **Prompt Tuning** | Thêm các virtual tokens học được vào prompt đầu vào | dưới 0.01% | Cực kỳ nhẹ | Khó hội tụ, nhạy cảm với chiều dài prompt |
-| **Prefix Tuning** | Thêm các khóa ảo học được (K, V) vào tất cả các lớp Attention | 0.1% - 2% | Chất lượng tốt cho các tác vụ sinh | Giảm chiều dài ngữ cảnh hữu dụng của prompt |
-| **IA3** | Nhân trực tiếp activation vectors với các vector học được | dưới 0.05% | Cực kỳ nhẹ, tính toán nhanh | Khả năng thích ứng hành vi yếu hơn LoRA |
+| Hyperparameter | Ý nghĩa | Rule of thumb |
+|---|---|---|
+| `r` | Rank của adapter | 8, 16, 32 là điểm bắt đầu phổ biến |
+| `lora_alpha` | Scaling factor | thường 2x đến 4x rank |
+| `lora_dropout` | Regularization | 0.0-0.1 tùy dataset |
+| `target_modules` | Layer được gắn adapter | attention trước, MLP sau |
+| `bias` | Có train bias không | thường `none` |
 
----
+### Rank quá thấp vs quá cao
 
-## Cấu hình siêu tham số LoRA (Hyperparameters Guide)
+| Triệu chứng | Có thể do | Hướng xử lý |
+|---|---|---|
+| Train loss không giảm, task không cải thiện | Rank quá thấp hoặc target modules thiếu | Tăng rank, thêm MLP modules |
+| Train tốt nhưng val xấu | Rank quá cao, data nhỏ, overfit | Giảm rank/dropout, thêm data |
+| Adapter lớn, serve chậm | Rank/target quá rộng | Giảm target modules hoặc merge |
+| Output lệch style quá mạnh | LR/epoch quá cao | Giảm LR, giảm epoch |
 
-Khi thiết lập `LoraConfig` trong thư viện `peft`, các siêu tham số sau quyết định trực tiếp đến sự hội tụ của mô hình:
-
-- **`r` (Rank):** Kích thước không gian ẩn.
-  - Tác vụ dễ (phân loại intent, trích xuất thực thể): $r = 8$ hoặc $r = 16$.
-  - Tác vụ khó (lý luận logic, học ngôn ngữ mới, viết code): $r = 32$ hoặc $r = 64$.
-- **`lora_alpha`:** Hệ số tỉ lệ. Thường đặt `lora_alpha = 2 * r`. Đặt alpha quá nhỏ sẽ triệt tiêu các cập nhật của adapter.
-- **`target_modules`:** Các lớp trọng số áp dụng LoRA.
-  - LLaMA/Qwen có cấu trúc: `q_proj` (query), `k_proj` (key), `v_proj` (value), `o_proj` (output), `gate_proj`, `up_proj`, `down_proj` (MLP layers).
-  - Khuyến nghị: Áp dụng lên **tất cả** các linear layers để đảm bảo mô hình học được đầy đủ hành vi.
-- **`lora_dropout`:** Dropout để chống quá khớp (thường đặt `0.05` cho datasets nhỏ, `0.0` cho datasets lớn).
+<Callout type="tip" title="Đừng tune rank bằng cảm giác">
+Hãy chạy sweep nhỏ: `r=8,16,32` với cùng dataset split và eval harness. Chọn adapter theo validation metric + regression metric, không chọn theo train loss.
+</Callout>
 
 ---
 
-## Implementation lab: QLoRA 4-bit Training Configuration
+## 5. QLoRA: Fine-Tuning trên Quantized Base Model
 
-**Nhiệm vụ:** Viết một script Python hoàn chỉnh thiết lập cấu hình QLoRA 4-bit cho mô hình LLaMA-3-8B sử dụng thư viện `peft` và `bitsandbytes`.
+QLoRA giúp train adapter trên base model đã quantize 4-bit. Base weights được nén để tiết kiệm VRAM, còn LoRA adapter vẫn train ở precision phù hợp.
+
+```text
+[ 4-bit quantized base model ]  frozen
+          +
+[ LoRA adapter weights ]        trainable
+          +
+[ paged optimizer ]             reduce memory spikes
+```
+
+Các thành phần chính:
+
+| Thành phần | Vai trò |
+|---|---|
+| NF4 | 4-bit format tối ưu cho phân phối normal của weights |
+| Double quantization | Quantize thêm quantization constants để tiết kiệm memory |
+| Paged optimizer | Giảm memory spike bằng unified memory/paging |
+| BF16 compute | Tính toán ổn định hơn FP16 trên GPU hỗ trợ |
+
+QLoRA phù hợp khi:
+
+- Bạn chỉ có 16GB-24GB VRAM.
+- Muốn fine-tune 7B/8B hoặc đôi khi 13B trên single GPU.
+- Chấp nhận inference/deployment phải xử lý quantized base hoặc merge/export cẩn thận.
+
+---
+
+## 6. Implementation Playbook: PEFT/QLoRA Config Skeleton
+
+Một cấu hình PEFT tốt phải explicit về quantization, LoRA config và training config.
 
 ```python
-import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig
+from trl import SFTTrainer, SFTConfig
 
-model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
+BASE_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
 
-# 1. Thiết lập cấu hình lượng hóa 4-bit NF4 tối ưu
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
-    bnb_4bit_use_double_quant=True,     # Double Quantization
-    bnb_4bit_quant_type="nf4",          # NormalFloat 4
-    bnb_4bit_compute_dtype=torch.bfloat16 # Tính toán ở BF16
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_compute_dtype="bfloat16",
 )
 
-# 2. Load Model với cấu hình BNB
 model = AutoModelForCausalLM.from_pretrained(
-    model_id,
+    BASE_MODEL,
     quantization_config=bnb_config,
-    device_map="auto"
+    device_map="auto",
 )
 
-tokenizer = AutoTokenizer.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+tokenizer.pad_token = tokenizer.eos_token
 
-# 3. Chuẩn bị mô hình cho K-Bit training (Đóng băng weights, bật gradient checkpointing)
-model = prepare_model_for_kbit_training(model)
-
-# 4. Cấu hình LoRA Adapter
-lora_config = LoraConfig(
+peft_config = LoraConfig(
     r=16,
-    lora_alpha=32, # alpha = 2 * r
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    lora_alpha=32,
     lora_dropout=0.05,
     bias="none",
-    task_type="CAUSAL_LM"
+    task_type="CAUSAL_LM",
+    target_modules=[
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj",
+    ],
 )
 
-# 5. Khởi tạo PEFT Model
-peft_model = get_peft_model(model, lora_config)
+training_args = SFTConfig(
+    output_dir="./adapters/code-assistant-lora-v1",
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=8,
+    learning_rate=2e-4,
+    num_train_epochs=2,
+    max_seq_length=4096,
+    packing=True,
+    bf16=True,
+    logging_steps=10,
+    save_steps=250,
+    report_to="wandb",
+)
 
-# In thông số tham số
-peft_model.print_trainable_parameters()
-# Trainable: ~41M parameters (0.5% of 8B)
+trainer = SFTTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
+    peft_config=peft_config,
+    formatting_func=format_chat,
+)
+
+trainer.train()
+trainer.model.save_pretrained("./adapters/code-assistant-lora-v1")
+tokenizer.save_pretrained("./adapters/code-assistant-lora-v1")
+```
+
+### Adapter manifest
+
+Luôn lưu manifest cạnh adapter:
+
+```json
+{
+  "adapter_id": "code-assistant-lora-v1",
+  "base_model": "meta-llama/Meta-Llama-3-8B-Instruct",
+  "base_revision": "pinned-git-sha-or-model-hash",
+  "tokenizer_revision": "same-as-base",
+  "chat_template": "llama3-instruct-v1",
+  "dataset_version": "code_sft_2026_07_01",
+  "peft": {
+    "r": 16,
+    "lora_alpha": 32,
+    "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  },
+  "eval_report": "reports/code-assistant-lora-v1.json"
+}
 ```
 
 ---
 
-## Merging LoRA Adapters for Production
+## 7. Serving: Dynamic Adapter vs Merge
 
-Trong production, việc giữ nguyên cấu trúc phân tách (Base Model + Adapter) sẽ làm tăng độ trễ suy luận (inference latency) do GPU phải thực hiện hai phép tính song song: $W_0 x$ và $\Delta W x$. Ta phải chạy quy trình **Merge** để cộng trực tiếp trọng số của adapter vào mô hình nền.
+| Strategy | Cách hoạt động | Ưu điểm | Nhược điểm |
+|---|---|---|---|
+| Dynamic adapter | Load base model một lần, swap adapter theo request/task | Multi-tenant rẻ, nhiều biến thể | Runtime phức tạp, adapter load latency |
+| Merged model | Merge LoRA vào base và export checkpoint | Inference đơn giản, latency ổn định | Mỗi model là một artifact lớn |
+| Quantized adapter serving | Serve base quantized + adapter | VRAM thấp | Toolchain/runtime compatibility |
+
+Merge cần eval lại vì numerical behavior có thể thay đổi nhẹ.
 
 ```python
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
+from transformers import AutoModelForCausalLM
 
-# CẢNH BÁO: Không dùng load_in_4bit khi chạy merge model
-base_model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
-adapter_dir = "./llama3-sft-adapter"
-
-# 1. Load Base Model ở kiểu dữ liệu gốc (FP16 hoặc BF16)
-base_model = AutoModelForCausalLM.from_pretrained(
-    base_model_id,
-    torch_dtype=torch.bfloat16,
-    device_map="auto"
-)
-
-# 2. Load PEFT Model chứa Adapter
-model = PeftModel.from_pretrained(base_model, adapter_dir)
-
-# 3. Thực hiện Merge trọng số vật lý
-# Phép toán: W_new = W_0 + (alpha/r) * (B * A)
-merged_model = model.merge_and_unload()
-
-# 4. Lưu mô hình đã merge hoàn chỉnh sẵn sàng cho serving (vLLM/TGI)
-merged_model.save_pretrained("./llama3-final-model")
-tokenizer = AutoTokenizer.from_pretrained(base_model_id)
-tokenizer.save_pretrained("./llama3-final-model")
-print("Merge completed and model saved successfully.")
+base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype="bfloat16")
+model = PeftModel.from_pretrained(base, "./adapters/code-assistant-lora-v1")
+merged = model.merge_and_unload()
+merged.save_pretrained("./models/code-assistant-merged-v1")
 ```
+
+<Callout type="warning" title="Adapter routing là một production system">
+Nếu bạn route adapter theo tenant/task, hãy log adapter id, base model revision, prompt template version và eval cohort cho từng request. Nếu không, incident debugging gần như bất khả thi.
+</Callout>
 
 ---
 
-## Common mistakes & debugging checklist
+## 8. Project Guide: LoRA Code Specialist (Phase 10 Medium)
 
-<Callout type="warning" title="Mistake 1: Chạy merge_and_unload trên mô hình lượng hóa 4-bit (QLoRA)">
-Nếu bạn cố gắng merge adapter trực tiếp khi base model đang được load ở chế độ 4-bit (`load_in_4bit=True`), hệ thống sẽ báo lỗi hoặc làm biến dạng giá trị trọng số do phép toán cộng ma trận không thể thực hiện chính xác trên các giá trị đã bị lượng hóa NF4. Luôn load base model ở FP16/BF16 khi chạy script merge.
+Official project Phase 10 medium:
+
+```text
+LoRA fine-tune LLaMA-style 8B model on code generation
+- Use PEFT/QLoRA to train a code-domain adapter
+- Evaluate on HumanEval/MBPP-style tasks or internal coding benchmark
+- Compare base model vs adapter vs prompt-only baseline
+- Stack: HuggingFace, TRL, PEFT, bitsandbytes, W&B
+```
+
+MVP deliverables:
+
+1. Dataset card: source, license, filtering, train/val/test split.
+2. QLoRA training config with pinned base model revision.
+3. Adapter manifest and saved adapter artifact.
+4. Eval report:
+   - pass@1 or unit-test pass rate,
+   - format validity,
+   - regression prompts,
+   - latency/memory estimate.
+5. Short write-up explaining why PEFT was chosen over Full FT.
+
+Stretch goals:
+
+- Compare `r=8`, `r=16`, `r=32`.
+- Add DPO preference step for code quality ranking.
+- Serve base + adapter using a local inference backend and measure p95 latency.
+
+---
+
+## 9. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Base model mismatch">
+**Triệu chứng:** Adapter load được nhưng quality rất kém hoặc output kỳ lạ.
+
+**Nguyên nhân:** Adapter train trên base revision khác với inference base.
+
+**Cách khắc phục:** Pin base model revision/hash trong manifest và validate khi load.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: Thiếu target_modules quan trọng trong LoraConfig">
-Nếu bạn chỉ cấu hình target_modules là `["q_proj", "v_proj"]`, mô hình sẽ thiếu dung lượng học tập và không thể thích ứng với các tác vụ có tính logic cao. Hãy chỉ định rõ toàn bộ các lớp tuyến tính của attention và MLP.
+<Callout type="warning" title="Pitfall 2: Target modules sai">
+**Triệu chứng:** Loss không giảm hoặc adapter gần như không tác động.
+
+**Nguyên nhân:** Tên module không khớp architecture hoặc chỉ target quá ít layer.
+
+**Cách khắc phục:** In `model.named_modules()`, chọn đúng `q_proj/v_proj/...`, thêm MLP modules nếu underfit.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: Đặt lora_alpha sai lệch lớn so với rank r">
-Nếu đặt `lora_alpha` quá nhỏ so với `r` (ví dụ: `r=64`, `lora_alpha=1`), hệ số scaling `α / r = 1 / 64` sẽ làm suy yếu nghiêm trọng các cập nhật của gradient, khiến mô hình gần như không học được gì từ tập dataset mới. Hãy giữ tỉ lệ `α = 2 * r`.
+<Callout type="warning" title="Pitfall 3: Quantization instability">
+**Triệu chứng:** NaN loss, training không ổn định, output degrade.
+
+**Nguyên nhân:** Precision config không phù hợp, GPU không hỗ trợ BF16 tốt, LR quá cao.
+
+**Cách khắc phục:** Dùng BF16 nếu có, giảm LR, kiểm tra bitsandbytes version, thử 8-bit hoặc non-quantized PEFT nếu cần.
 </Callout>
 
-### Checklist cấu hình PEFT:
+<Callout type="warning" title="Pitfall 4: Train/inference template mismatch">
+**Triệu chứng:** Eval offline tốt nhưng production trả lời sai format.
 
-- [ ] Bạn đã import đúng `BitsAndBytesConfig` cho cấu hình QLoRA chưa?
-- [ ] Đã chạy `prepare_model_for_kbit_training(model)` trước khi khởi tạo PEFT model chưa?
-- [ ] Tỉ lệ tham số có thể huấn luyện (trainable parameters %) có nằm trong khoảng 0.2% đến 1.5% không?
-- [ ] Cấu hình `target_modules` đã bao phủ toàn bộ các cổng tuyến tính (`q`, `k`, `v`, `o`, `gate`, `up`, `down`) chưa?
-- [ ] Khi lưu mô hình sau khi train, bạn có chắc là mình đang chỉ lưu file adapter nhỏ (vài MB) chứ không phải toàn bộ weights của mô hình nền không?
-- [ ] Script merge model đã load base model ở dạng BF16/FP16 (không lượng hóa) chưa?
+**Nguyên nhân:** Training dùng chat template khác prompt builder production.
+
+**Cách khắc phục:** Dùng cùng tokenizer `apply_chat_template`, version prompt template và test generated prompts trước deploy.
+</Callout>
+
+---
+
+## 10. Cost & Adapter Unit Economics
+
+PEFT thường thắng Full FT về chi phí, nhưng không miễn phí.
+
+| Quyết định | Lợi ích | Trade-off |
+|---|---|---|
+| QLoRA single GPU | Rẻ, dễ thử nghiệm | Phụ thuộc quantization runtime |
+| Rank cao | Capacity cao hơn | Adapter lớn, dễ overfit |
+| Target MLP + attention | Chất lượng tốt hơn | Memory/time tăng |
+| Dynamic adapter serving | Multi-tenant hiệu quả | Routing/logging phức tạp |
+| Merge adapter | Inference đơn giản | Mất lợi thế adapter nhỏ |
+
+Estimate đơn giản:
+
+```text
+adapter_storage_saving = full_model_size_per_variant - adapter_size_per_variant
+training_saving = full_ft_gpu_cost - peft_gpu_cost
+ops_cost = adapter_registry + routing + compatibility testing
+```
+
+Production takeaway: PEFT rẻ nhất khi bạn có nhiều biến thể model trên cùng một base, nhưng chỉ an toàn khi artifact management đủ nghiêm túc.
 
 ---
 
 ## Practice exercises
 
-1. **Tính toán số lượng tham số:** Cho một lớp Attention tuyến tính với `d_model = 4096`. Hãy tính toán số lượng tham số cần huấn luyện của ma trận LoRA A và B khi cấu hình Rank `r = 16`. So sánh con số này với số lượng tham số của ma trận trọng số gốc `W_0` thuộc `R^(4096 x 4096)`.
-2. **Viết Script Benchmark Latency:** Viết một đoạn code đo lường thời gian sinh token (tokens per second) trên cùng một GPU giữa: (a) Base Model 4-bit + Adapter LoRA chạy song song, (b) Mô hình sau khi đã chạy `merge_and_unload`.
-3. **Cấu hình IA3 Adapter:** Tìm hiểu cấu hình `IA3Config` trong thư viện `peft`. Viết code khởi tạo mô hình IA3 và so sánh số lượng tham số trainable của nó với cấu hình LoRA có cùng target modules.
+1. Tính số tham số LoRA cho một linear layer `4096 x 4096` với `r=8`, `r=16`, `r=32`.
+2. Thiết kế adapter manifest cho một customer-support adapter.
+3. Chọn target modules cho một model LLaMA-style và giải thích lý do.
+4. So sánh dynamic adapter serving và merged model cho workload multi-tenant.
+5. Viết eval plan để so sánh base model, prompt-only baseline và LoRA adapter.
 
 ---
 
 ## Knowledge check
 
-1. Tại sao phương pháp LoRA không làm tăng độ trễ suy luận (inference latency) sau khi đã chạy quy trình merge?
-2. Cơ chế khởi tạo của ma trận A và B trong LoRA có ý nghĩa gì đối với hàm loss ở Step 0?
-3. Tại sao kiểu dữ liệu NF4 trong QLoRA lại có sai số lượng hóa thấp hơn kiểu dữ liệu INT4/FP4 truyền thống?
-4. Ý nghĩa của hệ số tỉ lệ `α / r` trong công thức LoRA là gì?
-5. Tại sao PEFT giúp giảm thiểu rủi ro Catastrophic Forgetting hiệu quả hơn so với Full Fine-Tuning?
-6. Tính năng Paged Optimizers trong QLoRA hoạt động dựa trên cơ chế nào của phần cứng?
+1. Vì sao LoRA tiết kiệm tham số hơn Full FT?
+2. QLoRA dùng quantization để tiết kiệm phần nào của memory?
+3. Adapter có độc lập với base model không?
+4. Khi nào nên tăng LoRA rank?
+5. Vì sao merge adapter xong vẫn cần eval lại?
 
 ---
 
 ## Answer key
 
-1. Vì sau khi merge, ta thực hiện phép cộng ma trận vật lý `W_new = W_0 + (α / r) * (BA)` để tạo ra một ma trận trọng số duy nhất. Khi suy luận, mô hình chỉ chạy một phép nhân ma trận `W_new * x` duy nhất.
-2. Ma trận A được khởi tạo Gaussian ngẫu nhiên và B khởi tạo bằng 0. Do đó `ΔW = B * A = 0`. Tại Step 0, mô hình fine-tuned có đầu ra trùng khớp 100% với mô hình nền gốc, giúp ổn định hàm loss ban đầu.
-3. Vì NF4 được thiết kế dựa trên phân vị của phân phối chuẩn (quantile quantization), đảm bảo mỗi khoảng lượng hóa chứa một lượng trọng số tương đương nhau, phản ánh đúng phân phối tự nhiên của trọng số mạng neural.
-4. Nó là một hằng số tỉ lệ giúp điều chỉnh độ mạnh yếu của cập nhật LoRA tác động lên mô hình nền mà không yêu cầu chúng ta phải điều chỉnh lại Learning Rate khi thay đổi Rank `r`.
-5. Vì toàn bộ trọng số gốc chứa đựng tri thức tổng quát của mô hình nền được đóng băng hoàn toàn, các cập nhật chỉ được ghi vào các ma trận bổ sung bên ngoài.
-6. Dựa trên tính năng Unified Memory của CUDA, cho phép tự động chuyển đổi các trang bộ nhớ (page) của optimizer states từ VRAM GPU sang RAM của CPU khi VRAM bị quá tải.
-
----
-
-## Mini-project: QLoRA Adapter Training Configurator
-
-### Nhiệm vụ:
-Xây dựng một script Python hoàn chỉnh cấu hình quá trình huấn luyện QLoRA cho mô hình `meta-llama/Meta-Llama-3-8B-Instruct`.
-
-### Yêu cầu đầu ra:
-- Thiết lập cấu hình lượng hóa 4-bit NF4 với Double Quantization.
-- Cấu hình `LoraConfig` áp dụng lên tất cả các linear layers của mô hình với r=16, \alpha=32.
-- Viết hàm kiểm tra và in ra màn hình: Tổng số tham số của mô hình, số lượng tham số có thể huấn luyện (trainable parameters) và tỷ lệ phần trăm tương ứng.
-- Đảm bảo mô hình được chuẩn bị đúng cách bằng hàm `prepare_model_for_kbit_training`.
+1. Vì LoRA freeze ma trận gốc và chỉ train hai ma trận low-rank nhỏ `A` và `B` để biểu diễn delta.
+2. QLoRA quantize base model weights xuống 4-bit, trong khi adapter vẫn là phần trainable nhỏ.
+3. Không. Adapter là delta phụ thuộc base model, tokenizer và template cụ thể.
+4. Khi underfit: train/eval task không cải thiện dù data, LR và target modules đã hợp lý.
+5. Vì merge có thể thay đổi numerical behavior, deployment artifact khác runtime adapter và cần kiểm tra regression/latency.
 
 ---
 
 ## Điểm cần nhớ
 
-- PEFT giúp thích ứng mô hình lớn với tài nguyên tính toán tối giản bằng cách đóng băng mô hình nền và huấn luyện adapter.
-- LoRA phân rã ma trận cập nhật thành hai ma trận rank thấp A và B.
-- QLoRA kết hợp lượng hóa 4-bit NF4, Double Quantization và Paged Optimizers để giảm thiểu tối đa VRAM.
-- Luôn merge adapter LoRA vào base model trước khi deploy lên production để tối ưu hóa latency.
-
----
+- PEFT là lựa chọn mặc định cho phần lớn fine-tuning LLM thực dụng.
+- LoRA train delta low-rank thay vì cập nhật toàn bộ weights.
+- QLoRA giúp train adapter trên quantized base model để giảm VRAM mạnh.
+- Adapter phải đi kèm manifest: base hash, tokenizer, template, dataset, config và eval report.
+- Dynamic adapter serving hiệu quả cho multi-tenant nhưng cần logging/routing nghiêm túc.
+- Rank, target modules và chat template là các nguồn lỗi quan trọng nhất khi dùng PEFT.
 
 ## Next chapter bridge
 
-Để việc cấu hình và chạy các pipeline SFT, LoRA/QLoRA diễn ra với hiệu suất cao nhất mà không phải tự viết code boilerplate phức tạp, các kỹ sư cần sử dụng các công cụ chuyên dụng. Chương tiếp theo: **Fine-Tuning Tools** — tìm hiểu sâu về hệ sinh thái tối ưu hóa Unsloth (tốc độ x2-x5), các bộ khung cấu hình YAML mạnh mẽ như Axolotl, LLaMA-Factory và cách tích hợp Weights & Biases để giám sát quá trình huấn luyện.
+Bạn đã biết cách fine-tune bằng adapter. Nhưng để làm việc hiệu quả trong team production, bạn không nên chỉ dựa vào notebook thủ công. Chương tiếp theo đi vào **Fine-Tuning Tools**: Unsloth, Axolotl, LLaMA-Factory, W&B/MLflow và cách biến training thành một workflow config-first có thể lặp lại.

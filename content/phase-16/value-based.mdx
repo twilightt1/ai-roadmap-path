@@ -1,0 +1,641 @@
+Ở bài trước, bạn đã học ngôn ngữ nền của Reinforcement Learning: state, action, reward, policy, value và Bellman. Bây giờ ta bắt đầu với nhóm thuật toán đầu tiên: **Value-Based Methods** — các phương pháp học “mỗi action đáng giá bao nhiêu” rồi chọn action có giá trị cao nhất.
+
+Value-based RL là nền tảng để hiểu Q-learning, DQN và nhiều ý tưởng ổn định training như replay buffer, target network, Double DQN hay Prioritized Experience Replay. Ngay cả khi RLHF cho LLM thường dùng policy optimization, trực giác về value, Q-function và TD error vẫn rất quan trọng để hiểu advantage, critic và PPO.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Agent học mãi không qua nổi CartPole">
+**Bối cảnh:** Một team mới học RL triển khai agent cho `CartPole-v1`. Họ dùng reward từ environment, epsilon-greedy exploration và Q-learning theo tutorial.
+
+**Sự cố:** Reward curve không tăng ổn định. Có seed agent đạt điểm 200, có seed kẹt ở 20. Khi tăng learning rate, Q-values explode. Khi giảm epsilon quá nhanh, agent học một chiến lược kém rồi không khám phá nữa.
+
+1. State của CartPole là continuous nhưng team dùng Q-table như state rời rạc.
+2. Epsilon decay quá nhanh làm exploration dừng sớm.
+3. Không tách training episodes và evaluation episodes.
+4. Chỉ chạy một random seed nên tưởng thuật toán tốt.
+
+**Hậu quả:** Team kết luận “RL không ổn định” mà chưa debug đúng: representation, exploration, update rule và evaluation protocol.
+</Callout>
+
+Bài học rút ra: Value-based methods rất mạnh, nhưng nhạy với state representation, reward scale, exploration và stability tricks.
+
+---
+
+## 2. Architecture Blueprint (Value-Based Learning Loop)
+
+Value-based agent học một hàm giá trị cho action:
+
+```text
+[ Environment state s_t ]
+          │
+          ▼
+[ Q-function Q(s, a) ]
+  - tabular Q-table
+  - neural network Qθ(s, a)
+          │
+          ▼
+[ Action selection ]
+  - greedy: argmax_a Q(s, a)
+  - epsilon-greedy: explore đôi khi
+          │
+          ▼
+[ Environment step ]
+  - reward r_t
+  - next_state s_{t+1}
+  - done?
+          │
+          ▼
+[ Bellman / TD update ]
+  target = r + γ max_a' Q(s', a')
+  error  = target - Q(s, a)
+```
+
+Ý tưởng cốt lõi: nếu ta biết `Q(s,a)` đủ chính xác, policy có thể đơn giản là chọn action có Q-value cao nhất.
+
+---
+
+## 3. From Bellman Equation to Q-Learning
+
+Bellman optimality nói rằng action value tối ưu bằng reward hiện tại cộng giá trị tốt nhất ở state tiếp theo:
+
+```text
+Q*(s, a) = E[ r + γ max_a' Q*(s', a') ]
+```
+
+Q-learning dùng sample từ environment để cập nhật dần Q-table:
+
+```text
+Q(s,a) ← Q(s,a) + α [r + γ max_a' Q(s',a') - Q(s,a)]
+```
+
+Các thành phần:
+
+| Ký hiệu | Ý nghĩa |
+|---|---|
+| `α` | Learning rate, update mạnh hay nhẹ |
+| `γ` | Discount factor, quan tâm reward tương lai bao nhiêu |
+| `r + γ max Q(s',a')` | TD target |
+| `target - Q(s,a)` | TD error |
+| `max_a'` | Agent giả định sau đó sẽ chọn action tốt nhất |
+
+### TD error
+
+Temporal Difference error là “dự đoán giá trị của mình sai bao nhiêu sau khi thấy reward và next state”.
+
+```text
+TD error = r + γ max_a' Q(s', a') - Q(s, a)
+```
+
+Nếu TD error dương, action tốt hơn agent nghĩ. Nếu âm, action tệ hơn agent nghĩ.
+
+<Callout type="info" title="Q-learning là off-policy">
+Q-learning học giá trị của greedy optimal policy vì target dùng `max_a' Q(s',a')`, ngay cả khi behavior policy hiện tại đang exploration bằng epsilon-greedy. Đây là lý do nó được gọi là off-policy.
+</Callout>
+
+---
+
+## 4. SARSA vs Q-Learning
+
+SARSA và Q-learning đều là TD control, nhưng target khác nhau.
+
+### SARSA
+
+SARSA update theo action thật sự agent sẽ chọn ở next state:
+
+```text
+Q(s,a) ← Q(s,a) + α [r + γ Q(s',a') - Q(s,a)]
+```
+
+Tên SARSA đến từ tuple:
+
+```text
+State, Action, Reward, next State, next Action
+```
+
+### Q-learning
+
+Q-learning update theo action tốt nhất ở next state:
+
+```text
+Q(s,a) ← Q(s,a) + α [r + γ max_a' Q(s',a') - Q(s,a)]
+```
+
+| Method | Loại | Target | Hành vi |
+|---|---|---|---|
+| SARSA | On-policy | Action thật sẽ chọn | Thận trọng hơn nếu policy exploration rủi ro |
+| Q-learning | Off-policy | Action tốt nhất theo Q | Học greedy optimal policy nhanh hơn trong nhiều case |
+
+Ví dụ trong environment có cliff: SARSA có thể học đi đường an toàn vì tính cả exploration risk; Q-learning có thể học đường sát cliff vì giả định sau này sẽ greedy hoàn hảo.
+
+---
+
+## 5. Exploration trong Value-Based Methods
+
+Nếu agent luôn chọn `argmax Q`, ban đầu Q-values chưa chính xác nên agent dễ kẹt.
+
+### Epsilon-greedy
+
+```text
+if random() < epsilon:
+    chọn action ngẫu nhiên
+else:
+    chọn argmax_a Q(s,a)
+```
+
+Epsilon decay thường dùng:
+
+```text
+epsilon_start = 1.0
+epsilon_end = 0.05
+epsilon_decay_steps = 100_000
+```
+
+### Optimistic initialization
+
+Khởi tạo Q-values cao hơn thực tế để agent thử nhiều action. Khi action không tốt, Q-value giảm dần.
+
+### UCB intuition
+
+Ưu tiên action có estimated value cao hoặc uncertainty cao:
+
+```text
+score(a) = Q(a) + c * sqrt(log(total_steps) / action_count(a))
+```
+
+<Callout type="warning" title="Epsilon decay quá nhanh là lỗi kinh điển">
+Nếu `epsilon` giảm về gần 0 trước khi agent khám phá đủ, policy sẽ đóng băng quanh một chiến lược kém. Hãy log action distribution, không chỉ reward curve.
+</Callout>
+
+---
+
+## 6. Implementation Playbook: Tabular Q-Learning với FrozenLake
+
+`FrozenLake` phù hợp cho Q-table vì state/action rời rạc. Đây là lab cơ bản trước khi chuyển sang DQN.
+
+```python
+import random
+import numpy as np
+import gymnasium as gym
+
+env = gym.make("FrozenLake-v1", is_slippery=False)
+
+n_states = env.observation_space.n
+n_actions = env.action_space.n
+
+q = np.zeros((n_states, n_actions), dtype=np.float32)
+
+alpha = 0.1
+gamma = 0.99
+epsilon = 1.0
+epsilon_min = 0.05
+epsilon_decay = 0.995
+num_episodes = 5000
+
+
+def choose_action(state: int) -> int:
+    if random.random() < epsilon:
+        return env.action_space.sample()
+    return int(np.argmax(q[state]))
+
+
+returns = []
+
+for episode in range(num_episodes):
+    state, _ = env.reset()
+    done = False
+    episode_return = 0
+
+    while not done:
+        action = choose_action(state)
+        next_state, reward, terminated, truncated, _ = env.step(action)
+        done = terminated or truncated
+
+        best_next_action = np.argmax(q[next_state])
+        td_target = reward + gamma * q[next_state, best_next_action] * (not done)
+        td_error = td_target - q[state, action]
+        q[state, action] += alpha * td_error
+
+        state = next_state
+        episode_return += reward
+
+    epsilon = max(epsilon_min, epsilon * epsilon_decay)
+    returns.append(episode_return)
+
+print("Mean return last 100 episodes:", np.mean(returns[-100:]))
+print("Learned Q-table:")
+print(q)
+```
+
+Evaluation nên tắt exploration:
+
+```python
+def evaluate(num_eval_episodes=100):
+    scores = []
+    for _ in range(num_eval_episodes):
+        state, _ = env.reset()
+        done = False
+        total = 0
+        while not done:
+            action = int(np.argmax(q[state]))
+            state, reward, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+            total += reward
+        scores.append(total)
+    return np.mean(scores)
+
+print("Greedy eval success rate:", evaluate())
+```
+
+<Callout type="tip" title="Training reward và evaluation reward khác nhau">
+Training reward có exploration noise. Evaluation reward nên dùng greedy policy hoặc policy cố định để biết agent thật sự đã học gì.
+</Callout>
+
+---
+
+## 7. Vì sao Q-table không scale?
+
+Q-table cần một ô cho mỗi cặp `(state, action)`.
+
+```text
+Q-table size = num_states × num_actions
+```
+
+Điều này ổn với FrozenLake, nhưng vỡ ngay khi:
+
+- State continuous như CartPole observation: position, velocity, angle, angular velocity.
+- State là ảnh game Atari.
+- State là prompt/conversation của LLM.
+- Action là vocabulary 50k tokens hoặc tool-call arguments.
+
+Giải pháp: dùng neural network để approximate Q-function.
+
+```text
+Q-table: Q[state, action]
+DQN:     Qθ(state) -> vector Q-values cho từng action
+```
+
+---
+
+## 8. DQN: Deep Q-Network
+
+DQN thay Q-table bằng neural network `Qθ(s,a)`.
+
+```text
+state s ──> Neural Network Qθ ──> [Q(s,a1), Q(s,a2), ..., Q(s,an)]
+```
+
+DQN loss:
+
+```text
+L(θ) = (y - Qθ(s,a))²
+
+where:
+y = r + γ max_a' Qθ_target(s', a')
+```
+
+DQN cần hai kỹ thuật ổn định quan trọng:
+
+### Experience Replay
+
+Thay vì train ngay trên transition mới nhất, ta lưu transition vào replay buffer:
+
+```text
+(s, a, r, s', done)
+```
+
+Sau đó sample mini-batch ngẫu nhiên để train. Lợi ích:
+
+- Giảm correlation giữa samples liên tiếp.
+- Tái sử dụng dữ liệu cũ.
+- Cải thiện sample efficiency.
+
+### Target Network
+
+Nếu target dùng cùng network đang update, target thay đổi liên tục và training dễ dao động. DQN dùng target network `Qθ_target`, cập nhật chậm hơn.
+
+```text
+Online network: chọn/update thường xuyên
+Target network: tạo TD target, sync mỗi N steps
+```
+
+---
+
+## 9. DQN Skeleton bằng PyTorch
+
+Đây là skeleton tối giản để thấy các thành phần, không phải implementation tối ưu đầy đủ.
+
+```python
+import random
+from collections import deque
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+class QNetwork(nn.Module):
+    def __init__(self, obs_dim, n_actions):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(obs_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, n_actions),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+replay = deque(maxlen=100_000)
+gamma = 0.99
+batch_size = 64
+
+
+def sample_batch():
+    batch = random.sample(replay, batch_size)
+    states, actions, rewards, next_states, dones = zip(*batch)
+    return (
+        torch.tensor(states, dtype=torch.float32),
+        torch.tensor(actions, dtype=torch.long),
+        torch.tensor(rewards, dtype=torch.float32),
+        torch.tensor(next_states, dtype=torch.float32),
+        torch.tensor(dones, dtype=torch.float32),
+    )
+
+
+def train_step(q_net, target_net, optimizer):
+    if len(replay) < batch_size:
+        return None
+
+    states, actions, rewards, next_states, dones = sample_batch()
+
+    q_values = q_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+
+    with torch.no_grad():
+        next_q_values = target_net(next_states).max(dim=1).values
+        targets = rewards + gamma * next_q_values * (1.0 - dones)
+
+    loss = nn.functional.smooth_l1_loss(q_values, targets)
+
+    optimizer.zero_grad()
+    loss.backward()
+    nn.utils.clip_grad_norm_(q_net.parameters(), 10.0)
+    optimizer.step()
+
+    return loss.item()
+```
+
+Các phần còn thiếu trong full implementation:
+
+- Environment loop.
+- Epsilon-greedy action selection.
+- Target network sync.
+- Evaluation loop.
+- Logging reward/loss/Q-values.
+- Seed control.
+
+---
+
+## 10. Double DQN
+
+DQN thường overestimate Q-values vì cùng một `max` vừa chọn action vừa estimate value.
+
+Double DQN tách hai bước:
+
+```text
+1. Online network chọn action tốt nhất ở next_state:
+   a* = argmax_a Q_online(s', a)
+
+2. Target network estimate value của action đó:
+   target = r + γ Q_target(s', a*)
+```
+
+So sánh:
+
+| Method | Target |
+|---|---|
+| DQN | `r + γ max_a Q_target(s',a)` |
+| Double DQN | `r + γ Q_target(s', argmax_a Q_online(s',a))` |
+
+Double DQN thường ổn định hơn vì giảm overestimation bias.
+
+---
+
+## 11. Dueling DQN
+
+Dueling DQN tách Q-value thành:
+
+```text
+V(s): state này tốt đến đâu?
+A(s,a): action này tốt hơn/trệ hơn trung bình bao nhiêu?
+
+Q(s,a) = V(s) + A(s,a) - mean_a A(s,a)
+```
+
+Kiến trúc:
+
+```text
+state encoder
+     │
+     ├── value stream      -> V(s)
+     └── advantage stream  -> A(s,a1..an)
+```
+
+Hữu ích khi nhiều action có giá trị gần nhau hoặc state value quan trọng hơn khác biệt nhỏ giữa actions.
+
+---
+
+## 12. Prioritized Experience Replay
+
+Replay buffer thường sample transition ngẫu nhiên. Nhưng một số transition có TD error cao hơn, nghĩa là agent đang học sai nhiều hơn.
+
+Prioritized Experience Replay sample transition theo priority:
+
+```text
+priority_i ≈ |TD error_i| + small_constant
+```
+
+Lợi ích:
+
+- Học nhanh hơn từ transition “gây ngạc nhiên”.
+- Cải thiện sample efficiency.
+
+Trade-off:
+
+- Sample bias vì không còn uniform.
+- Cần importance sampling weights để điều chỉnh bias.
+- Implementation phức tạp hơn.
+
+<Callout type="warning" title="Priority cao không luôn là dữ liệu tốt">
+TD error cao có thể do transition quan trọng, nhưng cũng có thể do noise, bug reward hoặc outlier. Hãy monitor distribution của TD error và loss.
+</Callout>
+
+---
+
+## 13. Project Bridge: Train a CartPole Agent
+
+Official project Phase 16 easy yêu cầu:
+
+```text
+Train a CartPole Agent
+- Implement Q-learning và PPO trên CartPole-v1
+- So sánh convergence và stability
+- Stack: gymnasium, stable-baselines3, PyTorch
+```
+
+Với value-based side, có hai hướng:
+
+### Hướng A: Discretized Q-learning
+
+CartPole observation continuous:
+
+```text
+[position, velocity, pole_angle, pole_angular_velocity]
+```
+
+Bạn cần discretize thành bins:
+
+```python
+import numpy as np
+
+bins = [
+    np.linspace(-2.4, 2.4, 8),
+    np.linspace(-3.0, 3.0, 8),
+    np.linspace(-0.3, 0.3, 8),
+    np.linspace(-3.0, 3.0, 8),
+]
+
+def discretize(obs):
+    return tuple(int(np.digitize(obs[i], bins[i])) for i in range(len(obs)))
+```
+
+Ưu điểm: thấy rõ Q-table. Nhược điểm: discretization thủ công kém scale.
+
+### Hướng B: DQN
+
+Dùng neural network approximate Q-function. Tự nhiên hơn cho continuous observation.
+
+Deliverables nên có:
+
+- Reward curve qua episodes.
+- Evaluation mean/std qua 10 seeds.
+- Hyperparameter table.
+- Video hoặc logs policy sau training.
+- So sánh với PPO ở bài tiếp theo.
+
+---
+
+## 14. Value-Based Methods vs LLM Alignment
+
+DQN không phải thuật toán chính cho RLHF LLM vì:
+
+- Action space của LLM là vocabulary khổng lồ.
+- Episode là sequence dài.
+- Reward thường ở cuối response.
+- Policy distribution cần được tối ưu trực tiếp.
+- Giữ model gần reference bằng KL quan trọng hơn chọn `argmax Q`.
+
+Nhưng value-based ideas vẫn cực kỳ quan trọng:
+
+- `V(s)` xuất hiện trong critic của Actor-Critic/PPO.
+- Advantage `A(s,a)` giúp giảm variance policy gradient.
+- Bellman/TD error giúp hiểu value estimation.
+- Reward hacking/debugging vẫn giống RL cổ điển.
+
+---
+
+## 15. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Reward không tăng">
+**Triệu chứng:** Episode return nằm ngang dù training lâu.
+
+**Nguyên nhân:** Epsilon decay sai, learning rate quá thấp/cao, state representation kém, reward sparse hoặc bug environment loop.
+
+**Cách khắc phục:** Log epsilon, action distribution, TD error, Q-value range và kiểm tra random baseline trước.
+</Callout>
+
+<Callout type="danger" title="Pitfall 2: Q-values explode">
+**Triệu chứng:** Q-values tăng lên cực lớn, loss NaN hoặc policy chọn action vô lý.
+
+**Nguyên nhân:** Learning rate quá cao, reward scale lớn, target network update sai, thiếu gradient clipping hoặc bootstrapping trên terminal state.
+
+**Cách khắc phục:** Clip reward/gradient, giảm LR, đảm bảo nhân `(1 - done)` trong target, dùng Huber loss và target network.
+</Callout>
+
+<Callout type="warning" title="Pitfall 3: Replay buffer quá nhỏ hoặc quá mới">
+**Triệu chứng:** DQN quên hành vi cũ, reward dao động mạnh.
+
+**Nguyên nhân:** Buffer nhỏ làm data highly correlated hoặc chỉ chứa policy gần đây.
+
+**Cách khắc phục:** Tăng buffer size, warm-up trước training, sample random mini-batch và log age distribution của samples.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Không tách eval policy">
+**Triệu chứng:** Training reward thấp do exploration nhưng greedy policy thật ra tốt, hoặc ngược lại.
+
+**Nguyên nhân:** Đánh giá dựa trên episodes có epsilon exploration.
+
+**Cách khắc phục:** Có evaluation loop riêng với epsilon = 0, fixed seeds và nhiều episodes.
+</Callout>
+
+---
+
+## 16. Cost & Training Unit Economics
+
+| Yếu tố | Tác động |
+|---|---|
+| Environment steps | RL cần nhiều interaction; simulator rẻ nhưng real-world/LLM eval đắt |
+| Replay buffer | Tăng sample efficiency nhưng tốn memory |
+| Target network | Tăng stability, chi phí compute không đáng kể |
+| DQN variants | Cải thiện learning nhưng tăng complexity/debug surface |
+| Multiple seeds | Tốn compute hơn nhưng tránh kết luận sai |
+
+Với game toy, training thêm vài triệu steps rẻ. Với AI agent gọi tool hoặc LLM judge, mỗi step có chi phí thật. Đây là lý do Phase 16 luôn phải gắn RL với unit economics.
+
+---
+
+## Practice exercises
+
+1. Viết Q-learning update và giải thích từng thành phần.
+2. So sánh SARSA và Q-learning bằng ví dụ cliff walking.
+3. Vì sao CartPole không phù hợp với Q-table nguyên bản?
+4. DQN dùng replay buffer để giải quyết vấn đề gì?
+5. Double DQN giảm overestimation như thế nào?
+6. Khi nào Dueling DQN hữu ích?
+
+---
+
+## Knowledge check
+
+1. TD target trong Q-learning là gì?
+2. TD error dương nghĩa là gì?
+3. DQN cần target network vì sao?
+4. Prioritized Experience Replay ưu tiên sample nào?
+5. Vì sao phải nhân `(1 - done)` trong target?
+
+---
+
+## Answer key
+
+1. `r + γ max_a' Q(s',a')`.
+2. Action tốt hơn Q-function hiện tại dự đoán; nên tăng Q-value cho action đó.
+3. Nếu dùng cùng network cho target và prediction, target thay đổi liên tục khiến training không ổn định.
+4. Transition có TD error cao hơn, tức agent đang dự đoán sai nhiều hơn.
+5. Nếu episode đã kết thúc, không có future value ở next state; target chỉ còn reward hiện tại.
+
+---
+
+## Điểm cần nhớ
+
+- Value-based methods học giá trị của action/state rồi chọn action có giá trị cao.
+- Q-learning là off-policy và dựa trên Bellman optimality.
+- Q-table phù hợp state/action rời rạc nhỏ; DQN mở rộng sang state lớn/continuous bằng neural network.
+- Experience replay và target network là hai kỹ thuật ổn định quan trọng của DQN.
+- Double DQN giảm overestimation, Dueling DQN tách state value và advantage, Prioritized Replay tăng sample efficiency.
+- Dù DQN không phải trung tâm RLHF, value/advantage intuition là nền để hiểu Actor-Critic và PPO.
+
+## Next chapter bridge
+
+Value-based methods hỏi: “action này đáng giá bao nhiêu?”. Nhưng với action space lớn như token generation hoặc policy continuous, ta thường muốn tối ưu trực tiếp xác suất chọn action. Chương tiếp theo: **Policy-Based Methods** — nơi chúng ta học REINFORCE, Actor-Critic, PPO và GRPO, cầu nối trực tiếp tới RLHF cho LLM.

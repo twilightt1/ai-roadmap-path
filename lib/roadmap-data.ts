@@ -1695,7 +1695,7 @@ export const phases: Phase[] = [
         items: [
           "Feature engineering queries, pivoting",
           "JSON columns, pgvector vector similarity search",
-          "<-> cosine distance, HNSW/IVFFlat indexes",
+          "pgvector distance operators (<-> L2, <=> cosine), HNSW/IVFFlat indexes",
         ],
       },
       {

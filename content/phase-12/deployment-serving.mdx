@@ -1,164 +1,339 @@
-Đưa một mô hình ngôn ngữ lớn (LLM) từ thư mục máy tính cục bộ lên máy chủ Production không phải là một thao tác `app.run()` đơn giản. Đó là một bài toán kỹ thuật hệ thống khổng lồ (Systems Engineering) giải quyết vấn đề quản lý bộ nhớ GPU (VRAM), xử lý hàng nghìn yêu cầu đồng thời (Concurrency), và tối đa hóa thông lượng (Throughput) để đảm bảo lợi nhuận kinh doanh (Unit Economics). 
+Bạn đã có model hoặc prompt vượt qua eval gates. Nhưng một model tốt trong notebook vẫn có thể thất bại trong production nếu serving layer không xử lý được concurrency, streaming, KV cache, rate limit, timeout và cost/token.
+
+**Model Deployment & Serving** là nơi AI Engineer phải suy nghĩ như backend engineer và systems engineer. Mục tiêu không chỉ là “model trả lời đúng”, mà là trả lời ổn định cho nhiều người dùng, với p95 latency chấp nhận được, throughput cao, quan sát được và rollback được.
 
 ---
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: Sập nguồn vì HuggingFace Pipeline">
-**Bối cảnh:** Startup A huy động vốn thành công và mở đợt thử nghiệm Beta cho 10,000 người dùng truy cập ứng dụng RAG Pháp lý. Kỹ sư backend deploy mô hình LLaMA-3-8B lên máy chủ GPU A100 (80GB VRAM) thông qua thư viện tiêu chuẩn `transformers` bằng hàm `pipeline("text-generation")` gói trong một API của FastAPI.
+<Callout type="danger" title="Báo cáo sự cố: Hugging Face pipeline làm sập launch ngày đầu">
+**Bối cảnh:** Startup legal RAG launch beta cho 10,000 user. Backend deploy LLaMA-3-8B bằng `transformers.pipeline("text-generation")` trong FastAPI trên một GPU A100 80GB.
 
-**Sự cố:** Trong 1 giờ đầu tiên, khi lượng truy cập đạt 50 người dùng/giây (50 RPS), toàn bộ máy chủ bị sập với thông báo lỗi OOM (Out Of Memory). Mặc dù mô hình 8B chỉ chiếm khoảng 16GB VRAM, hệ thống giám sát ghi nhận VRAM đã tăng vọt lên mức 80GB và hệ điều hành tiến hành Kill Process. 
+**Sự cố:** Khi traffic đạt 50 RPS, VRAM tăng lên 80GB và process bị kill. Model weights chỉ khoảng 16GB, nhưng KV cache cho nhiều request đồng thời bị cấp phát lãng phí. Request dài từ RAG làm prefill chậm, API timeout và user retry càng làm tải tăng.
 
-**Hậu quả:** Ứng dụng sập nguồn ngay trong ngày ra mắt.
+1. Dùng thư viện research inference thay vì inference engine production.
+2. Không có continuous batching.
+3. Không giới hạn max input/output tokens.
+4. Không có queue/backpressure/rate limit.
+5. Không đo TTFT, TPOT và cost/token.
+
+**Hậu quả:** Feature bị tắt trong ngày launch, team phải rebuild serving layer bằng vLLM + gateway + streaming.
 </Callout>
 
-Bài học rút ra: Mã nguồn HuggingFace `transformers` được thiết kế cho việc "Thử nghiệm" (Research/Experiment), **không phải** cho "Sản xuất" (Production Serving). Bạn không thể xử lý hàng trăm luồng dữ liệu (concurrent requests) với cơ chế cấp phát bộ nhớ KV Cache tĩnh kiểu cũ. Bạn cần một **Inference Engine** (Động cơ suy luận) chuyên dụng.
+Bài học rút ra: model serving không phải là `model.generate()` bọc bằng HTTP. Production serving cần engine tối ưu bộ nhớ, scheduler, API contract và vận hành như một service thật.
 
 ---
 
-## 2. Architecture Blueprint (Kiến trúc giải pháp)
+## 2. Architecture Blueprint (LLM Serving Gateway + Inference Engine)
 
-Trong một hệ thống Serving chuẩn MLOps, luồng đi của dữ liệu sẽ được quản lý bởi một Inference Server tối ưu hóa ở tầng C++ / CUDA. Dưới đây là kiến trúc chuẩn công nghiệp:
+Một serving stack production thường có nhiều lớp:
 
 ```text
-[ Người dùng / Apps ]  --> HTTP/gRPC Requests (Prompt)
-       │
-       ▼
-[ Load Balancer (Nginx/HAProxy) ]
-       │
-       ▼
-==================== [ vLLM / TGI INFERENCE ENGINE ] ====================
-  │
-  ├── 1. API Server (Tương thích OpenAI format)
-  │
-  ├── 2. Continuous Batching Scheduler 
-  │      (Nhét thêm request mới vào GPU ngay khi có request cũ sinh xong)
-  │
-  └── 3. PagedAttention Memory Manager
-         (Cấp phát VRAM động thành từng "Trang - Pages" như hệ điều hành)
-         ├── Block 1: Token của User A
-         ├── Block 2: Token của User B
-         └── Block 3: Token chung của System Prompt (Được share để tiết kiệm)
-=========================================================================
+[ Client / product app ]
+        │
+        ▼
+[ API Gateway ]
+  - auth
+  - tenant quota
+  - rate limit
+  - request size limit
+        │
+        ▼
+[ LLM Router / Policy Layer ]
+  - model selection
+  - fallback
+  - prompt assembly
+  - safety checks
+        │
+        ▼
+[ Inference Engine: vLLM / TGI / TensorRT-LLM ]
+  - OpenAI-compatible API
+  - continuous batching
+  - KV cache manager
+  - tensor parallelism
+  - streaming
+        │
+        ▼
+[ Observability + Storage ]
+  - traces
+  - token usage
+  - latency
+  - errors
+  - model version
 ```
 
-### Trái tim của vLLM: PagedAttention và Continuous Batching
-
-Tại sao `transformers` lại sập nguồn? Vì nó cấp phát VRAM cho KV Cache một cách **tĩnh (static allocation)**. Nếu bạn giới hạn output là 2048 tokens, nó sẽ "đặt gạch" giữ chỗ liền một cục 2048 chỗ trống trong VRAM, dù người dùng chỉ chat câu "Xin chào" (dài 3 tokens). Khi 50 người truy cập, VRAM bị phân mảnh (fragmentation) và lãng phí cực độ lên tới 80%.
-
-**vLLM (UC Berkeley)** giải quyết bằng cách:
-1. **PagedAttention:** Cắt nhỏ KV Cache thành các "khối" (blocks) nhỏ (ví dụ 16 tokens). Chỉ khi mô hình sinh tới token thứ 17 thì mới cấp phát block tiếp theo. Tiết kiệm tới 80% VRAM dư thừa.
-2. **Continuous Batching:** Không đợi một nhóm (batch) người dùng sinh xong toàn bộ câu văn rồi mới chạy nhóm mới. Nó chèn các yêu cầu mới vào GPU ngay tức thì ở cấp độ từng vòng lặp (iteration level).
+Mục tiêu: tách policy/business logic khỏi inference engine. Engine tập trung tối ưu GPU; gateway tập trung bảo mật, routing và quota.
 
 ---
 
-## 3. Tooling Landscape (Ma trận công cụ)
+## 3. Why `transformers.generate()` Is Not Enough
 
-| Động cơ (Engine) | Nền tảng | Ưu điểm (Pros) | Nhược điểm (Cons) | Khi nào nên dùng |
-|---|---|---|---|---|
-| **vLLM** | Open-source | Tốc độ thông lượng (throughput) cao nhất thị trường. Hỗ trợ PagedAttention và Speculative Decoding. | Cài đặt môi trường đôi khi phức tạp, tiêu tốn VRAM hệ thống cao nếu cấu hình sai. | Lựa chọn **số 1** cho hầu hết các tác vụ Serving LLM mã nguồn mở. |
-| **TGI (Text Generation Inference)** | HuggingFace | Được tối ưu hóa cực tốt cho hệ sinh thái mô hình của Hugging Face. Hỗ trợ FlashAttention mặc định. | Giấy phép (License) bị hạn chế trong thương mại, ít linh hoạt hơn vLLM. | Doanh nghiệp triển khai mô hình trực tiếp từ kho của HF. |
-| **Ollama** | Open-source | Cực kỳ dễ cài đặt, thân thiện với nhà phát triển. Đóng gói sẵn mô hình như Docker. Cạy cục bộ tuyệt vời. | Hiệu năng xử lý đồng thời (concurrency) không mạnh bằng vLLM. Khó tùy biến sâu cấu trúc GPU. | Chạy thử nghiệm Local, xây dựng PoC hoặc chạy trên máy Mac/Edge. |
-| **TensorRT-LLM** | NVIDIA | Hiệu suất ép xung tối đa cho thẻ đồ họa NVIDIA, tối ưu hóa đến cấp độ tập lệnh phần cứng. | Đường cong học tập cực kì dốc (Steep learning curve). Quá trình biên dịch mô hình phức tạp. | Các công ty công nghệ lớn có hàng nghìn GPU cần vắt kiệt từng % sức mạnh. |
+Hugging Face `transformers` rất tốt cho nghiên cứu, evaluation và batch jobs. Nhưng production serving có yêu cầu khác:
+
+| Yêu cầu production | Vì sao khó với generate thủ công |
+|---|---|
+| Concurrent requests | mỗi request có độ dài khác nhau, dễ lãng phí VRAM |
+| Streaming | cần gửi token liên tục và xử lý disconnect |
+| Dynamic batching | phải thêm request mới khi GPU đang chạy |
+| KV cache memory | cần cấp phát động và tránh fragmentation |
+| Backpressure | khi queue đầy phải reject thay vì OOM |
+| Metrics | TTFT, TPOT, tokens/sec, queue time |
+| API compatibility | client muốn OpenAI-like API |
+
+Inference engine như vLLM/TGI giải quyết các vấn đề này ở tầng scheduler và CUDA kernels.
 
 ---
 
-## 4. Implementation Playbook (Thực thi)
+## 4. KV Cache, PagedAttention và Continuous Batching
 
-Hãy cùng triển khai mô hình LLaMA-3 lên môi trường Production với **vLLM** làm Inference Server, tạo ra một API hoàn toàn tương thích với chuẩn định dạng của OpenAI.
+LLM generation có hai giai đoạn:
 
-### Bước 1: Khởi động vLLM Server qua Docker
-Triển khai thông qua Docker là cách an toàn nhất để tránh xung đột thư viện CUDA trên máy chủ. (Bạn cần cài đặt NVIDIA Container Toolkit).
+1. **Prefill:** đọc toàn bộ prompt/input context.
+2. **Decode:** sinh từng token output.
+
+KV cache lưu attention keys/values để không tính lại toàn bộ context ở mỗi token. KV cache có thể chiếm rất nhiều VRAM khi nhiều user đồng thời.
+
+```text
+Request A: prompt 3,000 tokens + output 500 tokens
+Request B: prompt 100 tokens + output 50 tokens
+Request C: prompt 8,000 tokens + output 1,000 tokens
+```
+
+Nếu cấp phát tĩnh theo max length, VRAM bị lãng phí nặng. vLLM dùng PagedAttention để chia KV cache thành blocks nhỏ như memory pages.
+
+```text
+KV blocks:
+[A1][A2][A3] ...
+[B1]
+[C1][C2][C3][C4] ...
+```
+
+Continuous batching cho phép engine thêm request mới vào batch đang chạy khi request cũ kết thúc, thay vì đợi cả batch xong.
+
+| Kỹ thuật | Lợi ích |
+|---|---|
+| PagedAttention | giảm fragmentation và lãng phí KV cache |
+| Continuous batching | tăng GPU utilization và throughput |
+| Prefix caching | tái dùng system prompt/RAG prefix lặp lại |
+| Speculative decoding | tăng tốc decode bằng draft model |
+| Quantization | giảm memory bandwidth và cost |
+
+---
+
+## 5. Serving Metrics You Must Know
+
+| Metric | Ý nghĩa | Vì sao quan trọng |
+|---|---|---|
+| TTFT | Time To First Token | cảm giác app có phản hồi nhanh không |
+| TPOT | Time Per Output Token | tốc độ streaming có mượt không |
+| E2E latency | tổng thời gian request | SLA tổng thể |
+| Queue time | request chờ trước khi vào GPU | dấu hiệu overload |
+| Tokens/sec | throughput engine | cost efficiency |
+| GPU utilization | GPU có được dùng hiệu quả không | capacity planning |
+| KV cache usage | VRAM cache đang gần đầy không | tránh OOM/reject |
+| Error rate | 4xx/5xx/timeouts | reliability |
+
+Không đo TTFT/TPOT thì bạn không biết user đang thấy chậm ở prefill hay decode.
+
+---
+
+## Implementation Playbook: vLLM OpenAI-Compatible Serving
+
+### Bước 1: Chạy vLLM bằng Docker
 
 ```bash
-# Khởi chạy vLLM Server trên cổng 8000
-# Sử dụng mô hình từ HuggingFace (Cần HuggingFace Token nếu mô hình bị khóa)
 docker run --runtime nvidia --gpus all \
-    -v ~/.cache/huggingface:/root/.cache/huggingface \
-    -p 8000:8000 \
-    --ipc=host \
-    vllm/vllm-openai:latest \
-    --model meta-llama/Meta-Llama-3-8B-Instruct \
-    --dtype auto \
-    --api-key "my-secret-key-123" \
-    --gpu-memory-utilization 0.90 \
-    --max-model-len 4096 \
-    --tensor-parallel-size 1
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -p 8000:8000 \
+  --ipc=host \
+  vllm/vllm-openai:latest \
+  --model meta-llama/Meta-Llama-3-8B-Instruct \
+  --dtype auto \
+  --api-key "$VLLM_API_KEY" \
+  --gpu-memory-utilization 0.85 \
+  --max-model-len 8192 \
+  --max-num-seqs 128 \
+  --enable-prefix-caching
 ```
 
-### Bước 2: Viết mã Python để Test kết nối
-Vì vLLM đã cung cấp giao diện tương thích OpenAI, ứng dụng Frontend hoặc Backend của bạn không cần sửa đổi bất kỳ dòng code logic nào, chỉ cần trỏ lại Base URL.
+### Bước 2: Gọi bằng OpenAI SDK
 
 ```python
 from openai import OpenAI
 
-# Trỏ Client OpenAI về máy chủ vLLM Local của bạn
 client = OpenAI(
-    api_key="my-secret-key-123",
+    api_key="local-secret",
     base_url="http://localhost:8000/v1",
 )
 
-response = client.chat.completions.create(
+stream = client.chat.completions.create(
     model="meta-llama/Meta-Llama-3-8B-Instruct",
     messages=[
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "Giải thích PagedAttention trong 2 câu."}
+        {"role": "system", "content": "You are a concise AI assistant."},
+        {"role": "user", "content": "Giải thích KV cache trong 2 câu."},
     ],
-    temperature=0.3,
+    temperature=0.2,
     max_tokens=256,
-    stream=True # Hỗ trợ Streaming theo chuẩn SSE
+    stream=True,
 )
 
-for chunk in response:
-    if chunk.choices[0].delta.content is not None:
-        print(chunk.choices[0].delta.content, end="")
+for chunk in stream:
+    delta = chunk.choices[0].delta.content
+    if delta:
+        print(delta, end="")
 ```
 
+### Bước 3: Thêm gateway guardrails tối thiểu
+
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+MAX_INPUT_CHARS = 20_000
+MAX_OUTPUT_TOKENS = 1024
+
+app = FastAPI()
+
+class ChatRequest(BaseModel):
+    user_id: str
+    message: str
+    max_tokens: int = 512
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    if len(req.message) > MAX_INPUT_CHARS:
+        raise HTTPException(status_code=413, detail="Input too large")
+    if req.max_tokens > MAX_OUTPUT_TOKENS:
+        raise HTTPException(status_code=400, detail="max_tokens too high")
+
+    # call vLLM/OpenAI-compatible endpoint here
+    return {"status": "accepted"}
+```
+
+Engine mạnh vẫn cần gateway chặn input vô hạn, quota abuse và request không hợp lệ.
+
 ---
 
-## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## 6. Routing, Fallback và Model Selection
 
-Dưới đây là các tình huống lỗi kinh điển khi vận hành LLM Serving trong môi trường Production:
+Một product thường không dùng một model duy nhất.
 
-<Callout type="warning" title="Pitfall 1: OOM do tham số '--gpu-memory-utilization'">
-**Triệu chứng:** Máy chủ vLLM không chịu khởi động và ném ra lỗi CUDA Out of Memory ngay từ những giây đầu tiên.
-**Nguyên nhân:** Mặc định, vLLM sử dụng thông số `--gpu-memory-utilization 0.90` (nghĩa là nó sẽ "ăn" sạch 90% VRAM của GPU ngay lập tức để làm phân vùng dự trữ cho KV Cache). Nếu GPU của bạn còn các tiến trình khác đang chạy (ví dụ: màn hình Desktop, hoặc một model nhỏ khác), 90% VRAM là quá lớn.
-**Cách khắc phục (Fix):** Giảm tham số này xuống (ví dụ `--gpu-memory-utilization 0.70`). Hoặc làm sạch GPU trước khi chạy lệnh.
-</Callout>
+```text
+simple FAQ      -> small/cheap model
+complex legal   -> stronger model
+unsafe request  -> refusal / moderation
+provider outage -> fallback provider
+```
 
-<Callout type="warning" title="Pitfall 2: 'Sequence Length' vượt quá giới hạn mô hình">
-**Triệu chứng:** Ứng dụng RAG của bạn đột ngột bị sập (trả về lỗi HTTP 500) khi người dùng tải lên một tài liệu quá dài.
-**Nguyên nhân:** Khởi tạo vLLM không khớp với độ dài ngưỡng (Max Context) thực tế mà mô hình có thể xử lý, hoặc do VRAM không đủ để chứa KV Cache cho số token lớn như vậy.
-**Cách khắc phục (Fix):** Khai báo rõ ràng cờ `--max-model-len`. Nếu mô hình gốc hỗ trợ 8K token, hãy đặt tham số này thành `--max-model-len 8192`. vLLM sẽ tự động tính toán từ chối phục vụ (Fail fast) những request quá dài thay vì bị sập.
-</Callout>
+Router có thể dựa trên:
 
-<Callout type="danger" title="Pitfall 3: Nghẽn băng thông do Tensor Parallelism sai">
-**Triệu chứng:** Bạn thuê 4 chiếc GPU 24GB thay vì 1 chiếc 80GB để chạy mô hình 70B (vì rẻ hơn). Tuy nhiên tốc độ sinh token (Tokens per second) cực kỳ rùa bò.
-**Nguyên nhân:** Tham số `--tensor-parallel-size 4` sẽ chia cắt (shard) mô hình qua 4 GPU. Tuy nhiên, nếu 4 GPU này giao tiếp qua khe cắm PCIe (chậm) thay vì NVLink (siêu nhanh), mỗi bước tính toán đều phải chờ dữ liệu sao chép qua mainboard máy tính.
-**Cách khắc phục (Fix):** Tensor Parallelism chỉ nên áp dụng trên các máy chủ có cầu nối NVLink. Nếu không có, hãy chuyển sang kỹ thuật Pipeline Parallelism hoặc thuê một GPU VRAM khổng lồ đơn lẻ.
-</Callout>
+- tenant tier,
+- task type,
+- prompt length,
+- latency SLA,
+- cost budget,
+- model availability,
+- safety risk.
+
+Fallback cần cẩn thận: nếu model chính bị lỗi vì prompt quá dài, fallback sang model context ngắn hơn sẽ fail tương tự. Fallback policy phải hiểu nguyên nhân lỗi.
 
 ---
 
-## 6. Cost & Performance Unit Economics
+## 7. Deployment Patterns
 
-Đưa LLM lên sản xuất là một bài toán tối ưu chi phí cực hạn. Kỹ sư MLOps theo dõi các chỉ số (Metrics) này như mạng sống:
-
-| Chỉ số SLA | Phân tích SRE (Ý nghĩa kinh tế) | Tối ưu hóa (Optimization) |
+| Pattern | Khi dùng | Trade-off |
 |---|---|---|
-| **TTFT (Time To First Token)** | Thời gian từ khi người dùng ấn "Gửi" đến khi chữ đầu tiên hiện ra. Nếu > 1 giây, người dùng sẽ nghĩ app bị lag. Phụ thuộc vào quá trình Prefill prompt. | Nếu Prompt của hệ thống RAG quá dài, hãy sử dụng tính năng **Prefix Caching** của vLLM. Trí nhớ hệ thống prompt (system instructions) sẽ được lưu tĩnh trên VRAM, giảm 90% TTFT cho các request sau. |
-| **TPOT (Time Per Output Token)** | Tốc độ sinh ra từng chữ (Thường tính bằng ms/token). Nếu tốc độ này chậm hơn tốc độ đọc của con người (khoảng 30 ms/token), trải nghiệm Streaming sẽ bị giật cục. | Tối ưu bằng **Quantization**. Đưa mô hình từ dạng FP16 xuống INT8 (AWQ/GPTQ) hoặc INT4 để giảm một nửa hoặc một phần tư băng thông đọc/ghi bộ nhớ (Memory Bandwidth). |
-| **Cost per 1M Tokens (Chi phí sinh 1 triệu từ)** | Đánh giá tổng chi phí TCO của máy chủ tự Host so sánh với gọi API OpenAI. (Ví dụ: Thuê máy $3/giờ sinh được 10 triệu token -> $0.3/1M Tokens). | Tối đa hóa chỉ số **Throughput (Thông lượng)** bằng cách gửi thật nhiều concurrent requests cùng một lúc (Batching) để vắt kiệt sức mạnh của card đồ họa. |
+| Single GPU server | PoC/internal tool | dễ nhưng khó scale |
+| Multi-GPU tensor parallel | model không fit một GPU | cần NVLink, phức tạp |
+| Multiple replicas | tăng concurrency | cần load balancing và shared weights |
+| Serverless API provider | không muốn vận hành GPU | vendor cost/lock-in |
+| Hybrid provider + self-host | cân bằng cost và reliability | routing/observability phức tạp |
+
+Serving architecture nên bắt đầu đơn giản nhưng để sẵn chỗ cho routing, metrics và rollback.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: OOM ngay khi vLLM khởi động">
+**Triệu chứng:** Engine crash trước khi nhận request.
+
+**Nguyên nhân:** `--gpu-memory-utilization` quá cao hoặc model/context length chiếm gần hết VRAM.
+
+**Fix:** Giảm utilization, giảm `--max-model-len`, tắt process khác trên GPU hoặc dùng quantization/tensor parallel đúng hạ tầng.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Request RAG dài làm TTFT rất cao">
+**Triệu chứng:** Streaming bắt đầu sau 8-15 giây dù decode sau đó nhanh.
+
+**Nguyên nhân:** Prefill prompt quá dài: nhiều chunks, system prompt lặp lại, citation thừa.
+
+**Fix:** Rerank tốt hơn, giới hạn context, prefix caching, prompt compression, hoặc cache answer cho query phổ biến.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Không có backpressure khiến retry storm làm sập GPU">
+**Triệu chứng:** Queue dài, timeout tăng, client retry liên tục và OOM.
+
+**Fix:** Đặt queue limit, trả 429/503 có `Retry-After`, circuit breaker, rate limit theo tenant và autoscaling dựa trên queue time.
+</Callout>
+
+---
+
+## Cost / Latency / Throughput Unit Economics
+
+| Quyết định | Tác động | Tối ưu |
+|---|---|---|
+| Context quá dài | TTFT và KV cache tăng | retrieval tốt hơn, prompt compression |
+| Output quá dài | TPOT tổng và cost tăng | max tokens, concise prompt, stop sequences |
+| GPU nhỏ nhiều chiếc | có thể rẻ nhưng communication chậm | ưu tiên GPU đủ VRAM hoặc NVLink |
+| Quantization INT8/INT4 | giảm VRAM/cost | kiểm tra quality regression |
+| Overprovision replicas | latency ổn nhưng đắt | autoscale theo queue/usage |
+| API provider | không quản hạ tầng | theo dõi vendor cost/token và rate limits |
+
+Serving tốt là bài toán cân bằng user experience và gross margin. Token rẻ nhưng latency tệ vẫn làm sản phẩm thất bại.
+
+---
+
+## Practice exercises
+
+1. Vẽ serving architecture cho chatbot RAG gồm gateway, router, vLLM và observability.
+2. Giải thích TTFT và TPOT bằng ví dụ request RAG dài.
+3. Thiết kế rate limit và max token policy cho Free vs Pro users.
+4. Liệt kê các nguyên nhân OOM khi serving model 8B.
+5. So sánh self-host vLLM với gọi API provider cho một startup nhỏ.
+
+---
+
+## Knowledge check
+
+1. Vì sao `transformers.pipeline` không phù hợp cho high-concurrency serving?
+2. KV cache dùng để làm gì?
+3. PagedAttention giúp tiết kiệm VRAM như thế nào?
+4. TTFT cao thường liên quan đến giai đoạn nào?
+5. Backpressure trong LLM serving là gì?
+
+---
+
+## Answer key
+
+1. Nó thiếu scheduler/memory manager production như continuous batching và KV cache paging.
+2. Lưu keys/values attention để không tính lại toàn bộ context khi sinh token tiếp theo.
+3. Chia KV cache thành blocks/pages nhỏ, cấp phát động theo nhu cầu thay vì đặt chỗ tĩnh lớn.
+4. Prefill: đọc prompt/context đầu vào trước khi sinh token đầu tiên.
+5. Cơ chế giới hạn/điều tiết request khi hệ thống quá tải, ví dụ queue limit, 429, rate limit.
 
 ---
 
 ## Điểm cần nhớ
 
-- Tuyệt đối không dùng thư viện `transformers` chuẩn để serving mô hình cho người dùng thực. Đó là việc của các Inference Engine chuyên dụng như vLLM, TGI, hay TensorRT.
-- Cấu trúc tĩnh của KV Cache sẽ làm lãng phí 80% VRAM trong sản xuất. PagedAttention và Continuous Batching là phát minh cứu rỗi tài chính của ngành Generative AI.
-- Giao diện (Interface) OpenAI đã trở thành chuẩn công nghiệp. Thay vì viết lại toàn bộ code Backend, hãy khởi chạy các engine cục bộ với giao diện tương thích OpenAI API.
-- Tốc độ suy luận (Inference Speed) của LLM thường bị nghẽn ở băng thông đọc bộ nhớ (Memory Bandwidth-bound), không phải tốc độ xử lý tính toán (Compute-bound). 
+- Serving production cần inference engine, không chỉ `model.generate()`.
+- vLLM/TGI tối ưu continuous batching, KV cache và API serving.
+- TTFT, TPOT, queue time và tokens/sec là metrics sống còn.
+- Gateway cần auth, quota, max token, rate limit và safety checks.
+- Serving cost phụ thuộc mạnh vào context length, output length, batching và GPU utilization.
+
+---
 
 ## Next chapter bridge
 
-Mô hình đã có thể xử lý 1,000 yêu cầu đồng thời trên một máy chủ mạnh mẽ. Nhưng điều gì xảy ra nếu hôm nay sản phẩm của bạn viral, lượng truy cập tăng vọt lên 100,000 yêu cầu, và cần tới 100 máy chủ GPU để gánh vác? Cài đặt vLLM thủ công qua Docker trên từng máy sẽ là cơn ác mộng vận hành. Chương tiếp theo: **Containerization & Orchestration** — nơi chúng ta sẽ đưa Docker Containers vào hệ sinh thái Kubernetes (K8s) để hệ thống AI tự động nhân bản (Auto-scaling) và phục hồi khi xảy ra thảm họa phần cứng.
+Bạn đã biết cách chạy một inference service tối ưu trên GPU. Nhưng nếu traffic tăng, bạn cần đóng gói service, nhân bản, rollout, self-healing và autoscale. Chương tiếp theo: **Containerization & Orchestration** — nơi Docker và Kubernetes biến AI service thành hạ tầng có thể triển khai và vận hành ở quy mô lớn.

@@ -1,241 +1,477 @@
-Video là biên giới cuối cùng và cũng là thách thức lớn nhất của Generative AI. Một video 10 giây ở chuẩn 60fps không chỉ là 600 bức ảnh độc lập; nó là một thực thể **không gian-thời gian (spatiotemporal)** đòi hỏi tính nhất quán tuyệt đối về mặt vật lý, chuyển động và bối cảnh. Sự xuất hiện của các mô hình sinh video như Sora (OpenAI) hay Runway Gen-3 không chỉ là bản nâng cấp của Text-to-Image, mà là một bước nhảy vọt về mặt kiến trúc: **Diffusion Transformers (DiT)**.
+Bạn đã học image generation, multimodal understanding và audio pipelines. Video AI là nơi tất cả hội tụ: hình ảnh thay đổi theo thời gian, âm thanh đi kèm, cảnh chuyển động, nhân vật phải giữ identity, vật thể phải tuân thủ logic vật lý và chi phí xử lý tăng theo từng frame.
 
-## Why this matters
-
-Trong thực tế phát triển sản phẩm AI:
-
-- **Chi phí tính toán khổng lồ:** Sinh ra một bức ảnh mất 3 giây, sinh ra một đoạn video 10 giây có thể mất đến vài phút và tiêu tốn hàng USD tiền gọi API. Tối ưu hóa Video AI đòi hỏi sự tính toán cẩn thận về tỷ lệ ROI (Return on Investment).
-- **Thách thức tính nhất quán (Temporal Consistency):** Nếu bạn dùng mô hình sinh ảnh để sinh ra từng frame riêng lẻ, cái áo của nhân vật có thể màu xanh ở giây thứ 1, thành màu đỏ ở giây thứ 2, và có 3 tay ở giây thứ 3. Các mô hình Video AI giải quyết bài toán này bằng cơ chế Attention theo trục thời gian (Temporal Attention).
-- **Phân tích Video (Video Understanding):** VLM (Vision-Language Models) như Gemini 1.5 Pro có context window lên tới 2 triệu tokens, cho phép tải lên toàn bộ một video dài 1 tiếng. Thay vì xem xét dưới dạng file `.mp4`, hệ thống trích xuất video thành chuỗi hình ảnh (Frames Sampling) kết hợp với âm thanh (Audio Transcript) để có thể "xem phim" và trả lời câu hỏi.
-
-<Callout type="danger" title="Video sinh ra không phải là 3D Engine">
-Các mô hình như Sora có thể sinh ra video bay xuyên qua các tòa nhà rất mượt mà giống như một Engine Game 3D. Tuy nhiên, chúng không hề có một "mô hình vật lý" thật bên dưới. Chuyển động là kết quả của việc xấp xỉ xác suất (probabilistic approximation). Do đó, bạn sẽ thường thấy các lỗi vật lý phi logic: một chiếc cốc rơi vỡ rồi tự liền lại, hoặc người đi xuyên qua tường. Đừng tin tưởng Video AI trong các tác vụ yêu cầu mô phỏng kỹ thuật chính xác.
-</Callout>
-
-## Learning objectives
-
-Sau chương này, bạn sẽ có thể:
-
-1. Giải thích sự khác biệt kiến trúc giữa U-Net (thế hệ cũ) và Diffusion Transformers (DiT - thế hệ mới).
-2. Trình bày cơ chế mã hóa Không gian-Thời gian (Spatiotemporal Patches) trong xử lý video.
-3. Phân tích cách mô hình duy trì tính nhất quán thời gian (Temporal Consistency).
-4. Thiết lập kiến trúc RAG Đa phương thức cho dữ liệu Video.
-5. Viết script trích xuất frame hình ảnh từ video (Sampling) để tiết kiệm Token khi gọi API.
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Kiến trúc Transformer (Self-Attention) ở Phase 5.
-- Cơ chế của Diffusion Models (Quá trình Forward/Reverse) ở chương 11.3.
-- Multimodal AI (VLM, LLM) ở chương 11.5.
+Với AI Engineer, Video AI không chỉ là Sora, Runway hay Pika tạo clip đẹp. Production video systems thường là pipeline: ingest video, giới hạn duration, tách audio, lấy transcript, sample keyframes, gọi VLM/video model, tạo summary/evidence, lưu artifact và kiểm soát deepfake/provenance. Nếu làm ngây thơ, video sẽ phá vỡ latency, context window và ngân sách rất nhanh.
 
 ---
 
-## Core intuition: Spatiotemporal Patches (Khối Không gian-Thời gian)
+## 1. The Incident (Tình huống sự cố)
 
-Để máy tính hiểu một video, nó phải học cách đọc không chỉ trục Không gian (Chiều rộng x Chiều cao) mà còn trục Thời gian (Frames).
+<Callout type="danger" title="Báo cáo sự cố: Video summarizer gửi raw MP4 trực tiếp lên VLM">
+**Bối cảnh:** Một team xây tính năng tóm tắt video họp và video training nội bộ. Prototype cho phép user upload MP4 dài 30 phút, backend gửi file trực tiếp lên VLM/video API và đợi summary.
 
-### Cách Text và Image được băm nhỏ:
-- **Text:** Cắt thành từng "Từ/Âm tiết" (Tokens).
-- **Image:** Cắt thành các "Mảng vuông nhỏ" (Image Patches - giống như cách Vision Transformer ViT làm).
+**Sự cố:** Job thường timeout, cost tăng mạnh và summary bỏ sót phần quan trọng vì model sampling nội bộ không phù hợp. Một số video không có transcript nên model chỉ dựa vào frame, hiểu sai nội dung lời nói. Log không ghi frame nào được dùng, nên không audit được câu trả lời.
 
-### Cách Video được băm nhỏ (DiT & Sora):
-Video được cắt thành các **"Khối lập phương" (Spatiotemporal Patches)**.
-Hãy tưởng tượng xếp 60 bức ảnh của 1 giây video chồng lên nhau tạo thành một khối hộp. Sau đó, bạn dùng một con dao cắt khối hộp đó thành những khối lập phương nhỏ hơn. Mỗi khối lập phương nhỏ bé này chứa đựng thông tin về một khu vực hình ảnh và sự biến đổi của khu vực đó qua vài phần trăm của một giây.
+1. Không có duration/size gate trước khi xử lý.
+2. Không tách audio để chạy STT và align transcript.
+3. Không có keyframe/scene sampling có kiểm soát.
+4. Không lưu evidence: timestamp, transcript span, frame IDs.
+
+**Hậu quả:** Feature bị giới hạn chỉ cho video ngắn, team phải rebuild pipeline với STT + keyframes + evidence-based summary.
+</Callout>
+
+Bài học rút ra: video understanding production không nên “ném raw video vào model”. Hãy biến video thành các artifact có kiểm soát: transcript, keyframes, scenes, timestamps và evidence.
+
+---
+
+## 2. Architecture Blueprint (Video Understanding & Generation Pipeline)
+
+Một pipeline video production cần tách ingest, sampling, reasoning và storage:
 
 ```text
-       Video (T frames x H height x W width)
-                   │
-                   ▼
-     Cắt thành các Khối Lập Phương (Spatiotemporal Patches)
-                   │
-                   ▼
-      [ Khối 1 ]  [ Khối 2 ]  ...  [ Khối N ]
-           │          │               │
-           └──────────┼───────────────┘
-                      ▼
-         [ MẠNG DIFFUSION TRANSFORMER (DiT) ]
+[ Video upload / URL ]
+  - mp4/mov/webm
+  - metadata
+        │
+        ▼
+[ Ingest gateway ]
+  - file type validation
+  - duration/size limit
+  - virus scan
+  - tenant policy
+        │
+        ▼
+[ Preprocessing ]
+  - extract audio
+  - run STT transcript
+  - extract frames
+  - scene/keyframe detection
+        │
+        ▼
+[ Context builder ]
+  - transcript chunks with timestamps
+  - selected keyframes
+  - scene summaries
+  - user question/task
+        │
+        ▼
+[ VLM / video model ]
+  - summary
+  - QA
+  - event detection
+  - storyboard/generation prompt
+        │
+        ▼
+[ Verification + safety ]
+  - evidence timestamps
+  - hallucination checks
+  - synthetic/deepfake policy
+  - human review if high risk
+        │
+        ▼
+[ Storage + monitoring ]
+  - video hash
+  - frame IDs
+  - transcript version
+  - model/version/cost/latency
 ```
 
-Nhờ cách cắt này, mô hình Transformer có thể áp dụng cơ chế Attention để học mối liên hệ: "Đám mây ở góc trái ở frame 1" sẽ tương quan thế nào với "Đám mây ở góc trái ở frame 5".
+Mục tiêu: giảm video thành các đơn vị thông tin nhỏ hơn nhưng vẫn đủ bằng chứng để trả lời chính xác và audit được.
 
 ---
 
-## Từ U-Net đến Diffusion Transformers (DiT)
+## 3. Spatiotemporal Patches và Temporal Consistency
 
-Thế hệ sinh ảnh và video đầu tiên (như Stable Diffusion 1.5 hay các mô hình video thuở sơ khai) dựa trên kiến trúc **U-Net** (Dùng mạng tích chập CNN để thu nhỏ và phóng to dữ liệu).
+Video không phải là tập ảnh độc lập. Một video có ba trục:
 
-Sora (OpenAI) đánh dấu sự chuyển dịch sang **DiT (Diffusion Transformers)**:
-- Bỏ hoàn toàn U-Net.
-- Giữ lại cơ chế toán học Thêm/Khử nhiễu của mô hình Diffusion.
-- Thay lõi bên trong bằng mạng Transformer khổng lồ (giống với GPT-4).
+```text
+time x height x width
+```
 
-**Tại sao lại đổi sang Transformer?**
-Luật tỷ lệ (Scaling Laws). U-Net khó cải thiện chất lượng khi tăng kích thước dữ liệu huấn luyện. Ngược lại, Transformer là vị vua của Scaling: Bạn càng cho nó nhiều data, nhiều layer, nhiều compute, chất lượng video sinh ra càng tiệm cận thế giới thực một cách tuyến tính.
+Mô hình video hiện đại học trên các khối không gian-thời gian:
+
+```text
+[ Frame 1 ][ Frame 2 ][ Frame 3 ] ...
+      │        │        │
+      └────────┴────────┘
+      spatiotemporal patch
+```
+
+Một spatiotemporal patch chứa:
+
+- vùng không gian của ảnh,
+- chuyển động qua vài frame,
+- tương quan giữa vật thể và bối cảnh theo thời gian.
+
+### Temporal consistency
+
+Temporal consistency nghĩa là:
+
+- nhân vật không đổi mặt giữa frame,
+- áo không đổi màu vô lý,
+- vật thể không tự biến mất,
+- chuyển động liên tục,
+- camera movement hợp lý,
+- audio/transcript khớp cảnh nếu có.
+
+| Failure | Ví dụ |
+|---|---|
+| Identity drift | Nhân vật đổi mặt/tóc giữa các giây |
+| Object popping | Vật thể xuất hiện/biến mất đột ngột |
+| Physics artifact | Cốc vỡ rồi tự lành |
+| Motion inconsistency | Tay/chân chuyển động sai sinh học |
+| Scene mismatch | Transcript nói một thứ, frame thể hiện thứ khác |
 
 ---
 
-## RAG Đa phương thức cho Video (Video Understanding)
+## 4. U-Net vs Diffusion Transformers (DiT)
 
-Việc yêu cầu một VLM như GPT-4o hay Gemini xem một đoạn video dài 10 phút tốn một lượng Token khổng lồ và độ trễ có thể lên tới hàng phút. 
+Các hệ diffusion đời đầu dùng U-Net làm denoiser. Video generation hiện đại ngày càng chuyển sang Transformer-style architectures vì scaling tốt hơn.
 
-Trong sản xuất, Kỹ sư AI giải quyết bài toán "Hỏi đáp trên Video" bằng kỹ thuật **Frames Sampling (Lấy mẫu khung hình)**:
+| Kiến trúc | Điểm mạnh | Giới hạn |
+|---|---|---|
+| U-Net diffusion | Hiệu quả với image, spatial inductive bias tốt | Khó scale temporal reasoning dài |
+| 3D U-Net / temporal U-Net | Thêm temporal layers | Memory tăng mạnh theo frames |
+| DiT / video transformers | Scaling tốt với data/compute, attention linh hoạt | Rất đắt, cần dữ liệu và hạ tầng lớn |
 
-1. **Audio Extraction:** Tách luồng âm thanh ra khỏi Video (.mp4), chạy qua Whisper để lấy nội dung Transcript.
-2. **Keyframe Sampling:** Thay vì lấy 60 frames/giây (quá dư thừa và tốn kém), bạn chỉ lấy 1 Frame mỗi giây, hoặc dùng thuật toán phát hiện chuyển cảnh (Scene Detection) để chỉ chụp ảnh khi màn hình thay đổi góc quay.
-3. **Context Packing:** Gửi đoạn Transcript (Text) và 10-20 Keyframes (Images) lên LLM. Mô hình có đủ thông tin cả về tiếng (nhân vật nói gì) và hình (nhân vật đang làm gì) để trả lời truy vấn của người dùng.
+DiT intuition:
+
+```text
+video -> patches/tokens -> transformer blocks -> denoised video latent
+```
+
+Tương tự LLM học sequence token text, DiT học sequence token không gian-thời gian. Điều này giúp mô hình học quan hệ xa hơn trong video: cảnh đầu ảnh hưởng cảnh sau, camera path, motion và object persistence.
+
+<Callout type="warning" title="Video model không phải physics engine">
+Video generation có thể trông như mô phỏng thế giới, nhưng nó vẫn là mô hình xác suất học từ dữ liệu. Đừng dùng synthetic video để kiểm chứng kỹ thuật, an toàn robot hoặc mô phỏng vật lý chính xác nếu không có simulator chuyên dụng.
+</Callout>
 
 ---
 
-## Implementation lab: Video Sampling & VLM Analysis
+## 5. Video Generation APIs: Sora, Runway, Pika-style Workflows
 
-**Nhiệm vụ:** Viết một script Python sử dụng `OpenCV` để trích xuất 1 khung hình mỗi giây từ một đoạn video ngắn, và đóng gói chúng để chuẩn bị gửi lên VLM API (như GPT-4o).
+Video generation product thường có workflow khác image generation vì mỗi re-roll đắt hơn nhiều.
+
+| Step | Product control |
+|---|---|
+| Prompt/storyboard | mô tả cảnh, nhân vật, camera, motion |
+| Duration | 4s, 8s, 15s, longer if supported |
+| Aspect ratio | 16:9, 9:16, 1:1 |
+| Reference image/video | giữ identity/style |
+| Motion strength | mức chuyển động |
+| Seed/variation | tái tạo hoặc tạo biến thể |
+| Review/re-roll | preview trước khi export |
+
+Prompt video nên mô tả theo thời gian:
+
+```text
+A product shot of a matte black smartwatch on a reflective table.
+Camera slowly pushes in from a wide shot to a close-up.
+Soft blue studio lighting, minimal background.
+The watch screen turns on at second 3, showing a heart rate animation.
+No text overlays, no extra objects.
+```
+
+Production constraints:
+
+- Queue time có thể tính bằng phút.
+- Re-roll cost cao.
+- Output có thể vi phạm brand/safety.
+- Generated video cần provenance/watermark.
+- User cần preview và accept/reject workflow.
+
+---
+
+## 6. Video Understanding: Keyframes + Transcript + Multimodal RAG
+
+Video understanding thực dụng thường không cần mọi frame.
+
+### Keyframe sampling
+
+Các chiến lược sampling:
+
+| Strategy | Khi dùng | Trade-off |
+|---|---|---|
+| 1 frame/second | Video ngắn, motion đều | Có thể miss event nhanh |
+| Scene detection | Video có cuts rõ | Cần thuật toán detect tốt |
+| Uniform N frames | Summary nhanh | Bỏ qua chi tiết giữa video |
+| Motion-based sampling | Action/sports/security | Compute preprocessing cao |
+| Query-focused sampling | QA cụ thể | Cần retrieval/index trước |
+
+### Transcript alignment
+
+Audio transcript thường chứa nhiều thông tin hơn frames với meeting, lecture, news, interview.
+
+```text
+[00:00-00:12] Speaker: Today we discuss Q3 revenue.
+[frame_000] slide title: Q3 Revenue Review
+```
+
+Kết hợp tốt nhất:
+
+```text
+answer = reason(transcript spans + keyframes + timestamps)
+```
+
+### Video RAG
+
+Index video thành scenes:
+
+```text
+scene_id
+start_time
+end_time
+transcript_text
+keyframe_paths
+visual_embedding
+text_embedding
+summary
+```
+
+Khi user hỏi, retrieve scenes liên quan rồi gọi VLM/LLM với context nhỏ hơn.
+
+---
+
+## 7. Safety: Synthetic Video, Deepfake và Provenance
+
+Video là media có tác động xã hội mạnh. Safety không thể thêm sau cùng.
+
+Risk areas:
+
+- Deepfake người thật.
+- Political misinformation.
+- Non-consensual face/body manipulation.
+- Brand/IP misuse.
+- Synthetic evidence giả.
+- Child safety và violent content.
+- Internal video chứa dữ liệu nhạy cảm.
+
+Controls:
+
+1. Input moderation cho prompt/reference video/image.
+2. Consent checks cho người thật hoặc voice/face cloning.
+3. Output moderation và human review cho high-risk cases.
+4. Watermark/provenance metadata.
+5. Audit log: prompt, references, model, seed, user, timestamp.
+6. Clear user disclosure nếu video synthetic.
+
+<Callout type="danger" title="Generated video cần provenance">
+Một ảnh synthetic đã có rủi ro. Một video synthetic có thể được dùng như “bằng chứng” giả. Hãy lưu metadata, watermark nếu khả dụng và policy hiển thị rõ nội dung được AI tạo.
+</Callout>
+
+---
+
+## 8. Implementation Playbook: Keyframe Extraction + Payload Builder
+
+Skeleton dưới đây trích xuất keyframes đều theo thời gian và tạo payload có timestamp.
 
 ```python
-import cv2
 import base64
+import cv2
 import math
+from dataclasses import dataclass
 
-def extract_keyframes_from_video(video_path, frames_per_second=1):
-    """
-    Trích xuất khung hình từ video để tiết kiệm Token.
-    frames_per_second: Số ảnh muốn lấy ra trong mỗi giây.
-    """
-    video = cv2.VideoCapture(video_path)
-    
-    # Lấy thông số FPS thực tế của Video
-    fps = video.get(cv2.CAP_PROP_FPS)
-    total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration_seconds = total_frames / fps
-    
-    print(f"Video Info: {duration_seconds:.2f} seconds, {fps} FPS")
-    
-    # Tính toán khoảng cách (bước nhảy) giữa các frame cần trích xuất
-    frame_interval = math.floor(fps / frames_per_second)
-    
-    base64_frames = []
-    current_frame = 0
-    
-    while video.isOpened():
-        success, frame = video.read()
-        if not success:
+
+@dataclass
+class Keyframe:
+    index: int
+    timestamp_sec: float
+    jpeg_base64: str
+
+
+def encode_frame_jpeg(frame, max_side=768, quality=85):
+    height, width = frame.shape[:2]
+    scale = min(1.0, max_side / max(height, width))
+    if scale < 1.0:
+        frame = cv2.resize(frame, (int(width * scale), int(height * scale)))
+
+    ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    if not ok:
+        raise RuntimeError("jpeg_encoding_failed")
+    return base64.b64encode(buffer).decode("utf-8")
+
+
+def extract_keyframes(video_path: str, frames_per_second=1, max_frames=60):
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps
+
+    interval = max(1, int(fps / frames_per_second))
+    keyframes = []
+    frame_idx = 0
+
+    while cap.isOpened() and len(keyframes) < max_frames:
+        ok, frame = cap.read()
+        if not ok:
             break
-            
-        # Chỉ trích xuất frame nếu chạm tới khoảng cách nhảy
-        if current_frame % frame_interval == 0:
-            # Resize frame để tiết kiệm dung lượng gửi qua API (Ví dụ: bóp về 512px)
-            height, width, _ = frame.shape
-            scale = 512 / max(height, width)
-            resized_frame = cv2.resize(frame, (int(width * scale), int(height * scale)))
-            
-            # Encode frame sang chuỗi Base64
-            _, buffer = cv2.imencode(".jpg", resized_frame)
-            base64_frames.append(base64.b64encode(buffer).decode("utf-8"))
-            
-        current_frame += 1
-        
-    video.release()
-    print(f"Đã trích xuất {len(base64_frames)} keyframes. Sẵn sàng gửi API.")
-    return base64_frames
 
-# ----------------- Usage -----------------
-# frames = extract_keyframes_from_video("sample_video.mp4", frames_per_second=1)
+        if frame_idx % interval == 0:
+            keyframes.append(
+                Keyframe(
+                    index=frame_idx,
+                    timestamp_sec=frame_idx / fps,
+                    jpeg_base64=encode_frame_jpeg(frame),
+                )
+            )
+        frame_idx += 1
 
-# Xây dựng payload cho GPT-4o (Pseudocode)
-# content_payload = [{"type": "text", "text": "Hãy tóm tắt đoạn video này."}]
-# for frame in frames:
-#     content_payload.append({
-#         "type": "image_url",
-#         "image_url": {"url": f"data:image/jpeg;base64,{frame}", "detail": "low"}
-#     })
+    cap.release()
+    return {"duration_sec": duration, "fps": fps, "keyframes": keyframes}
+
+
+def build_vlm_payload(video_summary_task: str, transcript: str, keyframes: list[Keyframe]):
+    content = [
+        {
+            "type": "text",
+            "text": (
+                "Use the transcript and keyframes as evidence. "
+                "Return timestamps for important claims.\n\n"
+                f"Task: {video_summary_task}\n\nTranscript:\n{transcript}"
+            ),
+        }
+    ]
+
+    for frame in keyframes:
+        content.append({"type": "text", "text": f"Keyframe at {frame.timestamp_sec:.1f}s"})
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{frame.jpeg_base64}",
+                "detail": "low",
+            },
+        })
+
+    return content
 ```
+
+Production cần thêm:
+
+- Duration/size gate trước khi decode video.
+- Scene detection thay vì uniform sampling cho video dài.
+- Audio extraction + STT transcript.
+- Storage cho keyframes với IDs thay vì chỉ base64.
+- Evidence schema gồm timestamps và frame IDs.
+- Không log raw frames/base64.
 
 ---
 
-## Common mistakes & debugging checklist
+## 9. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
-<Callout type="warning" title="Mistake 1: Gửi Raw Video File lên API trực tiếp">
-Việc truyền một file MP4 nặng 500MB qua HTTP request đến các API mô hình thường bị thất bại do giới hạn Payload Size. Ngay cả khi thành công, chi phí token tính theo số lượng frame ẩn sẽ vượt ngân sách kiểm soát. Hãy luôn có Pipeline bóc tách và Sampling ở Backend.
+<Callout type="warning" title="Pitfall 1: Upload raw MP4 trực tiếp lên model">
+**Triệu chứng:** Timeout, payload quá lớn, cost không dự đoán được.
+
+**Nguyên nhân:** Không có preprocessing, duration gate hoặc sampling strategy.
+
+**Cách khắc phục:** Tách transcript/keyframes, giới hạn duration, scene sampling và chỉ gửi context liên quan.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: Thiếu Transcript (Âm thanh)">
-Nếu chỉ gửi các hình ảnh (Keyframes) cho VLM, mô hình sẽ không biết các nhân vật đang nói gì. Đối với các video như tin tức, bản tin tài chính hay bài giảng, Transcript (được tạo bởi Whisper) chứa 80% giá trị thông tin. Luôn kết hợp Audio + Vision.
+<Callout type="warning" title="Pitfall 2: Không dùng transcript">
+**Triệu chứng:** Summary bỏ sót nội dung chính của meeting/lecture/news.
+
+**Nguyên nhân:** Chỉ gửi keyframes, mất thông tin lời nói.
+
+**Cách khắc phục:** Extract audio, chạy STT, align transcript với timestamps và gửi cùng keyframes.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: Đánh giá quá cao khả năng mô phỏng vật lý của Video AI">
-Khi dùng API sinh video (Text-to-Video) cho các mục đích thương mại, hãy chuẩn bị tinh thần phải "sinh lại" (re-roll) hàng chục lần mới ra được một cảnh quay hoàn hảo. Tỉ lệ thất bại (vật thể tan chảy, biến dạng) vẫn rất cao. Luôn thiết kế UX cho phép người dùng xem trước và tạo lại.
+<Callout type="warning" title="Pitfall 3: Sampling rate quá thấp">
+**Triệu chứng:** Model miss sự kiện ngắn như tai nạn, gesture, slide chuyển nhanh.
+
+**Nguyên nhân:** Uniform sampling quá thưa cho video motion cao.
+
+**Cách khắc phục:** Scene/motion-based sampling, query-focused retrieval hoặc tăng fps sampling cho segment quan trọng.
 </Callout>
 
-### Checklist Xử lý Video:
-- [ ] Video đầu vào đã được giới hạn thời lượng (ví dụ < 3 phút) để bảo vệ hạ tầng máy chủ chưa?
-- [ ] Đã tách luồng và chạy Speech-to-Text để lấy văn bản phụ đề chưa?
-- [ ] Tham số Sampling Rate (số ảnh / giây) đã được điều chỉnh hợp lý chưa? (Video hành động nhanh cần nhiều ảnh hơn video bài giảng tĩnh).
-- [ ] Các ảnh tĩnh được trích xuất có được resize nhỏ xuống (để áp dụng `detail: low`) nhằm tiết kiệm chi phí Token không?
+<Callout type="warning" title="Pitfall 4: Overtrust synthetic video physics">
+**Triệu chứng:** Team dùng video generated để suy luận kỹ thuật hoặc safety-critical simulation.
+
+**Nguyên nhân:** Nhầm video model với physics simulator.
+
+**Cách khắc phục:** Dùng simulator/domain model cho validation kỹ thuật; coi generated video là creative artifact, không phải bằng chứng vật lý.
+</Callout>
+
+---
+
+## 10. Cost & Video Unit Economics
+
+Video là media đắt vì chi phí nhân theo thời lượng, resolution và frames.
+
+| Cost driver | Ví dụ | Control |
+|---|---|---|
+| Upload/storage | MP4 lớn, keyframes, transcripts | duration cap, compression, retention |
+| Decode/preprocess | frame extraction, STT | async workers, scene sampling |
+| VLM/video model calls | image tokens + transcript tokens | keyframe limit, chunking, RAG |
+| Video generation | seconds of output, resolution | preview, storyboard, re-roll budget |
+| Human review | deepfake/high-risk videos | risk tiering |
+| CDN/export | playback and downloads | lifecycle policy |
+
+Formula intuition:
+
+```text
+understanding_cost ≈ STT_minutes_cost
+                   + num_keyframes * vision_cost_per_frame
+                   + transcript_tokens_cost
+                   + storage_cost
+
+generation_cost ≈ output_seconds * resolution_factor * rerolls_per_accepted_clip
+```
+
+Production takeaway: video cost optimization chủ yếu là chọn đúng phần của video để model nhìn. Sampling thông minh rẻ hơn gửi mọi frame.
 
 ---
 
 ## Practice exercises
 
-1. **Phân tích Kiến trúc:** Sự kết hợp giữa cơ chế Diffusion và kiến trúc Transformer (DiT) giải quyết nhược điểm gì của kiến trúc U-Net truyền thống trong bài toán sinh video?
-2. **Kỹ thuật Scene Detection:** Thay vì trích xuất 1 ảnh mỗi giây, hãy nghiên cứu và viết giả mã (pseudo-code) cho thuật toán Histogram Difference để chỉ trích xuất ảnh khi video chuyển sang một cảnh quay hoàn toàn mới.
-3. **Quản lý Ngân sách:** Giả sử bạn gửi 10 frame hình (ảnh độ phân giải thấp) và 2,000 token văn bản transcript của một đoạn video dài 1 phút lên GPT-4o. Hãy tính toán ước lượng số lượng token đã bị tiêu thụ và chi phí ước tính.
+1. Thiết kế schema `video_scene` gồm transcript span, keyframe IDs, embeddings và summary.
+2. So sánh uniform sampling, scene detection và motion-based sampling cho video bài giảng, thể thao và camera an ninh.
+3. Viết release policy cho feature tạo video synthetic có người thật/reference image.
+4. Tính cost tương đối khi tăng sampling từ 1 frame/second lên 4 frames/second cho video 5 phút.
+5. Thiết kế eval set cho video summarizer gồm meeting, lecture, product demo và noisy video.
 
 ---
 
 ## Knowledge check
 
-1. Một Spatiotemporal Patch (Khối Không gian-Thời gian) trong mô hình sinh video chứa những thông tin gì?
-2. Việc sử dụng mạng Transformer (như trong Sora) thay cho U-Net mang lại lợi thế gì nhất về mặt phát triển mô hình dài hạn?
-3. Tính nhất quán thời gian (Temporal Consistency) trong sinh video là khái niệm gì?
-4. Tại sao kỹ thuật Keyframe Sampling lại là phương pháp thực tế nhất để áp dụng LLM cho bài toán hiểu video dài?
-5. Rủi ro phổ biến nhất khi quan sát chuyển động vật lý do Video AI (như Sora) sinh ra là gì?
+1. Spatiotemporal patch chứa thông tin gì?
+2. Temporal consistency trong video generation là gì?
+3. Vì sao transcript quan trọng với video understanding?
+4. DiT khác U-Net diffusion ở hướng scaling như thế nào?
+5. Vì sao generated video cần provenance/watermark/audit metadata?
 
 ---
 
 ## Answer key
 
-1. Nó là một khối lập phương dữ liệu, chứa cả thông tin không gian (các pixel của một khu vực nhỏ) và thông tin thời gian (sự thay đổi của khu vực đó qua một vài khung hình liên tiếp).
-2. Tận dụng được Luật tỷ lệ (Scaling Laws): Khả năng tăng chất lượng tuyến tính và không có điểm dừng khi cung cấp thêm sức mạnh tính toán (Compute) và dữ liệu (Data), điều mà U-Net khó làm được do giới hạn kiến trúc.
-3. Là khả năng giữ cho các vật thể, nhân vật, bối cảnh vật lý không bị biến dạng, đổi màu, hay tự nhiên biến mất một cách phi logic giữa khung hình trước và khung hình sau.
-4. Vì tải toàn bộ 60 khung hình/giây của một video dài sẽ làm cạn kiệt Context Window (cửa sổ ngữ cảnh), tốn chi phí khổng lồ và độ trễ quá cao, trong khi phần lớn các khung hình liền kề chứa thông tin trùng lặp gần như 99%.
-5. Khả năng mô phỏng vật lý kém, dẫn đến các chuyển động phi logic như vật thể đi xuyên qua nhau, kính vỡ tự lành, hoặc sinh vật có cấu trúc sinh học sai lệch (ví dụ: mọc thêm chân).
-
----
-
-## Mini-project: Video Summarization Pipeline
-
-**Nhiệm vụ:** Viết kịch bản luồng dữ liệu (Data Flow) và mã giả cho một hệ thống tạo tóm tắt Video tự động (Auto-Summarization).
-
-**Yêu cầu đầu ra:**
-- Quá trình bắt đầu khi người dùng dán một đường link MP4.
-- Luồng 1: Tải video, tách file `.wav`, gửi qua Whisper API lấy Text Transcript.
-- Luồng 2: Trích xuất 10 ảnh đại diện (Keyframes) dàn đều từ đầu đến cuối video, nén thành Base64.
-- Gom Luồng 1 và Luồng 2 vào một Payload JSON gửi lên GPT-4o API với Prompt: "Dựa vào phụ đề và hình ảnh, hãy viết tóm tắt video thành 3 gạch đầu dòng."
-- Đánh giá kiến trúc xử lý lỗi nếu một trong hai luồng (Audio hoặc Image) gặp sự cố Timeout.
+1. Nó chứa thông tin không gian của một vùng ảnh và thông tin thời gian về cách vùng đó thay đổi qua nhiều frame.
+2. Là khả năng giữ identity, object, motion, scene và logic liên tục giữa các frame thay vì drift hoặc artifact.
+3. Vì nhiều video, đặc biệt meeting/lecture/news, chứa phần lớn thông tin trong lời nói; chỉ nhìn keyframes sẽ bỏ sót nội dung.
+4. DiT biến video/latent thành token patches và dùng Transformer attention, thường scale tốt hơn với data/compute lớn và quan hệ thời gian dài.
+5. Vì synthetic video có thể bị dùng làm bằng chứng giả hoặc deepfake; provenance giúp disclosure, audit, moderation và incident response.
 
 ---
 
 ## Điểm cần nhớ
 
-- Xử lý Video AI thực chất là bài toán xử lý chuỗi Hình ảnh 2D tĩnh xen kẽ với chiều thời gian, yêu cầu tài nguyên lưu trữ và tính toán khổng lồ.
-- Các mô hình sinh Video tiên tiến nhất (DiT) mượn cơ chế học của Diffusion kết hợp với bộ não Transformer để tối đa hóa định luật Scaling Laws.
-- Trong môi trường sản xuất, bạn không cấp cho AI xem Video trực tiếp; bạn cung cấp cho chúng bản ghi âm (Transcript) và các bức ảnh trích xuất ngắt quãng (Keyframes) để cân bằng giữa Độ chính xác và Chi phí Token.
+- Video AI là bài toán không gian-thời gian, không phải chuỗi ảnh độc lập.
+- Production video understanding nên dùng transcript + keyframes + timestamps + evidence.
+- DiT/video transformers giúp scale temporal reasoning nhưng rất đắt.
+- Video generation cần storyboard, preview, re-roll budget và safety/provenance controls.
+- Sampling strategy quyết định accuracy, latency và cost của video understanding.
+- Không dùng generated video như physics simulator hoặc bằng chứng đáng tin nếu không có validation ngoài model.
 
----
+## Tổng kết Phase 11 (Phase 11 Wrap-up)
 
-## Phase 11 wrap-up
+Bạn vừa hoàn thành chuyên đề **Generative AI (Beyond Text)**:
 
-Bạn đã hoàn thành toàn bộ chuyên đề **Generative AI (Beyond Text)**:
+1. **Variational Autoencoders (VAEs)** — bạn hiểu latent space, ELBO, KL divergence, reparameterization trick và vì sao latent compression là nền tảng cho Stable Diffusion.
+2. **Generative Adversarial Networks (GANs)** — bạn học adversarial training, Generator/Discriminator, mode collapse, DCGAN/StyleGAN intuition và cách đánh giá fidelity/diversity.
+3. **Diffusion Models** — bạn nắm forward/reverse process, DDPM/DDIM, score matching, CFG, Latent Diffusion, ControlNet và sampling unit economics.
+4. **Text-to-Image APIs** — bạn thiết kế async image generation pipeline với moderation, style controls, image-to-image, asset storage và cost guardrails.
+5. **Multimodal AI** — bạn xây VLM/document/image QA systems với CLIP, VLM architecture, multimodal RAG, structured extraction và image prompt-injection defenses.
+6. **Audio AI** — bạn hiểu STT, TTS, voice cloning, VAD, streaming voice agents, latency budget và consent/governance cho giọng nói.
+7. **Video AI** — bạn xử lý video bằng spatiotemporal thinking, keyframe sampling, transcript alignment, DiT intuition, synthetic video safety và provenance.
 
-1. **VAEs:** Khởi đầu của AI sinh thành bằng không gian ẩn liên tục, đặt nền móng toán học cho việc tạo mẫu ngẫu nhiên (Reparameterization Trick).
-2. **GANs:** Tăng cường độ chân thực và sắc nét tuyệt đối thông qua trò chơi đối kháng Minimax, đối mặt với sự bất ổn (Mode Collapse).
-3. **Diffusion Models:** Đỉnh cao của nghệ thuật phá hủy và tái tạo dữ liệu, đánh đổi độ trễ suy luận lấy khả năng sinh ảnh xuất sắc và dễ kiểm soát (CFG).
-4. **Text-to-Image APIs:** Làm chủ quy trình vận hành sản xuất thực tế bằng kiến trúc Bất đồng bộ (Async, Polling, Webhooks).
-5. **Multimodal AI:** Mang thế giới hình ảnh và ngôn ngữ về chung một ngôn ngữ toán học bằng CLIP và mạng chiếu LLaVA, đưa RAG lên không gian đa phương thức.
-6. **Audio AI:** Xử lý âm thanh thời gian thực, xóa bỏ độ trễ bằng kỹ thuật Streaming và VAD.
-7. **Video AI:** Hiểu cách xử lý khối không gian - thời gian (DiT) và kiến trúc tối ưu (Keyframe Sampling) cho hệ thống thấu hiểu Video.
+Phase 11 biến generative AI ngoài text từ “demo media đẹp” thành một tập engineering workflows: latent representations, sampling parameters, async jobs, multimodal evidence, streaming latency, safety policies, asset lifecycle và unit economics.
 
 ## Next phase bridge
 
-Chúng ta đã sở hữu mọi công nghệ, từ LLM, RAG, Agents, cho đến Đa phương thức. Câu hỏi cuối cùng và quan trọng nhất của mọi Kỹ sư AI là: Làm sao để đưa toàn bộ mớ hỗn độn này lên môi trường thực tế (Cloud) phục vụ hàng triệu người dùng một cách ổn định, tự động hóa và an toàn? Chương tiếp theo: **Phase 12 - MLOps, LLMOps & Production Systems** — Docker, Kubernetes, CI/CD, hệ thống giám sát (Monitoring) và đường ống phân phối AI chuyên nghiệp.
+Bạn đã có đủ building blocks để tạo, hiểu và vận hành text, image, audio, video và multimodal AI. Nhưng để phục vụ người dùng thật, các pipeline này phải được containerize, deploy, monitor, scale, rollback và bảo mật. Chương tiếp theo: **Phase 12 - MLOps, LLMOps & Production Systems** — nơi chúng ta đưa AI systems lên production với Docker, Kubernetes, CI/CD, observability, model registry và operational discipline.

@@ -1,159 +1,386 @@
-Trong thế giới kỹ nghệ phần mềm truyền thống, System Design (Thiết kế hệ thống) là nghệ thuật đánh đổi giữa độ trễ (latency), thông lượng (throughput) và tính nhất quán (consistency). Nhưng trong AI System Design, bạn phải đối mặt với hai biến số hoàn toàn mới và khốc liệt hơn: **Tính bất định (Non-determinism)** của mô hình và **Chi phí suy luận (Inference Cost) khổng lồ**. Một hệ thống AI được thiết kế tồi không chỉ chạy chậm, nó còn có thể khiến công ty phá sản chỉ sau một đêm.
+Phase 12 đã giúp bạn đưa AI system vào production: data versioning, experiment tracking, training infrastructure, eval gates, serving, cloud, monitoring, CI/CD và security. Phase 13 chuyển sang năng lực senior hơn: **thiết kế hệ thống AI end-to-end** trước khi viết code.
+
+AI System Design không chỉ là vẽ vài box “Frontend → Backend → LLM”. Bạn phải làm rõ yêu cầu sản phẩm, chọn pattern AI phù hợp, quyết định model placement, thiết kế data flow, kiểm soát latency/cost, có fallback khi provider lỗi, có eval/monitoring và có guardrails. Nếu thiếu framework, hệ thống AI có thể chạy demo tốt nhưng sập khi gặp traffic thật.
 
 ---
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: Khởi nghiệp thất bại vì 'Scale' quá nhanh">
-**Bối cảnh:** Startup X ra mắt một ứng dụng AI "Tóm tắt tài liệu pháp lý". Cấu trúc hệ thống rất đơn giản: Frontend React gọi thẳng API của Backend (FastAPI), Backend bóc tách PDF, gửi toàn bộ nội dung (30,000 tokens) lên API của GPT-4, chờ nhận kết quả và trả về cho người dùng.
+<Callout type="danger" title="Báo cáo sự cố: Viral launch làm app tóm tắt PDF đốt 12,000 USD trong một buổi sáng">
+**Bối cảnh:** Một startup ra mắt tính năng “tóm tắt tài liệu pháp lý”. Kiến trúc ban đầu rất đơn giản: Frontend upload PDF, FastAPI parse PDF, gửi toàn bộ 30,000 tokens lên GPT-4o, chờ model trả lời rồi response lại cho user.
 
-**Sự cố:** Một KOL trên mạng xã hội chia sẻ ứng dụng. Trong vòng 1 giờ, có 5,000 người truy cập đồng thời. 
-1. **Lỗi thứ nhất:** Vì Backend đợi API của GPT-4 trả lời đồng bộ (Sync - mất trung bình 15 giây), toàn bộ luồng xử lý (worker threads) của máy chủ bị treo. Ứng dụng sập nguồn (Timeout).
-2. **Lỗi thứ hai:** Người dùng thấy lỗi liền liên tục bấm F5 (Reload). Mỗi lần Reload, Backend lại gửi lại một khối 30,000 tokens lên OpenAI.
-3. **Lỗi thứ ba:** Không có cơ chế bộ nhớ đệm (Caching). Hàng nghìn người tải lên cùng một bản PDF luật phổ biến, nhưng hệ thống vẫn ngây ngô xử lý lại từ đầu cho từng người.
+**Sự cố:** Một KOL chia sẻ sản phẩm. Trong một giờ, 5,000 người dùng upload cùng một bộ luật phổ biến.
 
-**Hậu quả:** Ứng dụng sập suốt 4 tiếng. Khi server bật lại được, Giám đốc tài chính nhận hóa đơn OpenAI lên tới 12,000 USD chỉ trong một buổi sáng do hàng triệu token bị gửi trùng lặp và không có giới hạn (Rate limiting).
+1. Backend xử lý đồng bộ, mỗi request giữ worker 20-40 giây.
+2. Không có queue, task id hoặc retry-safe workflow.
+3. Không có exact/semantic cache nên cùng một PDF được xử lý lặp lại hàng nghìn lần.
+4. Không có rate limit/token budget nên user reload liên tục tạo request mới.
+5. Không có cost alert theo feature nên team chỉ biết khi hóa đơn đã tăng đột biến.
+
+**Hậu quả:** API timeout, người dùng retry, chi phí token nhân lên theo cấp số nhân. Hệ thống phải tắt khẩn cấp để thiết kế lại.
 </Callout>
 
-Bài học rút ra: Thiết kế một hệ thống AI không chỉ là việc gọi đúng API. Nó đòi hỏi một **Bộ khung tư duy (Design Framework)** nghiêm ngặt từ lúc làm rõ yêu cầu đến lúc phân luồng dữ liệu.
+Bài học rút ra: AI System Design bắt đầu từ **constraints**, không bắt đầu từ model. Nếu bạn không xác định latency, throughput, cost/request, dữ liệu nhạy cảm và failure mode, mọi lựa chọn kiến trúc sau đó đều là phỏng đoán.
 
 ---
 
-## 2. Architecture Blueprint (Kiến trúc giải pháp)
+## 2. Architecture Blueprint (AI System Design Decision Flow)
 
-Để sống sót ở quy mô lớn (Scale), mọi hệ thống AI cần được thiết kế dựa trên một bộ khung tiêu chuẩn gồm 5 bước (AI System Design Framework).
+Một framework thiết kế AI system production nên đi theo luồng quyết định sau:
 
 ```text
-[ BƯỚC 1: Yêu cầu & Ràng buộc (Clarify Requirements) ]
-   - Có bao nhiêu Request/giây (RPS)?
-   - SLA Độ trễ: <500ms hay <5s?
-   - Ngân sách: X cent cho mỗi request?
-           │
-           ▼
-[ BƯỚC 2: Định hình các Component AI (Identify AI Components) ]
-   - Task này cần RAG, Multi-Agent hay chỉ Zero-shot?
-   - Cần mô hình 8B (Nhanh/Rẻ) hay 70B+ (Thông minh/Đắt)?
-           │
-           ▼
-[ BƯỚC 3: Luồng dữ liệu (Data Flow & API Contract) ]
-   Client ---> API Gateway ---> Rate Limiter ---> Semantic Cache ---> Model Router
-           │
-           ▼
-[ BƯỚC 4: Chiến lược Xử lý (Placement & Sync/Async) ]
-   - Đặt Model ở đâu? (Cloud API, Self-host GPU, Edge/Mobile)
-   - Trả lời ngay (Sync) hay Đưa vào Hàng đợi (Async / Webhooks)?
-           │
-           ▼
-[ BƯỚC 5: Độ tin cậy & Giám sát (Reliability & Monitoring) ]
-   - Fallback (Nếu GPT-4 sập, có chuyển sang Claude 3 không?)
-   - Tính toán chi phí từng Token (Cost tracking).
+[ 1. Clarify requirements ]
+  - user types, RPS, concurrency
+  - latency SLA, async tolerance
+  - cost/request and monthly budget
+  - privacy/compliance domain
+        │
+        ▼
+[ 2. Identify AI components ]
+  - LLM call, RAG, agent, router
+  - embeddings, reranker, classifier
+  - eval, guardrails, moderation
+        │
+        ▼
+[ 3. Design data flow ]
+  - request path
+  - ingestion path
+  - state and storage
+  - API contracts and task lifecycle
+        │
+        ▼
+[ 4. Choose placement and scaling ]
+  - server / edge / client / async worker
+  - model provider vs self-host
+  - cache and queue boundaries
+        │
+        ▼
+[ 5. Reliability, cost, security ]
+  - fallback and circuit breaker
+  - token budgets and rate limits
+  - observability and eval gates
+  - tenant isolation and guardrails
+```
+
+Output của system design không phải là một sơ đồ đẹp; output là một tập quyết định có thể review, triển khai, đo lường và thay đổi khi traffic/cost thay đổi.
+
+---
+
+## 3. Clarify Requirements: Câu hỏi trước khi vẽ kiến trúc
+
+Một AI system design interview hoặc design doc nên bắt đầu bằng câu hỏi. Đừng nhảy ngay vào chọn GPT-4o hay vector DB.
+
+| Nhóm câu hỏi | Ví dụ cần làm rõ | Ảnh hưởng kiến trúc |
+|---|---|---|
+| User & traffic | DAU, RPS, peak concurrency, tenant count | scale, cache, queue, DB partitioning |
+| Latency | realtime dưới 1s hay async vài phút được? | sync API vs task queue |
+| Quality | cần factuality, citation, format JSON, safety? | eval, RAG, structured output |
+| Cost | cost/request tối đa, budget/tháng | model routing, caching, max tokens |
+| Data | dữ liệu public hay PII/regulated? | region, encryption, guardrails |
+| Freshness | data thay đổi mỗi phút hay mỗi ngày? | cache invalidation, ingestion pipeline |
+| Failure tolerance | provider lỗi thì degrade hay fail closed? | fallback, circuit breaker |
+| Audit | cần trace/citation/log retention không? | observability, storage design |
+
+Một câu trả lời system design tốt thường nói rõ giả định:
+
+```text
+Assumption:
+- 50,000 daily active users
+- p95 latency target: 3 seconds for chat, 2 minutes for PDF ingestion
+- max cost/request: 0.5 cents for normal chat, 5 cents for premium analysis
+- documents may contain PII, region: EU only
+```
+
+Không có giả định, bạn không thể đánh đổi.
+
+---
+
+## 4. AI Component Map
+
+Sau requirements, hãy xác định hệ thống cần những component AI nào.
+
+| Component | Khi cần | Câu hỏi thiết kế |
+|---|---|---|
+| LLM generation | chat, summary, reasoning | model nào, context length, structured output? |
+| RAG | cần knowledge riêng/cập nhật | chunking, embeddings, vector DB, reranker, ACL? |
+| Agent/tool use | cần hành động/dữ liệu động | tool permissions, max iterations, audit? |
+| Classifier/router | cần phân luồng/cost optimization | threshold, fallback, latency? |
+| Embedding service | semantic search/cache | provider vs self-host, dimensions, versioning? |
+| Reranker | improve retrieval precision | latency/cost trade-off? |
+| Guardrails | safety, PII, prompt injection | input/output/action policies? |
+| Eval pipeline | release quality | golden set, judge, regression gates? |
+| Observability | debug/cost/quality | traces, token usage, feedback? |
+
+Ví dụ: “AI customer support” có thể cần intent classifier, RAG, LLM generator, escalation router, safety guardrails và cost monitoring. “Autocomplete” có thể chỉ cần small model + debounce + cache.
+
+---
+
+## 5. Data Flow and API Contracts
+
+AI systems thường có nhiều luồng dữ liệu song song:
+
+```text
+User path:
+client -> gateway -> auth/rate limit -> cache -> router -> RAG/LLM -> response
+
+Ingestion path:
+upload -> storage -> queue -> parser/OCR -> chunk -> embed -> vector DB -> index ready
+
+Evaluation path:
+candidate prompt/model -> golden set -> judge -> report -> release gate
+
+Monitoring path:
+request spans -> metrics/traces -> eval samples -> alerts
+```
+
+Mỗi luồng cần API contract rõ ràng. Ví dụ async PDF analysis:
+
+```http
+POST /documents/analyze
+Response 202 Accepted
+{
+  "task_id": "task_123",
+  "status_url": "/tasks/task_123"
+}
+
+GET /tasks/task_123
+{
+  "status": "running",
+  "progress": 0.45,
+  "result": null,
+  "error": null
+}
+```
+
+Nếu contract không rõ trạng thái, frontend sẽ poll sai, user retry sai và backend xử lý trùng task.
+
+---
+
+## 6. Non-Functional Requirements for AI
+
+NFR truyền thống gồm availability, latency, scalability. Với AI, thêm các NFR đặc thù:
+
+| NFR | Metric ví dụ | Thiết kế liên quan |
+|---|---|---|
+| Quality | golden eval score, thumbs-down rate | eval gates, feedback loop |
+| Groundedness | hallucination rate | RAG, citation, judge eval |
+| Cost | cost/request, cost/user/month | token budgets, caching, routing |
+| Latency | TTFT, p95 E2E | streaming, async, placement |
+| Safety | unsafe output rate | moderation, guardrails |
+| Privacy | PII leakage incidents | redaction, region, logging policy |
+| Resilience | fallback success rate | multi-provider routing |
+| Auditability | trace coverage, citation coverage | observability, provenance |
+
+Production AI system design phải nói được bạn đo các NFR này ở đâu và dùng metric nào để rollback.
+
+---
+
+## Implementation Playbook: AI Design Doc + ADR Template
+
+### Bước 1: Viết one-page problem framing
+
+```md
+# AI Feature Design: Contract Summarizer
+
+## Goal
+Allow legal users to upload contracts and receive a structured summary with citations.
+
+## Users
+- Internal legal analysts
+- 1,000 monthly active users
+- Peak: 50 concurrent document jobs
+
+## Constraints
+- Documents may contain PII and confidential clauses
+- Region: EU only
+- Target: result within 2 minutes
+- Budget: under $0.08 per document
+```
+
+### Bước 2: Vẽ architecture diagram có luồng sync/async
+
+```text
+[ Web app ]
+    │ POST /documents
+    ▼
+[ API Gateway ] -> [ Auth / Quota ] -> [ Object Storage ]
+    │                                  │
+    │ 202 task_id                       ▼ event
+    ▼                              [ Queue ]
+[ Task Status API ]                    │
+    ▲                                  ▼
+    │                            [ Workers ]
+    │                              - OCR
+    │                              - chunk
+    │                              - RAG summary
+    │                                  │
+    └──────────── [ Result DB + Evidence/Citations ]
+```
+
+### Bước 3: Ghi model/data decisions
+
+```md
+## Model Decision
+- Use GPT-4o-mini for extraction and citation drafting.
+- Escalate to GPT-4o only when confidence score is low or document risk is high.
+- Use structured output JSON schema for result validation.
+
+## Data Decision
+- Store raw PDF in encrypted EU bucket.
+- Store extracted text and chunks with document_id and tenant_id.
+- Do not log raw contract text to SaaS observability.
+```
+
+### Bước 4: Viết ADR cho quyết định quan trọng
+
+```md
+# ADR-003: Use Async Task Queue for Document Analysis
+
+## Status
+Accepted
+
+## Context
+Document analysis can take 30-120 seconds. Synchronous HTTP requests timeout and block API workers.
+
+## Decision
+Use POST /documents to create a task, enqueue work in Redis/RabbitMQ, process in workers, and expose GET /tasks/{id} plus optional webhook.
+
+## Consequences
+- Better reliability and scaling.
+- Requires task state management and idempotency keys.
+- Frontend must support progress UI.
+```
+
+### Bước 5: Thêm risk table
+
+```md
+| Risk | Mitigation | Owner |
+|---|---|---|
+| Provider outage | fallback to secondary provider, retry budget | platform |
+| PII in logs | redaction before tracing, retention 7 days | security |
+| Cost spike | per-tenant token budget, alerts | FinOps |
+| Hallucination | citations + groundedness eval | AI team |
 ```
 
 ---
 
-## 3. Tooling Landscape (Ma trận tư duy thiết kế)
+## Project Guide: Design Doc for AI Feature (Phase 13 Easy)
 
-Khi thiết kế, bạn không chọn công cụ cụ thể ngay, mà bạn chọn **Chiến lược (Strategy)**.
+Mục tiêu project: viết một design doc 5 trang cho một AI feature thực tế trước khi code.
 
-| Thành phần Thiết kế | Lựa chọn Tiêu chuẩn (Standard) | Lựa chọn Tối ưu hóa (Optimized / Scaled) |
+### Chọn một feature
+
+Ví dụ:
+
+- Contract summarizer,
+- customer support chatbot,
+- PDF Q&A for internal docs,
+- meeting transcript summarizer,
+- AI email assistant.
+
+### Deliverables
+
+Design doc phải có:
+
+1. Problem statement và success metrics.
+2. Assumptions: users, RPS, latency, budget, risk domain.
+3. Architecture diagram.
+4. Data flow cho request path và background path.
+5. Model selection và fallback strategy.
+6. Cost estimate theo request/user/month.
+7. Security/privacy considerations.
+8. Monitoring/eval plan.
+9. 2-3 ADRs cho quyết định lớn.
+
+### Acceptance criteria
+
+- Có ít nhất một async hoặc caching decision nếu feature có latency/cost cao.
+- Có cost/request estimate, không chỉ “dùng model tốt nhất”.
+- Có fallback khi provider lỗi hoặc model confidence thấp.
+- Có kế hoạch eval/monitoring trước production.
+- Có rủi ro và mitigation rõ ràng.
+
+Stretch goal: vẽ diagram bằng Mermaid hoặc Excalidraw và thêm sequence diagram cho request chính.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Thiết kế bắt đầu bằng model thay vì requirement">
+**Triệu chứng:** Team chọn GPT-4o cho mọi use case, sau đó mới phát hiện cost/request vượt biên lợi nhuận.
+
+**Fix:** Luôn bắt đầu bằng SLA, quality target, cost budget và risk domain. Model là quyết định sau, không phải điểm xuất phát.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Sơ đồ không có failure path">
+**Triệu chứng:** Provider lỗi 503 làm toàn bộ product trả 500; không có fallback hoặc degrade mode.
+
+**Fix:** Vẽ explicit failure path: timeout, circuit breaker, fallback provider, cached response, hoặc “try again later” có kiểm soát.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Không thiết kế cost guardrails từ đầu">
+**Triệu chứng:** Traffic tăng là bill tăng tuyến tính không giới hạn; attacker có thể wallet-drain bằng prompt dài.
+
+**Fix:** Gateway phải có token estimate, per-user budget, max tokens, rate limits và alerts ngay từ bản đầu.
+</Callout>
+
+---
+
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
 |---|---|---|
-| **Model Selection** | Dùng 1 mô hình "Xịn nhất" (Frontier model) cho mọi việc. | **Router Pattern:** Phân loại câu hỏi. Câu dễ cho mô hình nhỏ (Rẻ), câu khó cho mô hình lớn. |
-| **Giao tiếp Hệ thống** | Synchronous REST API (Client đợi 20s). | **Asynchronous:** Client gửi job -> Nhận Task ID -> Server dùng Message Queue (Kafka/Redis) xử lý -> Trả qua Webhooks/SSE. |
-| **Xử lý trùng lặp** | Mỗi request tính toán lại từ đầu. | **Multi-tier Caching:** Lớp 1: Exact Match Hash (Redis). Lớp 2: Semantic Cache (Vector DB). |
-| **Giới hạn người dùng**| Không có hoặc chặn bằng IP. | **Token-based Rate Limiting:** Chặn theo ngân sách Token/phút của từng người dùng để chống cạn kiệt ngân sách (Wallet Drain). |
+| Dùng frontier model cho mọi request | quality cao ban đầu | gross margin xấu, khó scale |
+| Router model nhỏ trước | giảm cost | risk route sai, cần eval |
+| Async processing | tránh timeout, scale tốt | UX phức tạp, cần task state |
+| Semantic cache | giảm LLM calls | embedding cost, stale/security risk |
+| Multi-provider fallback | resilience tốt | integration và eval phức tạp |
+| Log raw prompts | debug dễ | privacy/compliance risk |
+
+AI System Design là nghệ thuật chuyển requirements thành trade-offs có thể đo được.
 
 ---
 
-## 4. Implementation Playbook (Thực thi)
+## Practice exercises
 
-Hãy cùng hiện thực hóa Bước 3 của bộ khung: **Thiết lập luồng Data Flow cơ bản cho một AI Gateway**. Đây là một đoạn thiết kế giả mã (Pseudo-architecture code) mà Kỹ sư hệ thống thường dùng để viết Tài liệu Quyết định Kiến trúc (ADR - Architecture Decision Records).
-
-```python
-# SƠ ĐỒ LUỒNG THỰC THI KIẾN TRÚC MLOPS (SYSTEM DESIGN)
-import hashlib
-
-def process_ai_request(user_request, user_id):
-    # 1. Rate Limiting (Chặn ngay ở cửa nếu User Spam)
-    if not check_token_budget(user_id, estimated_tokens(user_request)):
-        return HTTP_429_TOO_MANY_REQUESTS
-        
-    # 2. Exact Caching (Tối ưu hóa Chi phí - O(1) latency)
-    req_hash = hashlib.sha256(user_request.encode()).hexdigest()
-    if cached_response := redis_cache.get(req_hash):
-        return cached_response
-
-    # 3. Semantic Caching (Nếu câu hỏi dùng từ đồng nghĩa nhưng ý nghĩa giống)
-    # Ví dụ: "Chính sách hoàn tiền?" vs "Làm sao để lấy lại tiền?"
-    query_vector = embed_model.encode(user_request)
-    if similar_response := vector_db.find_similar(query_vector, threshold=0.98):
-        return similar_response
-
-    # 4. Model Routing (Tối ưu hóa Chi phí vs Chất lượng)
-    complexity_score = fast_classifier_model.predict(user_request)
-    
-    if complexity_score == "EASY":
-        model = "gpt-4o-mini" # Nhanh, cực rẻ
-    else:
-        model = "gpt-4o"      # Chậm, đắt, logic cực mạnh
-        
-    # 5. Circuit Breaker & Fallback (Độ tin cậy)
-    try:
-        response = call_llm(model, user_request, timeout=10)
-    except TimeoutError:
-        # Tự động gạt cần gạt sang nhà cung cấp dự phòng
-        response = call_llm("claude-3-5-sonnet", user_request)
-
-    # 6. Lưu Cache và Trả về
-    redis_cache.set(req_hash, response)
-    vector_db.store(query_vector, response)
-    
-    return response
-```
+1. Viết assumptions cho một AI meeting summarizer có 10,000 users.
+2. Vẽ data flow gồm request path, background path và monitoring path cho một PDF Q&A system.
+3. Viết 2 ADRs: một về async queue, một về model routing.
+4. Tạo risk table cho chatbot y tế gồm privacy, hallucination và cost spike.
+5. Ước tính cost/request nếu mỗi request dùng 3,000 input tokens và 500 output tokens.
 
 ---
 
-## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## Knowledge check
 
-Thiết kế trên giấy (Whiteboard) thì lúc nào cũng hoàn hảo. Khi đưa vào chạy tải (Load test), kiến trúc AI thường gãy ở các điểm mù sau:
-
-<Callout type="warning" title="Pitfall 1: Vô tình biến Backend thành 'Cổ chai' (Synchronous Bottleneck)">
-**Triệu chứng:** Máy chủ Web (ví dụ Gunicorn/Uvicorn) cấu hình chạy 4 Workers. Khi có 4 người dùng gọi tính năng AI, mỗi luồng mất 30 giây để chờ LLM sinh văn bản. Người dùng thứ 5 vào trang web đăng nhập sẽ bị treo (Timeout) dù việc đăng nhập không liên quan gì đến AI.
-**Nguyên nhân:** AI Request làm nghẽn (Block) toàn bộ luồng mạng của máy chủ.
-**Cách khắc phục (Fix):** Không bao giờ chờ LLM xử lý đồng bộ. Đẩy Request vào một hàng đợi (Task Queue như Celery/RabbitMQ) để các Background Workers xử lý riêng. Luồng Web chính chỉ nhận request và trả về `Task_ID` ngay lập tức.
-</Callout>
-
-<Callout type="warning" title="Pitfall 2: Bóp nghẹt Vector Database vì Semantic Cache">
-**Triệu chứng:** Tính năng Semantic Cache làm cho toàn bộ hệ thống chậm đi 50%.
-**Nguyên nhân:** Để kiểm tra Semantic Cache, bạn phải chuyển câu hỏi thành Vector (Gọi API Embedding tốn 200ms), sau đó truy vấn Vector Database (Tốn thêm 100ms). Tổng mất 300ms chỉ để nhận ra "Không có trong cache".
-**Cách khắc phục (Fix):** Chèn một lớp Exact Cache (Redis) ở trên cùng. Lớp này tra cứu bằng chuỗi Text băm (SHA-256) mất đúng 1ms. Nếu trượt Redis, mới gọi xuống Semantic Cache.
-</Callout>
-
-<Callout type="danger" title="Pitfall 3: Thủng ngân sách vì Retries mù quáng">
-**Triệu chứng:** API của OpenAI bị lỗi 503 Service Unavailable. Hệ thống tự động cấu hình Retry 5 lần. Hóa đơn tăng vọt bất thường.
-**Nguyên nhân:** Mô hình sinh văn bản (LLM) không có tính Nạp lại (Idempotency). Một request đang sinh dở được 5000 tokens rồi báo lỗi 503, OpenAI VẪN TÍNH TIỀN bạn 5000 tokens đó. Retry 5 lần tức là bạn trả tiền gấp 5 lần cho một kết quả lỗi.
-**Cách khắc phục (Fix):** Tắt Retry cho các lỗi 500/503 từ nhà cung cấp LLM khi sinh văn bản dài, thay vào đó kích hoạt Fallback sang nhà cung cấp (Provider) khác ngay lập tức, hoặc báo lỗi về cho người dùng để họ chủ động quyết định có gọi lại hay không.
-</Callout>
+1. Vì sao AI system design phải bắt đầu từ requirements và constraints?
+2. Nêu 4 NFR đặc thù của AI systems ngoài latency/availability.
+3. ADR dùng để làm gì?
+4. Vì sao rollback AI có thể cần rollback prompt/model/index chứ không chỉ code?
+5. Khi nào nên chọn async task API thay vì synchronous REST?
 
 ---
 
-## 6. Cost & Performance Unit Economics
+## Answer key
 
-Kỹ sư Hệ thống giỏi là người nắm giữ chìa khóa két sắt của công ty. Mọi thiết kế AI đều quy về phương trình đơn giá (Unit Economics).
-
-| Yếu tố Kiến trúc | Phân tích SRE (Ý nghĩa kinh tế) | Tối ưu hóa (Optimization) |
-|---|---|---|
-| **Context Length (Độ dài ngữ cảnh)** | Prompt càng dài, chi phí càng lớn (Cost = Input Tokens * Rate). Thiết kế một RAG nhồi 10,000 tokens cho mỗi lượt chat sẽ tiêu sạch biên lợi nhuận của người dùng. | Áp dụng kiến trúc **Contextual Compression** (Nén ngữ cảnh) ở tầng Middleware. Dùng mô hình nhỏ trích xuất các câu cốt lõi (1000 tokens) trước khi gửi lên mô hình lớn. Giảm 90% chi phí. |
-| **Output Tokens Limitation** | Chi phí sinh Output Token luôn đắt gấp 3-4 lần Input Token. Cấu hình hệ thống để mô hình sinh câu trả lời tự do sẽ gây ra "Token Leakage". | Thiết lập giới hạn cứng `max_tokens` (ví dụ: 500) ở tầng Gateway cho các hạng người dùng miễn phí (Free Tier). Ép mô hình sử dụng định dạng JSON ngắn gọn thay vì giải thích dông dài. |
+1. Vì model, caching, async, placement và cost controls phụ thuộc vào SLA, budget, data sensitivity và traffic.
+2. Quality, groundedness, cost, safety, privacy, auditability hoặc hallucination rate.
+3. Ghi lại bối cảnh, quyết định và hệ quả của một lựa chọn kiến trúc để review/audit sau này.
+4. Behavior phụ thuộc vào toàn bộ release bundle: code, prompt, model, retriever index và config.
+5. Khi tác vụ mất hơn vài giây, dễ timeout, cần retry/resume hoặc chạy worker nền.
 
 ---
 
 ## Điểm cần nhớ
 
-- **System Design Framework cho AI** là việc lặp lại liên tục quá trình: Làm rõ yêu cầu -> Xác định linh kiện -> Vẽ luồng dữ liệu -> Chọn vị trí triển khai -> Đảm bảo độ tin cậy.
-- Rủi ro lớn nhất của hệ thống AI ở Scale không phải là mô hình sinh nội dung sai, mà là kiến trúc đồng bộ (Sync) làm sập máy chủ mạng và vòng lặp lỗi làm đốt cháy ngân sách API.
-- Caching trong AI là vũ khí hai lưỡi: Exact Caching (Redis) siêu rẻ, nhưng Semantic Caching (VectorDB) tiêu tốn thời gian Embedding. Hãy dùng chúng theo mô hình thác nước (Waterfall).
-- Kiến trúc tốt nhất là kiến trúc giới hạn được bán kính sát thương (Blast Radius) khi một nhà cung cấp đám mây lớn (như OpenAI hay Anthropic) gặp sự cố mạng lưới.
+- AI System Design là framework ra quyết định, không chỉ diagram.
+- Clarify requirements trước khi chọn model hoặc vector DB.
+- Thiết kế phải bao gồm user path, ingestion path, eval path và monitoring path.
+- NFR của AI gồm quality, cost, safety, privacy, groundedness và auditability.
+- Design doc/ADR giúp team thống nhất trade-off trước khi triển khai.
+
+---
 
 ## Next chapter bridge
 
-Chúng ta đã có một bộ khung tư duy tổng quát. Bước tiếp theo là áp dụng bộ khung này vào các hệ thống thực tế đang "làm mưa làm gió" trên thị trường. Bạn có bao giờ tự hỏi làm cách nào mà ChatGPT có thể nhớ được lịch sử trò chuyện của hàng chục triệu người cùng lúc? Hay cách một hệ thống RAG phục vụ hàng vạn nhân viên tập đoàn lớn mà không bị sập? Chương tiếp theo: **Classic AI System Designs** — nơi chúng ta sẽ mổ xẻ bản thiết kế kỹ thuật của những ứng dụng AI kinh điển nhất.
+Bạn đã có framework tổng quát để thiết kế AI system. Bước tiếp theo là học các architecture patterns kinh điển đã xuất hiện lặp đi lặp lại trong sản phẩm thật: chatbot memory, enterprise RAG, PDF Q&A at scale, intent router và multi-LLM routing. Chương tiếp theo: **Classic AI System Designs** — nơi chúng ta mổ xẻ các blueprint phổ biến nhất và các bẫy vận hành đi kèm.

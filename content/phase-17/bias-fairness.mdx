@@ -1,0 +1,412 @@
+Prompt injection là rủi ro khi có adversary. Bias và fairness là rủi ro ngay cả khi không ai tấn công. Một model có thể đạt accuracy cao, pass benchmark, chạy ổn định trong production, nhưng vẫn tạo outcome bất công cho một nhóm người vì dữ liệu, labels, proxy features hoặc feedback loop bị lệch.
+
+Fairness engineering biến câu hỏi “model có công bằng không?” thành một quy trình đo lường, audit, mitigation và governance. Nó không xóa được mọi trade-off xã hội, nhưng giúp AI Engineer nhìn thấy disparity trước khi nó trở thành harm thật.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Resume ranker accuracy cao nhưng loại sai một nhóm ứng viên">
+**Bối cảnh:** Một công ty dùng AI resume ranker để ưu tiên ứng viên cho vòng phỏng vấn. Model được train trên dữ liệu tuyển dụng lịch sử và đạt accuracy tổng thể 89% khi dự đoán “ứng viên có vượt vòng đầu không”.
+
+**Sự cố:** Sau 3 tháng, HR nhận thấy tỷ lệ ứng viên từ một số nhóm trường và khu vực địa lý bị loại cao bất thường. Khi audit theo subgroup, false negative rate của một nhóm cao gấp hơn 2 lần nhóm còn lại.
+
+1. Dataset lịch sử phản ánh bias trong quyết định tuyển dụng cũ.
+2. Model dùng proxy features như trường học, khoảng trống nghề nghiệp, địa chỉ.
+3. Evaluation chỉ đo aggregate accuracy, không đo slice metrics.
+4. Không có release gate fairness trước khi đưa vào workflow tuyển dụng.
+
+**Hậu quả:** Công ty đối mặt rủi ro pháp lý, mất niềm tin ứng viên và phải tạm dừng hệ thống để audit.
+</Callout>
+
+Bài học rút ra: Accuracy tổng thể không đủ. Với hệ thống ảnh hưởng đến con người, bạn phải đo performance theo nhóm, hiểu trade-off fairness và có quy trình governance.
+
+---
+
+## 2. Architecture Blueprint (Fairness Audit Pipeline)
+
+Một fairness audit pipeline cơ bản:
+
+```text
+[ Dataset / Logs ]
+  - features
+  - labels
+  - predictions
+  - protected or sensitive attributes
+        │
+        ▼
+[ Slice Evaluation ]
+  - performance by group
+  - error rates by group
+  - selection rates by group
+        │
+        ▼
+[ Fairness Metrics ]
+  - demographic parity
+  - equal opportunity
+  - equalized odds
+  - calibration by group
+        │
+        ▼
+[ Root Cause Analysis ]
+  - data coverage
+  - proxy features
+  - label bias
+  - deployment feedback loops
+        │
+        ▼
+[ Mitigation & Governance ]
+  - reweighting/resampling
+  - threshold adjustment
+  - human review
+  - release gates
+  - monitoring
+```
+
+Fairness không phải một metric duy nhất. Nó là một tập câu hỏi: ai bị ảnh hưởng, outcome nào quan trọng, disparity nào chấp nhận được, và ai có quyền quyết định trade-off.
+
+---
+
+## 3. Sources of Bias
+
+Bias có thể vào hệ thống ở nhiều điểm.
+
+| Nguồn bias | Mô tả | Ví dụ |
+|---|---|---|
+| Historical bias | Dữ liệu phản ánh bất công có sẵn trong xã hội/quy trình cũ | Hiring data từng ưu tiên một nhóm |
+| Representation bias | Một số nhóm xuất hiện ít trong training data | Model kém cho dialect/ngôn ngữ thiểu số |
+| Measurement bias | Feature/label đo không đều giữa nhóm | “Engagement” thấp vì một nhóm ít được expose |
+| Labeling bias | Annotator/rubric thiên vị | Label “professional tone” thiên về một style văn hóa |
+| Proxy bias | Feature không nhạy cảm nhưng tương quan với protected attribute | Zip code, school, device type |
+| Deployment bias | Model được dùng trong ngữ cảnh khác với lúc train | Risk model dùng để tự động từ chối thay vì hỗ trợ review |
+| Feedback loop | Prediction ảnh hưởng data tương lai | Nhóm ít được recommend càng ít có cơ hội click |
+
+<Callout type="warning" title="Xóa protected attribute không đủ">
+Nếu bỏ cột gender/race nhưng giữ proxy features tương quan mạnh như zip code hoặc trường học, model vẫn có thể tạo outcome lệch. Fairness audit phải kiểm tra cả proxy và subgroup metrics.
+</Callout>
+
+---
+
+## 4. Fairness Metrics
+
+### Demographic parity
+
+Demographic parity yêu cầu selection rate giữa các nhóm tương tự nhau.
+
+```text
+P(ŷ = 1 | group = A) ≈ P(ŷ = 1 | group = B)
+```
+
+Ví dụ: tỷ lệ được mời phỏng vấn giữa nhóm A và B không quá lệch.
+
+Ưu điểm: dễ hiểu. Nhược điểm: có thể không phù hợp nếu base rates hoặc label quality khác nhau.
+
+### Equal opportunity
+
+Equal opportunity yêu cầu true positive rate giữa các nhóm tương tự nhau.
+
+```text
+P(ŷ = 1 | y = 1, group = A) ≈ P(ŷ = 1 | y = 1, group = B)
+```
+
+Nó tập trung vào việc người thật sự đủ điều kiện có cơ hội được chọn như nhau.
+
+### Equalized odds
+
+Equalized odds yêu cầu cả true positive rate và false positive rate tương tự giữa các nhóm.
+
+```text
+TPR_A ≈ TPR_B
+FPR_A ≈ FPR_B
+```
+
+### Calibration by group
+
+Nếu model dự đoán score 0.8, xác suất outcome thật nên gần 80% ở mọi nhóm.
+
+| Metric | Hỏi câu gì? | Trade-off |
+|---|---|---|
+| Demographic parity | Selection rate có cân bằng không? | Có thể bỏ qua ground truth |
+| Equal opportunity | Người đủ điều kiện có cơ hội như nhau không? | Cần label đáng tin |
+| Equalized odds | Error rates có cân bằng không? | Có thể giảm utility |
+| Calibration | Score có cùng ý nghĩa giữa nhóm không? | Có thể xung đột với parity metrics |
+
+<Callout type="info" title="Fairness metrics có thể xung đột">
+Không phải lúc nào bạn cũng tối ưu được demographic parity, equalized odds và calibration cùng lúc. Fairness là quyết định sản phẩm/pháp lý/xã hội, không chỉ là chọn metric trong notebook.
+</Callout>
+
+---
+
+## 5. Tools for Bias Audit
+
+### Fairlearn
+
+Fairlearn cung cấp metrics, visualization và mitigation algorithms cho fairness trong Python/sklearn ecosystem.
+
+Use cases:
+
+- MetricFrame để tính metrics theo subgroup.
+- Demographic parity difference.
+- Equalized odds difference.
+- Threshold optimization.
+
+### AI Fairness 360
+
+IBM AI Fairness 360 có nhiều metrics và mitigation algorithms hơn, phù hợp cho audit sâu.
+
+Use cases:
+
+- Pre-processing mitigation.
+- In-processing constraints.
+- Post-processing.
+- Bias explainability và reports.
+
+### Slice-based evaluation tự viết
+
+Nhiều khi pandas/sklearn đủ để bắt đầu:
+
+- group counts
+- selection rate
+- false positive rate
+- false negative rate
+- calibration buckets
+- confidence distribution
+
+<Callout type="tip" title="Bắt đầu bằng slice metrics trước khi dùng tool phức tạp">
+Một bảng subgroup performance đơn giản thường phát hiện vấn đề lớn nhất. Tool như Fairlearn/AIF360 rất hữu ích, nhưng không thay thế việc hiểu dữ liệu và context sản phẩm.
+</Callout>
+
+---
+
+## 6. Implementation Playbook: Fairness Report bằng Python
+
+Skeleton dưới đây tính một số fairness metrics cơ bản từ dataframe có label, prediction và group.
+
+```python
+import pandas as pd
+
+
+def confusion_counts(df: pd.DataFrame, label_col: str, pred_col: str):
+    y = df[label_col].astype(int)
+    p = df[pred_col].astype(int)
+    return {
+        "tp": int(((y == 1) & (p == 1)).sum()),
+        "tn": int(((y == 0) & (p == 0)).sum()),
+        "fp": int(((y == 0) & (p == 1)).sum()),
+        "fn": int(((y == 1) & (p == 0)).sum()),
+    }
+
+
+def safe_div(a: float, b: float) -> float:
+    return float(a / b) if b else 0.0
+
+
+def group_metrics(df: pd.DataFrame, group_col: str, label_col: str, pred_col: str):
+    rows = []
+    for group, g in df.groupby(group_col):
+        c = confusion_counts(g, label_col, pred_col)
+        n = len(g)
+        rows.append({
+            "group": group,
+            "n": n,
+            "selection_rate": safe_div((g[pred_col] == 1).sum(), n),
+            "accuracy": safe_div(c["tp"] + c["tn"], n),
+            "true_positive_rate": safe_div(c["tp"], c["tp"] + c["fn"]),
+            "false_positive_rate": safe_div(c["fp"], c["fp"] + c["tn"]),
+            "false_negative_rate": safe_div(c["fn"], c["fn"] + c["tp"]),
+            **c,
+        })
+    return pd.DataFrame(rows).sort_values("group")
+
+
+def disparity_report(metrics: pd.DataFrame):
+    report = {}
+    for col in ["selection_rate", "true_positive_rate", "false_positive_rate", "false_negative_rate"]:
+        report[f"{col}_difference"] = float(metrics[col].max() - metrics[col].min())
+        report[f"{col}_ratio"] = safe_div(metrics[col].min(), metrics[col].max())
+    return report
+
+
+# Example usage
+# df columns: label, prediction, demographic_group
+# metrics = group_metrics(df, "demographic_group", "label", "prediction")
+# print(metrics)
+# print(disparity_report(metrics))
+```
+
+Production report nên thêm:
+
+- Confidence intervals cho groups nhỏ.
+- Breakdown theo intersectional groups.
+- Time trend theo release/version.
+- Threshold sensitivity analysis.
+- Human review notes.
+
+---
+
+## 7. Mitigation Strategies
+
+| Giai đoạn | Strategy | Trade-off |
+|---|---|---|
+| Pre-processing | Reweighting, resampling, data augmentation | Có thể làm distribution nhân tạo |
+| In-processing | Fairness constraints trong training | Phức tạp, có thể giảm utility |
+| Post-processing | Threshold adjustment theo group | Nhạy cảm pháp lý/sản phẩm, cần governance |
+| Product process | Human review, appeal process | Tốn operation cost |
+| Monitoring | Drift/fairness dashboards | Cần protected attribute hoặc proxy careful |
+
+Mitigation không nên làm trong bóng tối. Với high-stakes systems, trade-off fairness/utility cần stakeholder review và documentation.
+
+---
+
+## 8. Project Guide: Bias Audit Tool
+
+Official project Phase 17 easy:
+
+```text
+Bias Audit Tool
+- Tool audit bias trong model outputs
+- Demographic parity, equalized odds metrics
+- Stack: Fairlearn, Python, Streamlit
+```
+
+MVP deliverables:
+
+1. Upload CSV predictions.
+2. UI chọn cột:
+   - label
+   - prediction
+   - score optional
+   - protected/group attribute
+3. Metrics:
+   - group counts
+   - selection rate
+   - accuracy
+   - TPR/FPR/FNR
+   - demographic parity difference
+   - equalized odds difference
+4. Visualizations:
+   - bar chart by group
+   - confusion matrix by group
+   - threshold slider nếu có score
+5. Export report:
+   - markdown hoặc PDF
+   - recommendations
+   - caveats về sample size
+
+Stretch:
+
+- Fairlearn `MetricFrame` integration.
+- Intersectional analysis.
+- Drift over time.
+- Model version comparison.
+
+---
+
+## 9. Governance Checklist
+
+Trước khi dùng model trong decision flow ảnh hưởng con người:
+
+1. Nhóm người nào bị ảnh hưởng?
+2. Outcome nào là high impact?
+3. Protected/sensitive attributes có được thu thập hợp pháp không?
+4. Có proxy features nào đáng ngờ không?
+5. Metrics release gates là gì?
+6. Có human review/appeal process không?
+7. Ai approve fairness trade-off?
+8. Audit report có được versioned không?
+9. Monitoring production có slice metrics không?
+10. Có kế hoạch rollback nếu subgroup harm tăng không?
+
+---
+
+## 10. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Subgroup sample size quá nhỏ">
+**Triệu chứng:** Fairness metric dao động mạnh theo từng tuần.
+
+**Nguyên nhân:** Một số group có quá ít samples, nên rate estimate không ổn định.
+
+**Cách khắc phục:** Báo confidence intervals, gộp thời gian hợp lý, không ra quyết định chỉ từ subgroup quá nhỏ mà không review định tính.
+</Callout>
+
+<Callout type="danger" title="Pitfall 2: Proxy bias bị bỏ qua">
+**Triệu chứng:** Model không dùng protected attribute nhưng outcome vẫn lệch.
+
+**Nguyên nhân:** Features khác tương quan mạnh với protected attribute.
+
+**Cách khắc phục:** Kiểm tra feature importance, SHAP/proxy analysis, remove/regularize proxies và audit subgroup outcomes.
+</Callout>
+
+<Callout type="warning" title="Pitfall 3: Tối ưu một fairness metric mù quáng">
+**Triệu chứng:** Demographic parity cải thiện nhưng false negative rate của nhóm quan trọng xấu đi.
+
+**Nguyên nhân:** Metrics fairness có thể xung đột.
+
+**Cách khắc phục:** Chọn metric theo harm model, báo nhiều metrics, stakeholder review và document rationale.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Automation bias">
+**Triệu chứng:** Human reviewers tin model quá mức dù model chỉ nên hỗ trợ.
+
+**Nguyên nhân:** UI trình bày score như quyết định cuối cùng, không hiển thị uncertainty/explanation/appeal.
+
+**Cách khắc phục:** Thiết kế decision support UI rõ ràng, yêu cầu human justification và log override decisions.
+</Callout>
+
+---
+
+## 11. Cost & Governance Unit Economics
+
+| Control | Lợi ích | Chi phí/Trade-off |
+|---|---|---|
+| Fairness audit trước release | Bắt disparity sớm | Cần labels/group data |
+| Human review | Giảm harm high-stakes | Operation cost |
+| Threshold tuning | Giảm disparity ở metric cụ thể | Có thể giảm utility hoặc gây tranh cãi |
+| Collect protected attributes | Đo fairness tốt hơn | Privacy/legal requirements |
+| Continuous monitoring | Phát hiện drift | Dashboard/data pipeline overhead |
+
+Không audit fairness cũng có chi phí: legal risk, mất niềm tin, harm cho người dùng và phải rollback hệ thống sau khi đã gây thiệt hại.
+
+---
+
+## Practice exercises
+
+1. Tính demographic parity difference từ bảng selection rate theo group.
+2. Cho ví dụ proxy feature trong loan approval model.
+3. Vì sao aggregate accuracy có thể che giấu unfairness?
+4. Thiết kế audit report cho AI resume ranker.
+5. Khi nào equal opportunity phù hợp hơn demographic parity?
+
+---
+
+## Knowledge check
+
+1. Demographic parity đo điều gì?
+2. Equalized odds yêu cầu những error rates nào cân bằng?
+3. Proxy bias là gì?
+4. Vì sao fairness metrics có thể xung đột?
+5. AI Fairness 360 và Fairlearn dùng để làm gì?
+
+---
+
+## Answer key
+
+1. Selection rate giữa các nhóm có tương tự nhau không.
+2. True positive rate và false positive rate giữa các nhóm.
+3. Khi feature không nhạy cảm nhưng tương quan với protected attribute và tạo outcome lệch.
+4. Vì các định nghĩa fairness khác nhau áp đặt ràng buộc khác nhau; trong nhiều phân phối dữ liệu không thể thỏa tất cả cùng lúc.
+5. Chúng hỗ trợ tính toán fairness metrics, audit disparity và một số mitigation algorithms.
+
+---
+
+## Điểm cần nhớ
+
+- Bias có thể xuất hiện từ data, labels, proxies, deployment context và feedback loops.
+- Accuracy tổng thể không đủ; cần slice metrics theo subgroup.
+- Demographic parity, equal opportunity, equalized odds và calibration trả lời các câu hỏi fairness khác nhau.
+- Fairness mitigation là quyết định governance, không chỉ tuning notebook.
+- Bias Audit Tool nên tạo report có metrics, visualization, caveats và release recommendations.
+
+## Next chapter bridge
+
+Fairness audit yêu cầu dữ liệu nhóm, logs và monitoring — nhưng càng thu thập nhiều dữ liệu, privacy risk càng tăng. Chương tiếp theo: **Privacy & Data Governance** — nơi chúng ta học cách kiểm soát PII, retention, right to erasure, embeddings, logs và dữ liệu huấn luyện trong AI systems.

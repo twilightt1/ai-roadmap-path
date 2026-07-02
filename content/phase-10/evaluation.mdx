@@ -1,278 +1,510 @@
-Đánh giá chất lượng (Evaluation) sau khi fine-tune là bước quan trọng nhất để chứng minh mô hình mới thực sự mang lại giá trị thực tiễn. Một mô hình có training loss giảm rất đẹp vẫn có thể bị sụp đổ khả năng suy luận, bị over-fitting, hoặc hành xử kém hơn mô hình nền ban đầu khi đưa ra thực tế. Ở cấp độ giáo sư AI engineering, đánh giá sau fine-tuning yêu cầu một **hệ thống kiểm thử đa tầng (multi-tier evaluation harness)** kết hợp giữa chỉ số học thuật (benchmarks), kiểm thử hồi quy (regression testing), giám sát bằng mô hình mạnh (LLM-as-judge) và đánh giá của con người (human evaluation).
+Bạn đã đi qua decision framework, Full Fine-Tuning, PEFT/QLoRA, tooling và dataset preparation. Nhưng một model fine-tuned chỉ có giá trị khi bạn chứng minh được nó tốt hơn baseline trên đúng workload, không regression ở năng lực quan trọng và có thể release/rollback bằng số liệu.
 
-## Why this matters
+Evaluation sau fine-tuning là lớp bảo vệ cuối cùng trước production. Nó kết hợp task metrics, regression tests, safety checks, LLM-as-judge, human review, cost/latency measurement và release gates. Nếu không có eval harness, fine-tuning chỉ là một cảm giác “model có vẻ tốt hơn”.
 
-Trong thực tế vận hành mô hình sau fine-tuning, bạn sẽ gặp các rủi ro:
+---
 
-- Mô hình đạt 99% accuracy trên tập train nhưng bị quá khớp (overfit) và trả lời sai lệch hoàn toàn khi gặp prompt của người dùng thực tế.
-- Chất lượng của tác vụ chuyên biệt tăng lên nhưng năng lực lập luận logic tổng quát hoặc khả năng ngôn ngữ tự nhiên bị suy giảm nghiêm trọng mà không được phát hiện sớm.
-- Sử dụng sai metrics để đánh giá (ví dụ: dùng BLEU/ROUGE để đo chất lượng viết code hoặc lý luận toán học phức tạp).
-- Đánh giá mô hình dựa trên cảm tính ("nhìn thử 5-10 câu thấy ổn") thay vì chạy kiểm thử tự động trên một tập holdout set đủ lớn.
+## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Catastrophic Forgetting là có thật">
-Luôn luôn chạy kiểm thử hồi quy (regression testing) trên các tác vụ tổng quát (như MMLU hoặc một tập dữ liệu benchmark nội bộ) song song với việc đo lường tác vụ chuyên biệt. Nếu năng lực tổng quát của mô hình bị sụt giảm quá 5-10%, bạn cần phải giảm Learning Rate hoặc tăng tỷ lệ dữ liệu tổng quát (general dataset mixing) trong quá trình train.
+<Callout type="danger" title="Báo cáo sự cố: Demo tốt nhưng production regression">
+**Bối cảnh:** Một team fine-tune support assistant bằng 25,000 ticket đã làm sạch. Demo nội bộ rất ấn tượng: model trả lời ngắn gọn, đúng tone, ít cần prompt dài. Product quyết định canary 20% traffic.
+
+**Sự cố:** Sau 48 giờ, complaint rate tăng. Model xử lý các câu hỏi phổ biến tốt hơn nhưng fail ở edge cases: refund ngoại lệ, account security, policy mới và user tức giận. Nó cũng hallucinate citation vì eval offline chỉ dùng 100 câu dễ do team tự chọn.
+
+1. Eval set không đại diện production distribution.
+2. Không có regression tests cho edge cases và safety cases.
+3. Không so sánh với prompt/RAG baseline bằng cùng rubric.
+4. Không có rollback threshold tự động.
+
+**Hậu quả:** Canary rollback thủ công, mất niềm tin từ support team và phải rebuild eval harness trước khi train vòng tiếp theo.
 </Callout>
 
-## Learning objectives
-
-Sau chương này, bạn sẽ có thể:
-
-1. Thiết lập quy trình đánh giá mô hình sau khi fine-tune theo chuẩn công nghiệp.
-2. Lựa chọn và áp dụng các chỉ số đánh giá phù hợp cho từng tác vụ: BLEU, ROUGE, F1, Accuracy, Pass@k.
-3. Giải thích toán học và cách đo chỉ số $Pass@k$ trong các tác vụ sinh mã nguồn.
-4. Sử dụng các bộ khung benchmark học thuật chuẩn: MMLU, HumanEval, MT-Bench.
-5. Thiết kế hệ thống đánh giá tự động sử dụng mô hình mạnh làm giám khảo (LLM-as-judge) có hiệu chỉnh (calibration).
-6. Thiết lập quy trình kiểm thử hồi quy (regression testing) phòng ngừa catastrophic forgetting.
-
-## Prerequisites
-
-Bạn nên biết:
-
-- NLP Metrics (Phase 5): BLEU, ROUGE, F1, Accuracy, Exact Match.
-- Cấu trúc và hyperparameters của quá trình Fine-Tuning (Full FT, PEFT).
-- Cách sử dụng API của các mô hình thương mại lớn (như GPT-4o) làm judge.
+Bài học rút ra: fine-tuning phải được release như software. Mỗi checkpoint cần test suite, release gate, monitoring và rollback condition.
 
 ---
 
-## Academic Benchmarks vs Production Evals
+## 2. Architecture Blueprint (Evaluation & Release Gate)
 
-Chúng ta cần phân biệt rõ hai nhóm đánh giá:
-
-### 1. Academic Benchmarks (Đánh giá học thuật)
-Dùng để đo năng lực tổng quát của mô hình so với các mô hình khác trên thị trường:
-- **MMLU (Massive Multitask Language Understanding):** Đánh giá kiến thức đa ngành (nhân văn, khoa học xã hội, toán học, y học) qua câu hỏi trắc nghiệm.
-- **HumanEval:** Đánh giá khả năng viết code Python thông qua các bài toán lập trình tự động chạy unit tests để tính điểm $Pass@k$.
-- **GSM8K:** Đánh giá khả năng giải toán cấp tiểu học yêu cầu lý luận nhiều bước (multi-step reasoning).
-- **MT-Bench:** Đánh giá năng lực hội thoại nhiều lượt (multi-turn conversation) trên 8 lĩnh vực khác nhau.
-
-### 2. Production Evals (Đánh giá thực tế)
-Dùng để đo mức độ đáp ứng yêu cầu nghiệp vụ cụ thể của doanh nghiệp:
-- **Schema Adherence Rate:** Tỉ lệ mô hình trả về đúng định dạng JSON/XML yêu cầu.
-- **Groundedness / Faithfulness:** Tỉ lệ câu trả lời hoàn toàn dựa trên ngữ cảnh được cung cấp (không bịa đặt thông tin trong RAG).
-- **Domain Accuracy:** Độ chính xác trên tập dữ liệu holdout nội bộ.
-- **Safety / Toxicity Rate:** Tỉ lệ mô hình từ chối các câu hỏi độc hại hoặc rò rỉ thông tin nhạy cảm.
-
----
-
-## Toán học của chỉ số `Pass@k` trong sinh mã nguồn
-
-Khi đánh giá khả năng sinh mã nguồn (ví dụ trên benchmark HumanEval), việc chỉ lấy mẫu một câu duy nhất (`Pass@1`) sẽ không phản ánh đúng năng lực thực tế của mô hình do tính ngẫu nhiên của decoding (sampling). 
-
-Ta sinh ra `n` mẫu (`n ≥ k`) cho mỗi bài toán lập trình, chạy các unit tests trên cả `n` mẫu này. Giả sử có `c` mẫu vượt qua tất cả các unit tests. Chỉ số `Pass@k` được định nghĩa là xác suất để **ít nhất một mẫu trong số `k` mẫu được chọn ngẫu nhiên vượt qua kiểm thử**.
-
-Công thức toán học tính Pass@k là:
-
-`Pass@k = 1 - [ (n - c)!(n - k)! ] / [ (n - c - k)!n! ]`
-
-Trong đó:
-- `n`: Tổng số mẫu sinh ra cho mỗi bài toán (thường đặt `n=200`).
-- `c`: Số lượng mẫu vượt qua unit tests (`c ≤ n`).
-- `k`: Số lượng mẫu được rút ra để đánh giá (ví dụ `k=1, 5, 10`).
-
-Nếu `n - c < k`, tức là số mẫu lỗi quá nhiều khiến số mẫu đúng còn lại ít hơn `k`, thì tỷ lệ `Pass@k` được quy ước bằng `1.0`.
-
----
-
-## LLM-as-a-Judge: Design and Calibration
-
-Với các tác vụ sinh văn bản tự do (open-ended generation), các chỉ số dựa trên so khớp từ như BLEU/ROUGE hoạt động rất kém do không bắt được ngữ nghĩa. Ta sử dụng một mô hình mạnh (như GPT-4o) đóng vai trò làm giám khảo chấm điểm dựa trên một thang đo (rubric) rõ ràng.
-
-### Quy trình thiết kế LLM-as-judge chuẩn:
-
-1. **Định nghĩa Rubric rõ ràng:** Tránh yêu cầu chung chung "Hãy chấm điểm từ 1 đến 10". Hãy chia nhỏ tiêu chí (ví dụ: Tính chính xác, Độ mạch lạc, Trích dẫn đúng nguồn) và định nghĩa rõ thế nào là 1 điểm, 3 điểm, 5 điểm.
-2. **Pairwise Comparison (Đánh giá cặp):** Đưa cho Judge câu trả lời của Model A và Model B (ẩn danh tính) và yêu cầu chọn câu tốt hơn. Điều này giúp loại bỏ bias thích câu dài hoặc phong cách viết của một mô hình cụ thể.
-3. **Position Bias Calibration (Hiệu chuẩn thiên kiến vị trí):** LLM thường có xu hướng ưu tiên chọn câu trả lời xuất hiện đầu tiên (vị trí A). Bạn phải chạy đánh giá 2 lần với vị trí của Model A và B được đảo ngược, chỉ ghi nhận kết quả nếu cả hai lượt đánh giá nhất quán.
-
-Ví dụ một prompt chuẩn cho LLM-as-judge:
+Một eval system tốt nằm giữa training và deployment:
 
 ```text
-[System]
-You are an expert quality auditor. Evaluate the assistant's response based on the provided context and rubric.
-
-[Rubric]
-5 - Excellent: The response is fully accurate, directly answers the query, and uses only the provided context.
-3 - Moderate: The response is mostly correct but misses minor details or contains slight extrapolation.
-1 - Poor: The response contains factual errors, hallucinates information not in the context, or fails to answer the query.
-
-[Context]
-{context}
-
-[Query]
-{query}
-
-[Response]
-{response}
-
-[Output Format]
-Return ONLY a JSON object:
-{"score": 1|3|5, "rationale": "one sentence explanation"}
+[ Candidate checkpoint / adapter ]
+        │
+        ▼
+[ Offline evaluation harness ]
+  - task-specific metrics
+  - product holdout set
+  - general regression set
+  - safety/red-team set
+  - format/tool-call checks
+        │
+        ▼
+[ Judge + human review ]
+  - rubric-based LLM judge
+  - pairwise comparison
+  - expert review for high-risk cases
+        │
+        ▼
+[ Eval report ]
+  - baseline vs candidate
+  - confidence intervals
+  - failure analysis
+  - cost/latency estimate
+        │
+        ▼
+[ Release decision ]
+  - promote
+  - reject
+  - retrain
+  - canary only
+        │
+        ▼
+[ Production monitoring ]
+  - complaint rate
+  - task success
+  - safety incidents
+  - drift
+  - rollback triggers
 ```
+
+Mục tiêu: model mới chỉ được promote nếu cải thiện đúng metric chính và không làm hỏng các guardrail metric.
 
 ---
 
-## Regression Testing Pipeline
+## 3. Academic Benchmarks vs Product Evals vs Safety Evals
 
-Để đảm bảo quá trình fine-tune không phá hủy các năng lực sẵn có của mô hình nền, chúng ta cần chạy một pipeline kiểm thử hồi quy trước khi deploy.
+Không có một metric duy nhất cho mọi fine-tuning project.
+
+| Eval type | Đo cái gì? | Ví dụ | Rủi ro nếu thiếu |
+|---|---|---|---|
+| Academic benchmark | Năng lực chuẩn hóa | MMLU subset, HumanEval, GSM8K | Không biết general capability regress |
+| Product eval | Workload thật của sản phẩm | support holdout, SQL tasks, extraction cases | Demo tốt nhưng production fail |
+| Safety eval | Harm/PII/refusal/security | jailbreak, PII leak, unsafe advice | Incident pháp lý/safety |
+| Format eval | Output parse được không | JSON schema, tool args | Downstream crash |
+| Cost/latency eval | Có serve được không | p95 latency, tokens/sec, VRAM | Model tốt nhưng quá chậm/đắt |
+
+### Product eval quan trọng nhất
+
+Academic benchmarks hữu ích để phát hiện regression, nhưng product eval mới trả lời câu hỏi: “Model có giúp user của chúng ta hơn không?”.
+
+Một product holdout set nên có:
+
+1. Frequent cases từ production logs.
+2. Edge cases do domain expert viết.
+3. Recent cases sau data cutoff.
+4. Negative/safety cases.
+5. Ambiguous cases cần clarification.
+6. Examples mà baseline từng fail.
+
+---
+
+## 4. Metrics cho Fine-Tuned Models
+
+Chọn metric theo task.
+
+| Task | Metric phù hợp | Ghi chú |
+|---|---|---|
+| Classification | Accuracy, F1, precision/recall | F1 tốt hơn accuracy nếu class imbalance |
+| Extraction | Exact match, token F1, field-level accuracy | Đo từng field quan trọng |
+| Code generation | pass@1, pass@k, unit-test pass rate | Cần sandbox an toàn |
+| SQL generation | execution accuracy, result match | Parse đúng chưa đủ, chạy đúng mới quan trọng |
+| Summarization | human rubric, factuality, coverage | ROUGE chỉ là signal phụ |
+| Chat/helpfulness | pairwise win rate, human/LLM judge score | Cần rubric và calibration |
+| Tool calling | tool name accuracy, argument validity, task success | Đo cả schema và outcome |
+| Structured output | JSON valid rate, schema pass rate | Metric production-critical |
+
+### Pass@k intuition
+
+Với code generation, `pass@k` đo xác suất ít nhất một trong `k` samples pass tests.
 
 ```text
-Fine-Tuned Checkpoint 
-   │
-   ├─── Chạy trên Tập Test Chuyên Biệt (SQL/Medical) ────> Target Metric >= 90%?
-   │
-   └─── Chạy trên Tập Test Tổng Quát (General QA) ───────> General Metric Decay <= 5%?
-   │
-   ▼
-Tập Holdout Test Set đạt → Thông qua để Release
+pass@1: model phải pass ngay sample đầu tiên
+pass@k: model có k cơ hội sinh lời giải
 ```
+
+Trong production, `pass@1` thường quan trọng hơn nếu bạn chỉ trả một answer cho user. `pass@k` hữu ích trong coding assistant hoặc agent có thể thử nhiều candidates.
 
 ---
 
-## Implementation lab: Automated Evaluation Harness
+## 5. LLM-as-Judge và Rubric Calibration
 
-**Nhiệm vụ:** Viết một script Python tự động hóa việc chạy đánh giá mô hình fine-tuned trên tập dữ liệu holdout, sử dụng GPT-4o-mini làm judge để tính điểm trung bình và tỉ lệ đạt yêu cầu.
+LLM-as-judge giúp scale evaluation cho open-ended outputs, nhưng judge cũng có bias.
+
+### Rubric tốt
+
+```text
+Score each answer from 1 to 5:
+1. Correctness: answer is factually and technically correct.
+2. Grounding: answer only uses provided evidence/context.
+3. Helpfulness: answer resolves the user's task.
+4. Format: answer follows required structure.
+5. Safety: answer avoids harmful, private, or unauthorized content.
+
+Return JSON with:
+- score_correctness
+- score_grounding
+- score_helpfulness
+- score_format
+- score_safety
+- explanation_short
+- failure_tags
+```
+
+### Pairwise judging
+
+Thay vì chấm tuyệt đối, judge chọn output tốt hơn giữa baseline và candidate:
+
+```text
+Prompt + context
+Answer A: baseline output
+Answer B: candidate output
+Judge: A wins / B wins / tie, with reason
+```
+
+Pairwise thường ổn định hơn scoring tuyệt đối, nhưng cần randomize vị trí A/B để tránh position bias.
+
+### Calibration checklist
+
+```text
+[ ] Judge rubric đã được domain expert review.
+[ ] Có gold set nhỏ do human chấm.
+[ ] Judge agreement với human đạt threshold.
+[ ] A/B order được randomize.
+[ ] Judge không biết answer nào là baseline/candidate.
+[ ] Có failure tags để phân tích lỗi.
+[ ] Có manual review cho high-risk disagreements.
+```
+
+<Callout type="warning" title="Judge không phải sự thật tuyệt đối">
+LLM judge là một evaluator có lỗi. Đừng dùng nó một mình cho high-stakes release. Hãy calibrate với human labels và phân tích disagreement.
+</Callout>
+
+---
+
+## 6. Regression Testing Across Checkpoints
+
+Fine-tuning phải so sánh nhiều checkpoint và baseline.
+
+```text
+baseline_model
+checkpoint_1000
+checkpoint_2000
+checkpoint_3000
+final_checkpoint
+```
+
+Eval table nên nhìn như sau:
+
+| Model | Task win rate | JSON valid | General regression | Safety fail | p95 latency | Decision |
+|---|---:|---:|---:|---:|---:|---|
+| Baseline | 0.50 | 0.91 | 0.00 | 1.2% | 900ms | Reference |
+| CKPT-1000 | 0.56 | 0.96 | -0.01 | 1.1% | 920ms | Candidate |
+| CKPT-2000 | 0.61 | 0.98 | -0.03 | 1.3% | 940ms | Best |
+| CKPT-3000 | 0.63 | 0.98 | -0.09 | 2.8% | 950ms | Reject |
+
+Checkpoint cuối không luôn là checkpoint tốt nhất. Overfitting thường xuất hiện sau khi task metric tiếp tục tăng nhẹ nhưng regression/safety giảm mạnh.
+
+---
+
+## 7. Implementation Playbook: Automated Eval CLI
+
+Một eval harness tối thiểu cần chạy cùng một eval set trên baseline và candidate.
 
 ```python
+import argparse
 import json
-import os
-from openai import OpenAI
+from pathlib import Path
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-# Tập dữ liệu kiểm thử holdout (không xuất hiện trong quá trình train)
-eval_dataset = [
-    {
-        "query": "Làm thế nào để yêu cầu hoàn tiền cho đơn hàng bị lỗi?",
-        "context": "Chính sách hoàn tiền: Khách hàng được hoàn tiền 100% nếu sản phẩm bị lỗi do nhà sản xuất và yêu cầu được gửi trong vòng 7 ngày kể từ khi nhận hàng.",
-        "model_output": "Bạn có thể yêu cầu hoàn tiền 100% nếu sản phẩm bị lỗi từ nhà sản xuất. Hãy gửi yêu cầu trong vòng 7 ngày kể từ lúc nhận được hàng."
-    },
-    {
-        "query": "Tôi có được hoàn tiền nếu đổi ý không muốn mua nữa không?",
-        "context": "Chính sách hoàn tiền: Không áp dụng hoàn tiền cho trường hợp khách hàng đổi ý hoặc không thích sản phẩm sau khi đã khui seal.",
-        "model_output": "Có, bạn vẫn được hoàn tiền bình thường nếu đổi ý, chỉ cần sản phẩm chưa dùng." # Lỗi: Sai lệch thông tin (Hallucination)
-    }
-]
+def load_jsonl(path):
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            yield json.loads(line)
 
-def evaluate_output(query, context, response):
-    prompt = f"""
-Evaluate the response based on the context.
-Context: {context}
-Query: {query}
-Response: {response}
 
-Return JSON: {{"score": 1|3|5, "reason": "why"}}
-"""
+def exact_match(prediction, expected):
+    return prediction.strip() == expected.strip()
+
+
+def json_valid(prediction):
     try:
-        completion = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.0
-        )
-        return json.loads(completion.choices[0].message.content)
-    except Exception as e:
-        return {"score": 1, "reason": f"Judge failed: {str(e)}"}
+        json.loads(prediction)
+        return True
+    except Exception:
+        return False
 
-# Chạy đánh giá toàn bộ tập test
-scores = []
-for idx, case in enumerate(eval_dataset):
-    result = evaluate_output(case["query"], case["context"], case["model_output"])
-    scores.append(result["score"])
-    print(f"Case {idx+1} | Score: {result['score']} | Reason: {result['reason']}")
 
-mean_score = sum(scores) / len(scores)
-print(f"\nEvaluation Completed. Mean Quality Score: {mean_score:.2f} / 5.0")
+def run_model(model_id, prompt):
+    # Replace with provider call, vLLM endpoint, or local generation.
+    raise NotImplementedError
+
+
+def evaluate(model_id, eval_path):
+    results = []
+    for example in load_jsonl(eval_path):
+        prediction = run_model(model_id, example["prompt"])
+        result = {
+            "id": example["id"],
+            "prediction": prediction,
+            "exact_match": exact_match(prediction, example.get("expected", "")),
+            "json_valid": json_valid(prediction) if example.get("requires_json") else None,
+            "tags": example.get("tags", []),
+        }
+        results.append(result)
+    return results
+
+
+def summarize(results):
+    exact = [r["exact_match"] for r in results]
+    json_checks = [r["json_valid"] for r in results if r["json_valid"] is not None]
+    return {
+        "num_examples": len(results),
+        "exact_match": sum(exact) / len(exact) if exact else None,
+        "json_valid_rate": sum(json_checks) / len(json_checks) if json_checks else None,
+    }
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--eval-set", required=True)
+    parser.add_argument("--out", required=True)
+    args = parser.parse_args()
+
+    results = evaluate(args.model, args.eval_set)
+    report = {
+        "model": args.model,
+        "eval_set": args.eval_set,
+        "summary": summarize(results),
+        "results": results,
+    }
+
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+```
+
+### Eval report schema
+
+```json
+{
+  "model_id": "support-qlora-v1",
+  "baseline_id": "llama3-8b-instruct",
+  "dataset_version": "support_eval_2026_07_01",
+  "summary": {
+    "task_win_rate_delta": 0.09,
+    "json_valid_rate": 0.982,
+    "general_regression_delta": -0.018,
+    "safety_failure_rate": 0.006,
+    "p95_latency_ms": 940
+  },
+  "decision": "promote_to_canary",
+  "failure_tags_top": ["missing_citation", "ambiguous_refund_policy"],
+  "reviewers": ["domain_expert", "ml_engineer"]
+}
 ```
 
 ---
 
-## Common mistakes & debugging checklist
+## 8. Release Gates và Rollback Policy
 
-<Callout type="warning" title="Mistake 1: Đánh giá mô hình bằng dữ liệu đã thấy (Data Leakage)">
-Nếu bạn chạy eval trên chính tập dữ liệu đã dùng để train, chỉ số độ chính xác sẽ cực kỳ cao nhưng hoàn toàn vô nghĩa khi deploy thực tế. Hãy luôn giữ riêng một tập **Holdout Test Set** (tối thiểu 10-20% dữ liệu sạch) không bao giờ cho mô hình tiếp cận trong lúc train.
+Một release gate tốt có threshold trước khi train, không viết sau khi thấy kết quả.
+
+```json
+{
+  "release_gate": {
+    "task_win_rate_delta": ">= +0.07",
+    "json_valid_rate": ">= 0.98",
+    "general_regression_delta": ">= -0.03",
+    "safety_failure_rate": "<= baseline",
+    "p95_latency_ms": "<= 1200"
+  },
+  "canary": {
+    "traffic_percent": 5,
+    "duration_hours": 24,
+    "rollback_if": {
+      "complaint_rate_delta": "> +15%",
+      "safety_incidents": "> 0 critical",
+      "tool_error_rate": "> baseline + 10%"
+    }
+  }
+}
+```
+
+Release process:
+
+1. Run offline eval.
+2. Review failure analysis.
+3. Promote to small canary only if gates pass.
+4. Monitor production metrics by cohort.
+5. Rollback automatically on critical threshold.
+6. Convert production failures into regression tests.
+
+<Callout type="tip" title="Mỗi incident phải trở thành test">
+Nếu model fail ở production và bạn sửa bằng data/prompt/training, hãy thêm case đó vào regression eval. Nếu không, lỗi có thể quay lại ở vòng fine-tuning tiếp theo.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: Đánh giá bằng cảm tính (Vibe Check)">
-Nhiều kỹ sư chỉ chat thử vài câu thấy mô hình trả lời hay và quyết định deploy. Mô hình ngôn ngữ có tính xác suất; một câu trả lời hay không đại diện cho toàn bộ phân phối đầu ra. Hãy luôn có tập test tự động hóa tối thiểu 100-200 cases.
+---
+
+## 9. Project Guide: End-to-End Fine-Tuning Pipeline (Phase 10 Hard)
+
+Official project Phase 10 hard:
+
+```text
+Build an end-to-end fine-tuning pipeline
+- Prepare dataset with data card and validation gates
+- Train SFT/PEFT model and optionally add preference optimization step
+- Evaluate against custom benchmark and baseline
+- Produce model/adaptor manifest, eval report, and release decision
+- Stack: HuggingFace, TRL, PEFT, W&B/MLflow, optional DPO
+```
+
+MVP deliverables:
+
+1. Dataset pipeline:
+   - raw to processed JSONL,
+   - schema validation,
+   - PII/secrets scan,
+   - dedup and split manifest,
+   - dataset card.
+2. Training pipeline:
+   - config-first SFT/QLoRA,
+   - logged experiment,
+   - saved adapter/model artifact,
+   - manifest with base model revision.
+3. Evaluation harness:
+   - baseline vs candidate,
+   - task metrics,
+   - regression set,
+   - safety/format checks,
+   - failure tags.
+4. Release report:
+   - decision: reject/canary/promote,
+   - thresholds,
+   - cost/latency estimate,
+   - rollback plan.
+
+Stretch goals:
+
+- Add pairwise LLM-as-judge with calibration set.
+- Add DPO step using preference data.
+- Build a small dashboard comparing checkpoints.
+- Run canary simulation with synthetic production logs.
+
+---
+
+## 10. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Eval set quá dễ">
+**Triệu chứng:** Offline score cao nhưng production fail edge cases.
+
+**Nguyên nhân:** Eval chỉ gồm examples sạch/dễ hoặc do team tự chọn thiên lệch.
+
+**Cách khắc phục:** Lấy production logs, thêm hard cases, edge cases, recent cases và failures của baseline.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: Judge model yếu hơn Candidate model">
-Nếu bạn dùng một mô hình nhỏ (ví dụ 7B) để làm judge đánh giá chất lượng đầu ra của một mô hình lớn hơn hoặc tương đương, kết quả chấm điểm sẽ không chính xác và bị nhiễu do năng lực suy luận của judge kém hơn. Luôn dùng các mô hình đỉnh cao (như GPT-4o, Claude 3.5 Sonnet) làm judge.
+<Callout type="warning" title="Pitfall 2: Judge bias">
+**Triệu chứng:** LLM judge luôn thích answer dài hơn hoặc style giống candidate.
+
+**Nguyên nhân:** Rubric mơ hồ, không randomize A/B, không calibrate với human labels.
+
+**Cách khắc phục:** Pairwise blind judging, position randomization, gold set do human chấm và disagreement review.
 </Callout>
 
-### Checklist đánh giá chất lượng:
+<Callout type="warning" title="Pitfall 3: Benchmark contamination">
+**Triệu chứng:** Model đạt điểm benchmark bất thường nhưng không cải thiện production.
 
-- [ ] Đã tách biệt hoàn toàn tập Holdout Test Set chưa?
-- [ ] Có chạy kiểm thử hồi quy để đo mức độ suy giảm năng lực tổng quát (catastrophic forgetting) chưa?
-- [ ] Judge model có sử dụng prompt với rubric rõ ràng và định dạng đầu ra JSON không?
-- [ ] Đã xử lý lỗi Position Bias trong trường hợp chạy Pairwise Comparison chưa?
-- [ ] Các metrics được chọn (BLEU, ROUGE, F1, Pass@k) có phù hợp với đặc thù tác vụ không?
-- [ ] Có thực hiện đánh giá thủ công (human-in-the-loop) ngẫu nhiên để calibrate lại judge model không?
+**Nguyên nhân:** Test examples bị lẫn vào train hoặc benchmark public đã nằm trong pretraining/fine-tuning data.
+
+**Cách khắc phục:** Dùng private holdout, leakage scan, group split và custom production eval.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Không có rollback threshold">
+**Triệu chứng:** Canary xấu nhưng team tranh luận thủ công quá lâu.
+
+**Nguyên nhân:** Không định nghĩa metric rollback trước release.
+
+**Cách khắc phục:** Viết rollback policy trước khi canary và tự động alert khi vượt threshold.
+</Callout>
+
+---
+
+## 11. Evaluation Unit Economics
+
+Eval cũng tốn tiền, nhưng rẻ hơn incident.
+
+| Quyết định | Lợi ích | Trade-off |
+|---|---|---|
+| Eval nhỏ, chạy nhanh | Feedback nhanh | Dễ miss edge cases |
+| Eval lớn, nhiều judge calls | Coverage tốt | Tốn API/compute |
+| Human expert review | Chất lượng cao | Chậm và đắt |
+| LLM-as-judge | Scale tốt | Bias/calibration risk |
+| Eval mỗi checkpoint | Chọn checkpoint tốt hơn | Tốn thời gian |
+| Production monitoring | Phát hiện drift thật | Cần instrumentation |
+
+Cost estimate:
+
+```text
+eval_cost = num_examples * num_models * judge_calls_per_example * price_per_judge_call
+human_cost = num_reviewed_examples * minutes_per_example * reviewer_hourly_rate / 60
+```
+
+Production takeaway: hãy chia eval thành tầng. Cheap automated checks chạy thường xuyên; expensive human/judge review chạy cho candidate checkpoint hoặc high-risk cases.
 
 ---
 
 ## Practice exercises
 
-1. **Đánh giá mô hình của bạn:** Tạo một tập dữ liệu gồm 30 câu hỏi/đáp chuyên ngành của bạn, thiết lập rubric chấm điểm 3 tiêu chí, và chạy đánh giá so sánh giữa mô hình gốc (base) và mô hình sau khi fine-tune.
-2. **Tính toán Pass@k:** Viết một script Python tính toán chỉ số $Pass@k$ dựa trên kết quả chạy unit tests thực tế từ một tập hợp $n=100$ đoạn code sinh ra cho 5 bài toán lập trình.
-3. **Thiết lập hệ thống phát hiện Position Bias:** Viết code chạy pairwise evaluation đảo ngược vị trí A-B của câu trả lời và đo lường tỷ lệ không nhất quán của judge model trên 50 ví dụ.
+1. Thiết kế eval set 200 examples cho một support assistant: frequent, edge, safety, format và regression cases.
+2. Viết release gate cho một model fine-tuned sinh JSON tool calls.
+3. Tạo rubric LLM-as-judge gồm correctness, grounding, helpfulness, format và safety.
+4. So sánh `pass@1` và `pass@k` trong coding assistant.
+5. Lấy một production failure giả định và biến nó thành regression test.
 
 ---
 
 ## Knowledge check
 
-1. Tại sao chỉ số training loss thấp không đồng nghĩa với việc mô hình hoạt động tốt ngoài thực tế?
-2. Sự khác biệt giữa chỉ số BLEU và ROUGE trong đánh giá văn bản là gì?
-3. $Pass@k$ hoạt động như thế nào trong các tác vụ sinh mã nguồn (code generation)?
-4. Làm thế nào để loại bỏ hiện tượng thiên kiến vị trí (position bias) của LLM-as-judge?
-5. Tại sao ta cần chạy kiểm thử hồi quy (regression testing) sau khi fine-tune?
+1. Vì sao training loss thấp không đủ để release model?
+2. Product eval khác academic benchmark như thế nào?
+3. LLM-as-judge cần calibration gì?
+4. Vì sao checkpoint cuối không luôn là checkpoint tốt nhất?
+5. Rollback policy nên được định nghĩa khi nào?
 
 ---
 
 ## Answer key
 
-1. Vì mô hình có thể đã bị quá khớp (overfitting) vào các cụm từ cụ thể của tập train, hoặc bị suy sụp năng lực suy luận tổng quát mà loss không thể hiển thị.
-2. BLEU tập trung đo độ chính xác (precision) của n-grams (phù hợp cho dịch thuật); ROUGE tập trung đo độ phủ (recall) của n-grams (phù hợp cho tóm tắt văn bản).
-3. Nó sinh ra $n$ mẫu cho mỗi bài toán, chạy unit tests cho từng đoạn; chỉ cần có ít nhất 1 đoạn vượt qua toàn bộ unit tests trong số $k$ mẫu rút ra ngẫu nhiên thì được tính là pass.
-4. Đảo ngược vị trí hiển thị của các câu trả lời (A/B thành B/A) khi đưa vào prompt của judge và chỉ chấp nhận kết quả nếu cả hai lượt chấm đều chọn cùng một mô hình thắng cuộc.
-5. Để phát hiện và ngăn chặn hiện tượng catastrophic forgetting, đảm bảo mô hình không bị mất đi các năng lực cơ bản sẵn có sau khi học tác vụ mới.
-
----
-
-## Mini-project: Automated LLM Evaluation Platform
-
-### Nhiệm vụ:
-Xây dựng một công cụ CLI bằng Python để tự động đánh giá và so sánh hai checkpoints mô hình sau khi huấn luyện.
-
-### Yêu cầu đầu ra:
-- Nhận đầu vào là file JSON chứa danh sách các câu test (query, context, expected_answer).
-- Gọi suy luận từ hai mô hình khác nhau để lấy câu trả lời.
-- Sử dụng GPT-4o-mini làm judge để chấm điểm độc lập từng câu trả lời theo rubric 3 tiêu chí: Accuracy, Groundedness, Clarity.
-- Tính toán và xuất ra bảng báo cáo chi tiết: điểm trung bình từng tiêu chí, tỉ lệ win/loss của mô hình A vs B, và danh sách các câu bị điểm kém (score = 1) để kỹ sư phân tích lỗi.
+1. Vì loss chỉ đo fit trên training objective; nó không đảm bảo task quality, safety, format adherence, general capability hoặc production latency.
+2. Academic benchmark đo năng lực chuẩn hóa; product eval đo workload thật, edge cases và success criteria của sản phẩm.
+3. Cần rubric rõ, gold set human-labeled, randomize A/B, blind comparison và disagreement review.
+4. Vì overfitting/regression có thể tăng ở các bước cuối dù task metric tiếp tục tăng nhẹ.
+5. Trước khi release/canary, tốt nhất trước cả khi train, để tránh chỉnh threshold theo kết quả mong muốn.
 
 ---
 
 ## Điểm cần nhớ
 
-- Đánh giá chất lượng sau fine-tuning là bắt buộc để kiểm soát overfitting và catastrophic forgetting.
-- BLEU/ROUGE phù hợp cho so khớp từ; LLM-as-a-judge phù hợp cho đánh giá ngữ nghĩa tự do.
-- Luôn calibrate judge model bằng rubric chi tiết và xử lý position bias.
-- Thiết lập hệ thống kiểm thử hồi quy để giữ vững năng lực nền của mô hình.
+- Fine-tuning không hoàn thành ở training; nó hoàn thành khi model vượt release gates.
+- Eval phải so sánh baseline và candidate trên cùng dataset/rubric.
+- Product holdout set quan trọng hơn demo examples tự chọn.
+- LLM-as-judge hữu ích nhưng phải calibrate với human labels và randomization.
+- Regression tests giúp phát hiện catastrophic forgetting, safety regress và format failures.
+- Mỗi production incident nên trở thành một regression test cho vòng release tiếp theo.
 
----
+## Tổng kết Phase 10 (Phase 10 Wrap-up)
 
-## Phase 10 wrap-up
+Bạn vừa hoàn thành chuyên đề **Fine-Tuning & Model Customization** ở mức AI Engineer production-ready:
 
-Bạn đã hoàn thành toàn bộ chuyên đề **Fine-Tuning & Model Customization**:
+1. **When to Fine-Tune** — bạn học cách quyết định giữa prompt, RAG, tool/API và fine-tuning bằng decision matrix, cost model và production gates.
+2. **Full Fine-Tuning** — bạn hiểu SFT objective, loss masking, VRAM economics, checkpointing, ZeRO/FSDP và rủi ro catastrophic forgetting.
+3. **Parameter-Efficient Fine-Tuning (PEFT)** — bạn nắm LoRA, QLoRA, adapter lifecycle, target modules, merging và multi-tenant serving trade-offs.
+4. **Fine-Tuning Tools** — bạn biết cách dùng toolchain config-first như TRL, Unsloth, Axolotl, LLaMA-Factory, W&B/MLflow để training reproducible.
+5. **Dataset Preparation** — bạn xây được data factory với schema validation, PII/secrets scan, dedup, leakage prevention, data mixing và dataset card.
+6. **Evaluation After Fine-Tuning** — bạn thiết kế eval harness, LLM-as-judge, regression tests, release gates và rollback policy.
 
-1. **When to Fine-Tune:** Hiểu rõ ranh giới kỹ thuật và tradeoffs giữa Prompt, RAG và Fine-Tuning.
-2. **Full Fine-Tuning:** Làm chủ pipeline huấn luyện toàn bộ tham số, Chat Templates và cách tối ưu hóa VRAM.
-3. **Parameter-Efficient Fine-Tuning (PEFT):** Nắm vững cơ chế toán học của LoRA/QLoRA để train mô hình lớn trên phần cứng giới hạn.
-4. **Fine-Tuning Tools:** Làm chủ hệ sinh thái Unsloth, Axolotl, LLaMA-Factory và Weights & Biases.
-5. **Dataset Preparation:** Xây dựng quy trình làm sạch, lọc trùng lặp bằng MinHash LSH và Dataset Mixing.
-6. **Evaluation After Fine-Tuning:** Thiết lập hệ thống đánh giá tự động bằng LLM-as-judge và kiểm thử hồi quy bảo vệ mô hình.
-
----
+Phase 10 biến fine-tuning từ một kỹ thuật training thành một engineering lifecycle: quyết định đúng, dữ liệu đúng, training đúng, eval đúng và release đúng.
 
 ## Next phase bridge
 
-Sau khi đã làm chủ các kỹ năng xử lý văn bản, tối ưu hóa prompt, RAG, agents và fine-tuning mô hình ngôn ngữ lớn, chúng ta sẽ mở rộng ranh giới của Generative AI ra các định dạng truyền thông khác. Chương tiếp theo: **Generative AI (Beyond Text)** — khám phá thế giới của mô hình khuếch tán (Diffusion Models), VAEs, GANs, xử lý hình ảnh (Vision-Language Models), âm thanh (STT/TTS) và video AI thế hệ mới.
+Sau khi bạn biết cách tùy biến model bằng fine-tuning, bước tiếp theo là hiểu cách các hệ thống **Generative AI** tạo ra nội dung đa dạng hơn text thuần: image, audio, video, diffusion models, multimodal generation và creative AI pipelines trong Phase 11.

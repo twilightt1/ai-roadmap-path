@@ -1,164 +1,370 @@
-Trong một dự án AI thực tế, bạn không bao giờ huấn luyện (train) mô hình chỉ một lần. Kỹ sư AI sẽ thử nghiệm hàng chục cấu hình Learning Rate, hàng trăm cách kết hợp Batch Size và thử qua nhiều phương pháp Optimizer khác nhau để tìm ra mô hình tốt nhất. Nếu không có một hệ thống **Experiment Tracking (Theo dõi thử nghiệm)** chuyên nghiệp, quá trình này sẽ nhanh chóng biến thành một mớ hỗn độn (chaos) lưu trữ trong các file Excel hoặc tên file thư mục như `model_v1_final_real_fixed.pt`.
+Ở bài trước, bạn đã học cách version dữ liệu để một model có thể reproduce. Nhưng reproducibility chưa đủ nếu bạn không biết **run nào** đã tạo ra model tốt nhất, với hyperparameters nào, trên GPU nào, dùng dataset hash nào và eval report nào.
+
+**Experiment Tracking** là nhật ký vận hành của AI engineering. Nó thay thế file Excel, tên thư mục `final_v7_best_REAL`, screenshot loss curve và trí nhớ của con người bằng một hệ thống có thể truy vấn, so sánh, audit và promote model artifact vào production.
 
 ---
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: Mô hình 'Chén Thánh' bị thất lạc">
-**Bối cảnh:** Nhóm MLOps có 3 tuần để fine-tune mô hình LLaMA-3 cho bài toán Medical QA. Kỹ sư Lead chạy hơn 40 thử nghiệm (experiments) vào cuối tuần bằng cách ssh trực tiếp vào máy chủ GPU và ghi chú các tham số (learning rate, epoch) vào một cuốn sổ tay.
+<Callout type="danger" title="Báo cáo sự cố: Run tốt nhất biến mất sau cuối tuần train GPU">
+**Bối cảnh:** Team fine-tune một model medical QA. Lead engineer chạy 48 thử nghiệm trong cuối tuần trên nhiều GPU, mỗi run thay learning rate, LoRA rank, scheduler và dataset mix.
 
-**Sự cố:** Sáng thứ hai, kỹ sư thông báo: "Run số 27 cho kết quả xuất sắc nhất, Loss giảm mượt và độ chính xác đạt 92%". Tuy nhiên, khi nhóm Engineering yêu cầu cung cấp lại cấu hình chính xác (Hyperparameters) và phiên bản tập dữ liệu (Dataset version) để tái tạo (reproduce) mô hình cho môi trường Production, kỹ sư Lead phát hiện ra mình đã... quên lưu lại hệ số Weight Decay và tên file mã nguồn `train.py` tại thời điểm chạy Run 27 đã bị ghi đè.
+**Sự cố:** Sáng thứ Hai, engineer nói run 27 là tốt nhất: eval loss thấp, doctor review tốt. Nhưng khi chuẩn bị deploy, team không tìm được config chính xác của run 27. File `train.py` đã bị sửa, validation set đã đổi, checkpoint tốt nhất nằm trong thư mục local bị xóa khi máy spot bị thu hồi.
 
-**Hậu quả:** Nhóm phải tốn thêm 4 ngày chạy lại hàng loạt thử nghiệm để "dò dẫm" lại cấu hình của Run 27. Thiệt hại hàng nghìn đô la tiền máy chủ GPU chỉ vì thiếu hệ thống Tracking tự động.
+1. Hyperparameters không được log tự động.
+2. Dataset/version hash không gắn với run.
+3. Checkpoint không được lưu như artifact.
+4. System metrics như GPU utilization, OOM và step time không được ghi lại.
+
+**Hậu quả:** Team phải train lại nhiều ngày để đoán lại cấu hình, đốt thêm GPU budget và mất niềm tin vào benchmark nội bộ.
 </Callout>
 
-Bài học rút ra: Con người có trí nhớ hữu hạn. Máy móc (W&B, MLflow) sinh ra để ghi nhớ thay bạn mọi thứ: từ Hyperparameters, Metrics, cho đến mã nguồn (Git commit) và tài nguyên hệ thống (GPU Temp, VRAM usage).
+Bài học rút ra: training run không có tracking là một thí nghiệm không tồn tại. Nếu bạn không thể tìm lại config, data, code và artifact, bạn không thể ship nó vào production.
 
 ---
 
-## 2. Architecture Blueprint (Kiến trúc giải pháp)
+## 2. Architecture Blueprint (Experiment Control Tower)
 
-Một hệ thống Experiment Tracking chuẩn SRE (Site Reliability Engineering) không hoạt động cô lập. Nó nằm ở vị trí trung tâm, thu thập luồng đo lường (Telemetry) từ hạ tầng GPU và pipeline huấn luyện.
+Một tracking system tốt nằm ở trung tâm training pipeline, nhận telemetry từ code, data, hardware và eval.
 
 ```text
-[ Data / Code ]                    [ Hardware / GPU ]
-      │                                    │
-      ▼                                    ▼
-[ Training Script (PyTorch / HuggingFace) ]
-      │
-      │ (Gửi Logs qua REST API bất đồng bộ)
-      │ 1. Hyperparameters (LR, Batch size, Epochs)
-      │ 2. Metrics (Train loss, Eval loss, Accuracy)
-      │ 3. System (VRAM, GPU Usage, Temp)
-      │ 4. Artifacts (Model weights, Dataset hashes)
-      ▼
-[ MLOps Tracking Server (W&B / MLflow) ]
-      │
-      ├──> Dashboard trực quan (Biểu đồ Loss, So sánh Run)
-      └──> Model Registry (Quản lý trạng thái: Staging -> Production)
+[ Git commit + config ]       [ Dataset manifest ]       [ GPU cluster ]
+        │                            │                         │
+        └──────────────┬─────────────┴─────────────┬───────────┘
+                       ▼                           ▼
+              [ Training script / Trainer / Accelerate ]
+                       │
+                       │ async logging
+                       ▼
+[ Experiment Tracking Server: W&B / MLflow / Neptune ]
+  - run metadata
+  - hyperparameters
+  - metrics curves
+  - system metrics
+  - artifacts
+  - eval reports
+  - notes and tags
+                       │
+                       ▼
+[ Model Registry ]
+  - candidate
+  - staging
+  - production
+  - archived
 ```
 
-Kiến trúc này đảm bảo rằng ngay cả khi máy chủ GPU bị sập (Crash / OOM), toàn bộ nhật ký tiến trình trước đó đã được lưu trữ an toàn trên máy chủ MLOps.
+Một run production-ready nên có tối thiểu:
+
+- `run_id`, owner, timestamp,
+- Git commit SHA,
+- dataset manifest hash,
+- model/base checkpoint,
+- training config,
+- metrics train/eval,
+- system metrics,
+- artifact links,
+- eval report,
+- approval state.
 
 ---
 
-## 3. Tooling Landscape (Ma trận công cụ)
+## 3. Runs, Metrics, Artifacts và Registry
 
-| Công cụ | Mô hình triển khai | Ưu điểm (Pros) | Nhược điểm (Cons) | Khi nào nên dùng |
-|---|---|---|---|---|
-| **Weights & Biases (W&B)** | SaaS (Đám mây) hoặc Enterprise On-premise | Cực kỳ trực quan, tích hợp sâu với HuggingFace, cộng đồng LLM dùng nhiều nhất, theo dõi System Metrics xuất sắc. | Giới hạn dung lượng lưu trữ Artifacts ở bản miễn phí. | Lựa chọn **số 1** cho các dự án LLM/Deep Learning hiện đại. |
-| **MLflow** | Open-source (Tự Host) hoặc managed (Databricks) | Mã nguồn mở 100%, bảo mật dữ liệu tuyệt đối khi tự host, hệ thống Model Registry chuẩn công nghiệp. | Giao diện UI cũ kỹ, setup hạ tầng ban đầu phức tạp (cần Database + S3). | Doanh nghiệp có yêu cầu bảo mật dữ liệu khắt khe (On-premise). |
-| **TensorBoard** | Open-source (Local) | Đi kèm sẵn với PyTorch/TensorFlow, dễ sử dụng cho các dự án cá nhân nhỏ. | Không có tính năng làm việc nhóm (Collaboration), khó so sánh hàng chục runs cùng lúc. | Học tập cá nhân, test nhanh trên máy tính cục bộ. |
+Experiment tracking không chỉ là biểu đồ loss. Nó gồm bốn lớp:
+
+| Lớp | Nội dung | Câu hỏi trả lời |
+|---|---|---|
+| Run metadata | tên run, tags, owner, commit, dataset hash | Run này là gì? |
+| Metrics | loss, accuracy, reward, latency, tokens/s | Run có tốt hơn không? |
+| Artifacts | checkpoints, LoRA adapter, tokenizer, eval report | Lấy model ở đâu? |
+| Registry | stage, approval, deployment target | Model có được deploy không? |
+
+Nếu chỉ log `train_loss`, bạn không thể giải thích vì sao run tốt hơn. Nếu chỉ lưu checkpoint, bạn không thể biết checkpoint đó có an toàn để deploy hay không.
 
 ---
 
-## 4. Implementation Playbook (Thực thi)
+## 4. W&B vs MLflow vs TensorBoard
 
-Hãy cùng thiết lập một hệ thống theo dõi thử nghiệm chuẩn công nghiệp sử dụng **Weights & Biases (W&B)** kết hợp với `Trainer` API của HuggingFace.
+| Công cụ | Điểm mạnh | Giới hạn | Khi nên dùng |
+|---|---|---|---|
+| Weights & Biases | UI mạnh, cộng tác tốt, system metrics tốt, artifact tracking tiện | SaaS mặc định, cần kiểm soát dữ liệu nhạy cảm | LLM/fine-tuning team cần tốc độ và dashboard đẹp |
+| MLflow | Open-source, tự host dễ hơn, registry mạnh | UI ít hiện đại hơn, setup backend store/artifact store cần DevOps | Doanh nghiệp cần on-prem/private cloud |
+| TensorBoard | đơn giản, local, tích hợp PyTorch/TensorFlow | yếu về collaboration, registry và artifacts | học tập, debug local, research nhỏ |
+| Neptune/ClearML | tracking đầy đủ, team workflow | thêm vendor/tooling | tổ chức đã chuẩn hóa theo vendor này |
 
-### Bước 1: Khởi tạo và Xác thực W&B
-Tuyệt đối không lưu cứng (hardcode) API Key trong mã nguồn. Hãy sử dụng biến môi trường (Environment Variables).
+Quy tắc thực dụng:
+
+- Team nhỏ, muốn nhanh: dùng W&B.
+- Enterprise cần kiểm soát dữ liệu: MLflow self-host hoặc W&B enterprise/on-prem.
+- Debug local: TensorBoard vẫn đủ tốt.
+
+---
+
+## 5. What to Log for LLM Fine-Tuning
+
+Với LLM, các field quan trọng hơn ML truyền thống vì chi phí lớn và lỗi khó debug.
+
+### Config nên log
+
+```json
+{
+  "base_model": "meta-llama/Meta-Llama-3-8B-Instruct",
+  "method": "qlora",
+  "lora_rank": 16,
+  "lora_alpha": 32,
+  "learning_rate": 0.00002,
+  "scheduler": "cosine",
+  "warmup_ratio": 0.05,
+  "max_seq_length": 4096,
+  "dataset_manifest_hash": "sha256:...",
+  "git_commit": "7c9f2ab"
+}
+```
+
+### Metrics nên log
+
+| Metric | Vì sao quan trọng |
+|---|---|
+| `train_loss` | phát hiện training không hội tụ |
+| `eval_loss` | phát hiện overfit tương đối |
+| task metric | đo đúng bài toán: F1, exact match, pass@k |
+| judge score | đo semantic quality |
+| tokens/sec | tính throughput và GPU efficiency |
+| GPU utilization | phát hiện bottleneck CPU/I/O |
+| memory allocated | tránh OOM, tối ưu batch size |
+| cost estimate | quyết định early stop hoặc scale |
+
+<Callout type="warning" title="Loss giảm không đồng nghĩa production tốt hơn">
+Một model có eval loss thấp hơn vẫn có thể trả lời dài dòng hơn, vi phạm format JSON nhiều hơn hoặc an toàn kém hơn. Vì vậy tracking phải log cả task eval và safety/regression eval.
+</Callout>
+
+---
+
+## Implementation Playbook: W&B Tracking for Hugging Face Trainer
+
+### Bước 1: Thiết lập biến môi trường
 
 ```bash
-# Trên máy chủ GPU hoặc trong tệp .env
-export WANDB_API_KEY="your_api_key_here"
-export WANDB_PROJECT="llm-finetuning-medical"
-export WANDB_LOG_MODEL="checkpoint" # Tự động lưu weights của mô hình tốt nhất
+export WANDB_API_KEY="your_api_key"
+export WANDB_PROJECT="customer-support-sft"
+export WANDB_ENTITY="ml-platform"
+export WANDB_LOG_MODEL="end"
 ```
 
-### Bước 2: Tích hợp vào Training Script
-Chỉ cần vài dòng code để liên kết HuggingFace Trainer với W&B.
+Không hardcode API key trong notebook hoặc repo.
+
+### Bước 2: Khởi tạo run với metadata đầy đủ
 
 ```python
 import os
+import subprocess
 import wandb
+
+
+def git_sha() -> str:
+    return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
+
+wandb.init(
+    project=os.environ["WANDB_PROJECT"],
+    name="qlora-r16-lr2e-5-seq4096",
+    tags=["qlora", "customer-support", "candidate"],
+    config={
+        "base_model": "meta-llama/Meta-Llama-3-8B-Instruct",
+        "method": "qlora",
+        "lora_rank": 16,
+        "learning_rate": 2e-5,
+        "max_seq_length": 4096,
+        "dataset_manifest_hash": "sha256:abc123",
+        "git_commit": git_sha(),
+    },
+)
+```
+
+### Bước 3: Kết nối với Hugging Face Trainer
+
+```python
 from transformers import TrainingArguments, Trainer
 
-# 1. Khởi tạo một Run (Thử nghiệm) mới trên W&B
-# Lưu ý: Ghi lại cấu hình máy chủ, dataset version để đảm bảo tính tái lập (Reproducibility)
-wandb.init(
-    project=os.environ.get("WANDB_PROJECT", "default_project"),
-    name="run_027_lr2e5_batch16_lora", # Đặt tên Run rõ ràng
-    config={
-        "dataset_version": "v3_cleaned",
-        "gpu_type": "NVIDIA A100",
-        "lora_rank": 16,
-        "notes": "Testing cosine scheduler with warmup 0.05"
-    }
-)
-
-# 2. Cấu hình HuggingFace Trainer
 training_args = TrainingArguments(
-    output_dir="./results",
+    output_dir="./outputs",
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=8,
     learning_rate=2e-5,
-    per_device_train_batch_size=4,
-    gradient_accumulation_steps=4,
     num_train_epochs=3,
-    evaluation_strategy="steps", # Đánh giá liên tục
-    eval_steps=50,
-    logging_steps=10,            # Gửi log (Loss) lên W&B mỗi 10 bước
-    report_to="wandb",           # BẬT TÍNH NĂNG TÍCH HỢP W&B
-    run_name="run_027_lr2e5_batch16_lora" # Đồng bộ tên Run
+    logging_steps=10,
+    eval_steps=100,
+    save_steps=500,
+    evaluation_strategy="steps",
+    save_strategy="steps",
+    report_to="wandb",
+    run_name="qlora-r16-lr2e-5-seq4096",
+    bf16=True,
 )
 
-# 3. Chạy huấn luyện
-# trainer = Trainer(..., args=training_args)
+# trainer = Trainer(model=model, args=training_args, train_dataset=train_ds, eval_dataset=eval_ds)
 # trainer.train()
+```
 
-# 4. Kết thúc và đóng kết nối an toàn
+### Bước 4: Log eval report và artifact
+
+```python
+import json
+from pathlib import Path
+
+report = {
+    "golden_set_score": 4.42,
+    "json_validity": 0.997,
+    "safety_failures": 0,
+    "notes": "Passed sanity eval; needs longer domain review before production.",
+}
+Path("eval_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+artifact = wandb.Artifact("qlora-adapter-r16", type="model")
+artifact.add_dir("./outputs/best_adapter")
+artifact.add_file("eval_report.json")
+wandb.log_artifact(artifact)
 wandb.finish()
 ```
 
 ---
 
-## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## 6. Tracking Distributed Training
 
-Dưới đây là các tình huống lỗi phổ biến khi vận hành Experiment Tracking trong môi trường phân tán:
+Khi train đa GPU, nếu mỗi process đều log cùng một metric, dashboard sẽ bị duplicate hoặc race condition.
 
-<Callout type="warning" title="Pitfall 1: Tràn đĩa cứng (Disk Full) do Log Model liên tục">
-**Triệu chứng:** Máy chủ Training bị crash với lỗi `No space left on device`.
-**Nguyên nhân:** Biến môi trường `WANDB_LOG_MODEL="true"` ra lệnh cho W&B tự động upload toàn bộ trọng số (weights) của mô hình lên đám mây sau MỖI lần lưu checkpoint (ví dụ mỗi 500 steps). Một mô hình 7B nặng 14GB, lưu 10 lần sẽ tốn 140GB dung lượng đĩa tạm và băng thông mạng.
-**Fix (Cách khắc phục):** Chỉ lưu (log) mô hình tốt nhất ở cuối cùng (End of training) thay vì mọi checkpoint. Chuyển thành `WANDB_LOG_MODEL="end"` hoặc quản lý việc lưu Artifacts thủ công trong mã nguồn.
+Pattern đúng:
+
+```python
+from accelerate import Accelerator
+
+accelerator = Accelerator()
+
+if accelerator.is_main_process:
+    wandb.init(project="llm-sft", config={"distributed": True})
+
+for step, batch in enumerate(train_loader):
+    loss = train_step(batch)
+    gathered_loss = accelerator.gather(loss).mean().item()
+
+    if accelerator.is_main_process and step % 10 == 0:
+        wandb.log({"train/loss": gathered_loss, "step": step})
+```
+
+Nguyên tắc:
+
+- chỉ main process tạo run,
+- aggregate metrics trước khi log,
+- log rank/GPU errors riêng nếu cần,
+- checkpoint lên shared storage, không chỉ local disk.
+
+---
+
+## 7. Experiment Comparison và Decision Making
+
+Tracking không có giá trị nếu team không có quy tắc ra quyết định.
+
+Ví dụ scorecard để promote model:
+
+| Gate | Điều kiện pass |
+|---|---|
+| Reproducibility | có Git commit và dataset manifest |
+| Quality | golden eval `>= 4.2/5` |
+| Regression | không fail case critical nào |
+| Format | JSON validity `>= 99.5%` |
+| Safety | prompt injection suite pass |
+| Cost | cost/request không tăng quá 20% |
+| Latency | p95 latency không tăng quá 15% |
+
+Một run thắng loss nhưng thua latency/cost có thể không phải run tốt nhất cho sản phẩm.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Upload mọi checkpoint làm đầy disk và bill artifact">
+**Triệu chứng:** Training job crash vì `No space left on device`; W&B artifact storage tăng rất nhanh.
+
+**Nguyên nhân:** `WANDB_LOG_MODEL=true` hoặc save checkpoint quá dày cho model 7B/70B.
+
+**Fix:** Chỉ upload best/final checkpoint, dùng retention policy, và lưu checkpoint trung gian vào object storage có lifecycle.
 </Callout>
 
-<Callout type="warning" title="Pitfall 2: Máy chủ Cloud không có Internet (Headless/Air-gapped)">
-**Triệu chứng:** Script Python bị treo cứng (hang) ngay ở dòng `trainer.train()` khi chạy trên cụm GPU nội bộ của ngân hàng (không có kết nối Internet ra ngoài).
-**Nguyên nhân:** W&B client cố gắng mở kết nối HTTP ra máy chủ đám mây nhưng bị tường lửa (Firewall) chặn, dẫn đến kết nối bị time-out vô tận.
-**Fix (Cách khắc phục):** Chạy W&B ở chế độ ngoại tuyến (Offline mode). Dữ liệu log sẽ được lưu thành các file nội bộ trên ổ cứng. Khi nào bạn mang dữ liệu sang máy tính có mạng, bạn mới chạy lệnh đồng bộ.
+<Callout type="warning" title="Pitfall 2: Offline cluster làm script treo khi gọi SaaS tracking">
+**Triệu chứng:** Training chạy trong VPC/air-gapped environment bị treo ở bước init logger.
+
+**Fix:** Dùng offline mode hoặc MLflow self-host trong nội mạng.
+
 ```bash
 export WANDB_MODE="offline"
-# Sau khi train xong, dùng lệnh sau ở máy có mạng để đẩy dữ liệu lên web:
-# wandb sync ./wandb/run-offline-directory
+# Sau đó sync khi có mạng:
+# wandb sync ./wandb/offline-run-...
 ```
 </Callout>
 
-<Callout type="danger" title="Pitfall 3: So sánh (Compare) các Runs có cấu trúc dữ liệu khác nhau">
-**Triệu chứng:** Bạn thấy `eval_loss` của Run A (hôm nay) giảm xuống 0.5, thấp hơn hẳn Run B (tuần trước) là 1.2. Bạn kết luận Run A tốt hơn và đem đi deploy. Thực tế, Run A thảm họa.
-**Nguyên nhân:** Tuần trước bạn dùng tập Validation Set có độ dài ngữ cảnh trung bình 2,000 tokens (bài toán khó). Tuần này, một kỹ sư data đã "vô tình" thay đổi Validation Set chỉ còn 200 tokens (bài toán dễ). Mọi phép so sánh Loss giữa hai Run này là **vô nghĩa (Invalid Comparison)**.
-**Fix (Cách khắc phục):** Luôn ghi log (hash checksum) phiên bản của tập validation (thông qua DVC) vào W&B `config`. Bảng điều khiển (Dashboard) phải cấu hình để cảnh báo nếu so sánh hai Run có Hash dữ liệu đầu vào khác nhau.
+<Callout type="danger" title="Pitfall 3: So sánh run dùng validation set khác nhau">
+**Triệu chứng:** Run mới có score cao hơn rõ rệt nhưng production tệ hơn.
+
+**Nguyên nhân:** Validation hash khác, dataset dễ hơn hoặc bị leakage.
+
+**Fix:** Dashboard phải hiển thị dataset hash; chỉ cho compare run cùng validation snapshot hoặc gắn cảnh báo rõ ràng.
 </Callout>
 
 ---
 
-## 6. Cost & Performance Unit Economics
+## Cost / GPU Efficiency Unit Economics
 
-Hệ thống theo dõi không chỉ để xem biểu đồ Loss, nó còn là công cụ đo đếm hiệu quả kinh tế (FinOps cho AI):
-
-| Chỉ số (Metrics) | Cách đọc trên W&B Dashboard | Phân tích SRE (Ý nghĩa kinh tế) |
+| Chỉ số | Cách đọc | Hành động |
 |---|---|---|
-| **GPU Memory Allocated** | Biểu đồ đường VRAM theo thời gian thực. | Nếu VRAM đỉnh (Peak) chỉ đạt 50% dung lượng GPU, bạn đang lãng phí tiền thuê GPU. Cần tăng `batch_size` lên gấp đôi để tối đa hóa thông lượng (throughput) và giảm thời gian thuê máy. |
-| **GPU Power Usage (W)** | Biểu đồ tiêu thụ điện năng. | Nếu biểu đồ điện năng có dạng răng cưa (rớt xuống thấp theo chu kỳ), có nghĩa là GPU đang phải "chờ" CPU tải dữ liệu từ ổ cứng (I/O Bottleneck). Cần tối ưu hóa Data Loader (dùng num_workers cao hơn). |
-| **Step Time / Throughput** | Số giây / Step. | Cho phép tính toán chính xác "Burn Rate". Ví dụ: Máy chủ giá $3/giờ, tốc độ 10s/step. Train 10,000 steps sẽ mất ~28 giờ = $84. Quyết định xem có nên thử nghiệm tiếp hay cắt lỗ (early stopping). |
+| GPU utilization thấp | GPU dưới 50% dù job đang chạy | tăng dataloader workers, cache dataset, tăng batch size |
+| Step time tăng | một số step chậm bất thường | kiểm tra sequence length, packing, network storage |
+| Eval cost cao | LLM-as-judge gọi quá nhiều | sample tiered eval, batch API, nightly full eval |
+| Artifact storage phình | nhiều checkpoint lớn | retention policy, chỉ promote best model |
+| Run không reproduce | thiếu commit/data hash | bắt buộc metadata gate trước khi mark candidate |
+
+Tracking tốt biến GPU bill thành dữ liệu ra quyết định: tiếp tục train, early stop, đổi data hay đổi architecture.
+
+---
+
+## Practice exercises
+
+1. Thiết kế schema metadata tối thiểu cho một W&B/MLflow run fine-tuning.
+2. Viết checklist để promote một run từ `candidate` sang `staging`.
+3. Tính chi phí training nếu GPU giá $3/giờ, step time 8 giây và cần 20,000 steps.
+4. Mô tả cách log metrics trong distributed training để tránh duplicate.
+5. Liệt kê 5 metric ngoài loss cần theo dõi cho LLM production.
+
+---
+
+## Knowledge check
+
+1. Experiment tracking khác gì với chỉ lưu checkpoint?
+2. Vì sao dataset hash phải nằm trong run config?
+3. Khi nào nên dùng MLflow self-host thay vì W&B SaaS?
+4. Vì sao chỉ main process nên log trong distributed training?
+5. Một run có eval loss thấp hơn nhưng latency cao hơn 2 lần có nên tự động deploy không?
+
+---
+
+## Answer key
+
+1. Tracking lưu metadata, metrics, config, artifacts, eval report và lineage; checkpoint chỉ là trọng số model.
+2. Để đảm bảo so sánh hợp lệ và reproduce đúng dữ liệu đã dùng.
+3. Khi có yêu cầu bảo mật/on-prem/data residency hoặc không thể gửi metadata ra SaaS.
+4. Nếu mọi process cùng log, metrics bị duplicate và dashboard sai.
+5. Không tự động; cần scorecard cân bằng quality, latency, cost, safety và regression.
 
 ---
 
 ## Điểm cần nhớ
 
-- **Experiment Tracking là sổ nhật ký điện tử bắt buộc** của AI Engineer, ghi lại sự liên kết giữa Code, Data, Hyperparameters và Model Weights.
-- **W&B và MLflow** là hai tiêu chuẩn công nghiệp. Dùng W&B cho sự tiện lợi và hệ sinh thái; dùng MLflow khi có yêu cầu nghiêm ngặt về bảo mật nội bộ.
-- Phải luôn thiết lập biến môi trường thay vì hardcode API Keys, và chú ý kiểm soát dung lượng lưu trữ khi upload các Checkpoints của mô hình lớn.
-- Bảng điều khiển (Dashboard) giám sát GPU (VRAM, Utilization) là chìa khóa để phát hiện điểm nghẽn cổ chai (bottlenecks) phần cứng, giúp tối ưu hóa chi phí thuê máy chủ cloud.
+- Training run không có tracking là thí nghiệm không thể audit.
+- Log cả code commit, dataset hash, config, metrics, artifacts và eval report.
+- Loss chỉ là một tín hiệu; production decision cần quality, safety, latency và cost.
+- Distributed training cần logging có rank/process discipline.
+- Model registry biến run tốt thành artifact có lifecycle rõ ràng.
+
+---
 
 ## Next chapter bridge
 
-Sau khi bạn đã biết cách quản lý dữ liệu (DVC) và thiết lập trung tâm theo dõi thử nghiệm (W&B), đã đến lúc chúng ta nổ máy cho các cỗ máy tính toán khổng lồ. Tuy nhiên, việc vận hành một hoặc một cụm GPU không đơn giản là nhấn nút "Chạy". Chương tiếp theo: **Training Infrastructure** — nơi chúng ta sẽ khám phá cách phân bổ khối lượng công việc khổng lồ của LLM qua nhiều thẻ GPU bằng PyTorch DDP, DeepSpeed, và cách duy trì sự ổn định của hệ thống trước sự cố sập phần cứng.
+Bạn đã có data versioning và experiment control tower. Bước tiếp theo là chạy những training job lớn một cách ổn định trên GPU thật: nhiều process, nhiều máy, nhiều checkpoint và nhiều lỗi có thể xảy ra. Chương tiếp theo: **Training Infrastructure** — nơi chúng ta đi vào DDP, DeepSpeed, FSDP, mixed precision, checkpointing và cách biến cụm GPU đắt đỏ thành hạ tầng có thể vận hành.

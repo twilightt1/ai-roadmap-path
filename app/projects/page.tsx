@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Rocket } from "lucide-react";
+import { ArrowLeft, Rocket } from "lucide-react";
 import { allProjects } from "@/lib/roadmap-data";
 import { ProjectCard } from "@/components/roadmap/project-card";
+import { Reveal } from "@/components/shared/reveal";
 
 export const metadata: Metadata = {
-  title: "Dự án — 51 Projects Thực Hành",
+  title: "Dự án · 51 Projects Thực Hành",
   description:
     "Toàn bộ 51 dự án thực hành từ dễ (🟢) đến khó (🔴) cho từng phase trong lộ trình AI Engineer 2026.",
 };
@@ -24,20 +25,20 @@ export default function ProjectsPage() {
   return (
     <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-16">
       <div className="mb-12 text-center">
-        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-400 text-white shadow-lg shadow-violet-500/25">
+        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 text-white shadow-lg shadow-emerald-500/25">
           <Rocket className="h-7 w-7" />
         </div>
         <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
           {allProjects.length} Dự án thực hành
         </h1>
         <p className="mx-auto mt-3 max-w-2xl text-sm text-muted-foreground">
-          Mỗi phase có 3 dự án: dễ 🟢 (nền tảng), trung bình 🟡 (production thinking),
-          khó 🔴 (production-grade, multi-system).
+          Mỗi phase có 3 dự án: dễ (nền tảng), trung bình (production thinking),
+          khó (production-grade, multi-system).
         </p>
       </div>
 
       {groups.map((g) => (
-        <section key={g.label} className="mb-12">
+        <Reveal key={g.label} className="mb-12">
           <div className="mb-5 flex items-center gap-2">
             <span className="text-2xl">{g.emoji}</span>
             <h2 className="text-xl font-bold">{g.label}</h2>
@@ -50,15 +51,15 @@ export default function ProjectsPage() {
               <ProjectCard key={p.id} project={p} />
             ))}
           </div>
-        </section>
+        </Reveal>
       ))}
 
       <div className="mt-8 text-center">
         <Link
           href="/roadmap"
-          className="text-sm font-medium text-primary hover:underline"
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
         >
-          ← Quay lại timeline lộ trình
+          <ArrowLeft className="h-3.5 w-3.5" /> Quay lại timeline lộ trình
         </Link>
       </div>
     </div>

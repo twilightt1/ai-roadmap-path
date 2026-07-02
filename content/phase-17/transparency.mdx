@@ -1,0 +1,415 @@
+Privacy governance giúp bạn kiểm soát dữ liệu đi đâu và được xử lý thế nào. Nhưng một hệ thống AI có trách nhiệm còn cần minh bạch: model dùng để làm gì, không nên dùng để làm gì, dữ liệu/eval nào hỗ trợ nó, giới hạn ra sao, ai chịu trách nhiệm và người dùng có thể phản hồi hay khiếu nại thế nào.
+
+Transparency không có nghĩa là phơi bày toàn bộ chain-of-thought. Nó là thiết kế tài liệu, audit traces và user-facing explanations để con người hiểu đủ về khả năng, giới hạn và bằng chứng của hệ thống.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: Không giải thích được quyết định AI">
+**Bối cảnh:** Một ngân hàng dùng AI decision support để ưu tiên hồ sơ vay cho human reviewer. Model không tự động từ chối, nhưng score AI ảnh hưởng mạnh đến thứ tự xử lý.
+
+**Sự cố:** Một khách hàng hỏi vì sao hồ sơ của họ bị xếp rủi ro cao. Team không thể trả lời rõ:
+
+1. Model version nào đã chấm hồ sơ?
+2. Features nào ảnh hưởng nhiều nhất?
+3. Dữ liệu training/eval có phù hợp nhóm khách hàng này không?
+4. Có fairness audit không?
+5. Có quy trình appeal không?
+
+**Hậu quả:** Dù model có thể hữu ích nội bộ, thiếu transparency làm hệ thống không thể được tin tưởng hoặc audit trong high-impact workflow.
+</Callout>
+
+Bài học rút ra: Nếu không thể giải thích khả năng, giới hạn, dữ liệu, version và quyết định của hệ thống ở mức phù hợp, bạn chưa sẵn sàng vận hành AI trong domain rủi ro.
+
+---
+
+## 2. Architecture Blueprint (Transparency Layer)
+
+Transparency là một lớp artifact bao quanh AI system:
+
+```text
+[ Model / AI System ]
+      │
+      ├── [ Model Registry ]
+      │     - model version
+      │     - training/fine-tuning data summary
+      │     - evaluation results
+      │
+      ├── [ Prompt / Policy Registry ]
+      │     - prompt version
+      │     - safety policy version
+      │     - tool permissions
+      │
+      ├── [ Documentation Artifacts ]
+      │     - model card
+      │     - system card
+      │     - data card
+      │     - risk register
+      │
+      ├── [ Explanation Layer ]
+      │     - citations/evidence
+      │     - feature attributions
+      │     - confidence/limitations
+      │     - appeal path
+      │
+      └── [ Audit Trace ]
+            - request id
+            - model/prompt versions
+            - retrieved docs
+            - tool calls
+            - moderation decisions
+```
+
+Mục tiêu: mỗi output quan trọng phải truy vết được về model, data, prompt, policy và evidence.
+
+---
+
+## 3. Model Cards
+
+Model card là tài liệu mô tả một model hoặc checkpoint.
+
+Các phần nên có:
+
+| Section | Nội dung |
+|---|---|
+| Model overview | Tên, version, owner, release date |
+| Intended use | Dùng cho task nào |
+| Out-of-scope use | Không dùng cho domain/tác vụ nào |
+| Training data summary | Dữ liệu nguồn, thời gian, hạn chế |
+| Evaluation results | Metrics chính, benchmark, domain breakdown |
+| Fairness evaluation | Subgroup metrics nếu liên quan |
+| Safety evaluation | Jailbreak/harmful/hallucination eval |
+| Limitations | Known failure modes |
+| Deployment constraints | Hardware, context length, policy requirements |
+| Contact/owner | Ai chịu trách nhiệm |
+
+Template ngắn:
+
+```json
+{
+  "model_name": "support-router-v3",
+  "owner": "ai-platform-team",
+  "intended_use": ["classify support ticket intent", "route tickets to teams"],
+  "out_of_scope_use": ["final legal/financial decision", "medical triage"],
+  "training_data_summary": "120k anonymized support tickets from 2025-2026",
+  "evaluation": {
+    "macro_f1": 0.91,
+    "billing_refund_f1": 0.88,
+    "abuse_detection_recall": 0.96
+  },
+  "known_limitations": ["lower confidence on mixed-language tickets", "requires PII masking before inference"],
+  "safety_notes": ["human review required for abuse and legal complaints"]
+}
+```
+
+---
+
+## 4. System Cards
+
+Model card nói về model. System card nói về toàn bộ sản phẩm AI.
+
+Một AI system thường gồm:
+
+- LLM hoặc nhiều LLMs.
+- RAG/vector database.
+- Prompt templates.
+- Tools/API actions.
+- Safety filters.
+- Human review queue.
+- Logging/monitoring.
+- Fallback models/providers.
+- Data retention policy.
+
+System card nên trả lời:
+
+| Câu hỏi | Ví dụ |
+|---|---|
+| System làm gì? | Support assistant trả lời câu hỏi billing |
+| Ai là user? | Khách hàng trả phí và support agents |
+| Components nào? | GPT-4o-mini, pgvector RAG, Redis cache, moderation API |
+| Data nào được dùng? | Help center docs, user conversation, account metadata tối thiểu |
+| Risks là gì? | Hallucination, privacy leak, over-refusal |
+| Mitigations là gì? | RAG citations, PII masking, human escalation |
+| Monitoring gì? | CSAT, hallucination reports, PII leak checks |
+| Governance? | Owner, release gates, incident response |
+
+<Callout type="tip" title="System card hữu ích hơn model card cho product users">
+Người dùng thường không tương tác với model raw. Họ tương tác với một hệ thống gồm RAG, tools, filters và UI. Vì vậy system card mới là artifact minh bạch quan trọng nhất cho sản phẩm.
+</Callout>
+
+---
+
+## 5. Explainability Techniques
+
+### SHAP
+
+SHAP ước lượng đóng góp của từng feature vào prediction, phổ biến với tabular/classic ML.
+
+Use cases:
+
+- Credit risk model.
+- Churn prediction.
+- Resume scoring features.
+- Fraud detection.
+
+Cẩn trọng:
+
+- Correlated features làm attribution khó diễn giải.
+- SHAP không chứng minh nhân quả.
+- Explanation có thể bị hiểu sai như “lý do pháp lý cuối cùng”.
+
+### LIME
+
+LIME tạo local surrogate model quanh một prediction để giải thích local behavior.
+
+Ưu điểm:
+
+- Model-agnostic.
+- Dễ demo.
+
+Nhược điểm:
+
+- Có thể unstable.
+- Phụ thuộc perturbation strategy.
+
+### Attention visualization
+
+Attention maps có thể hữu ích để debug, nhưng không luôn là explanation causal.
+
+### RAG citations
+
+Với RAG, citation/evidence thường hữu ích hơn attribution phức tạp:
+
+```text
+Answer: ...
+Evidence:
+- Policy doc v4, section 3.2
+- Billing FAQ, updated 2026-05-01
+Confidence: medium
+Limitations: does not cover enterprise custom contracts
+```
+
+### Agent traces
+
+Với agents, transparency cần trace:
+
+- Planner decision.
+- Tool calls.
+- Tool outputs.
+- Safety checks.
+- Human approvals.
+
+---
+
+## 6. Chain-of-Thought Caveat
+
+Không nên xem chain-of-thought là explanation đáng tin cậy hoặc luôn nên expose.
+
+Lý do:
+
+- CoT có thể không faithful với computation thật.
+- CoT có thể chứa thông tin nhạy cảm/policy nội bộ.
+- CoT dài có thể tạo cảm giác đáng tin giả.
+- CoT có thể tiết lộ attack surface.
+
+Thay vào đó, user-facing explanation nên gồm:
+
+| Thành phần | Ví dụ |
+|---|---|
+| Short rationale | “Tôi dựa trên chính sách hoàn tiền mục 3.2” |
+| Evidence/citations | Link hoặc document snippets |
+| Assumptions | “Giả định bạn đang ở gói Pro” |
+| Confidence | Low/medium/high hoặc uncertainty note |
+| Limitations | “Không thay thế tư vấn pháp lý” |
+| Next step | “Liên hệ support để review thủ công” |
+
+<Callout type="warning" title="Plausible explanation có thể vẫn sai">
+Một explanation nghe hợp lý không đảm bảo prediction đúng. Hãy kiểm tra faithfulness, evidence và version trace, đặc biệt trong high-impact domains.
+</Callout>
+
+---
+
+## 7. Implementation Playbook: Model Card và System Card Templates
+
+### Model card markdown skeleton
+
+```text
+## Model Card: {model_name}
+
+### Owner
+- Team:
+- Contact:
+- Release date:
+- Version:
+
+### Intended Use
+- ...
+
+### Out-of-Scope Use
+- ...
+
+### Training / Fine-tuning Data
+- Sources:
+- Time range:
+- Exclusions:
+- PII handling:
+
+### Evaluation
+| Metric | Value | Notes |
+|---|---:|---|
+
+### Fairness & Safety
+- Fairness audit summary:
+- Safety eval summary:
+- Known limitations:
+
+### Deployment Constraints
+- Required guardrails:
+- Human review requirements:
+- Monitoring metrics:
+```
+
+### System card JSON skeleton
+
+```json
+{
+  "system_name": "support_ai_assistant",
+  "owner": "customer-ai-team",
+  "version": "2026.06.30",
+  "intended_users": ["customers", "support_agents"],
+  "components": {
+    "llm": "gpt-4o-mini via gateway",
+    "rag": "pgvector over help center docs",
+    "cache": "redis exact cache",
+    "moderation": "input/output safety classifier",
+    "human_review": "required for legal/financial escalation"
+  },
+  "data_used": ["user question", "account plan", "retrieved help docs"],
+  "data_not_used": ["full payment card number", "private notes unless authorized"],
+  "risks": ["hallucination", "privacy leak", "over-refusal"],
+  "mitigations": ["citations", "PII masking", "human escalation", "audit logs"],
+  "monitoring": ["hallucination reports", "pii leak checks", "csat", "safety eval pass rate"]
+}
+```
+
+---
+
+## 8. User-Facing Explanation Pattern
+
+Một response minh bạch trong RAG/support app:
+
+```text
+Answer:
+Bạn có thể yêu cầu hoàn tiền trong vòng 14 ngày nếu chưa sử dụng quá 20% quota tháng.
+
+Evidence:
+- Refund Policy v5, section 2.1
+- Billing FAQ, updated 2026-05-12
+
+Confidence:
+Medium — chính sách enterprise custom contract có thể khác.
+
+Limitations:
+Tôi không thể xem điều khoản hợp đồng riêng của bạn nếu chưa được cấp quyền.
+
+Next step:
+Nếu đây là hợp đồng enterprise, tôi có thể chuyển yêu cầu cho support agent.
+```
+
+Pattern này tốt hơn việc show chain-of-thought dài vì nó tập trung vào evidence, uncertainty và action tiếp theo.
+
+---
+
+## 9. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Model card không được cập nhật">
+**Triệu chứng:** Model card nói eval pass nhưng production đang dùng checkpoint mới chưa audit.
+
+**Nguyên nhân:** Documentation không gắn với model registry/release process.
+
+**Cách khắc phục:** Model card version phải là release artifact. Không deploy nếu card/eval report chưa cập nhật.
+</Callout>
+
+<Callout type="danger" title="Pitfall 2: Explanation tiết lộ dữ liệu nhạy cảm">
+**Triệu chứng:** Explanation trích dẫn private document hoặc internal policy không nên lộ.
+
+**Nguyên nhân:** Citation layer không kiểm tra ACL hoặc output redaction.
+
+**Cách khắc phục:** Enforce access control ở retrieval và citation rendering. Log source IDs và user permissions.
+</Callout>
+
+<Callout type="warning" title="Pitfall 3: SHAP/LIME bị hiểu như causal proof">
+**Triệu chứng:** Stakeholder nói “feature này gây ra quyết định” dù explanation chỉ là attribution.
+
+**Nguyên nhân:** Không phân biệt correlation/attribution với causation.
+
+**Cách khắc phục:** Document limitations, dùng language cẩn trọng và kết hợp domain review.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Overpromising capability">
+**Triệu chứng:** User tin AI là chuyên gia pháp lý/y tế vì UI không nêu giới hạn.
+
+**Nguyên nhân:** System card/user disclosure thiếu intended use và limitations.
+
+**Cách khắc phục:** Hiển thị scope, limitations, confidence và escalation path rõ ràng trong UI.
+</Callout>
+
+---
+
+## 10. Cost & Governance Unit Economics
+
+| Artifact/control | Lợi ích | Chi phí |
+|---|---|---|
+| Model card | Audit/release clarity | Cần cập nhật mỗi model version |
+| System card | Stakeholder hiểu end-to-end risk | Cần phối hợp product/legal/security |
+| RAG citations | Tăng trust, giảm hallucination impact | Retrieval/citation quality overhead |
+| SHAP/LIME | Explainability cho classic ML | Có thể khó hiểu/sai diễn giải |
+| Audit traces | Debug/incident response tốt | Storage/privacy controls |
+| User-facing limitations | Giảm misuse/high-risk misunderstanding | Có thể làm UX dài hơn |
+
+Transparency không miễn phí, nhưng thiếu transparency làm tăng cost khi incident, audit, compliance hoặc user dispute xảy ra.
+
+---
+
+## Practice exercises
+
+1. Viết model card outline cho Bias Audit Tool.
+2. Viết system card cho RAG assistant nội bộ có tool search tài liệu.
+3. Khi nào SHAP phù hợp hơn RAG citations?
+4. Thiết kế user-facing explanation cho AI loan assistant.
+5. Nêu 3 lý do không nên expose raw chain-of-thought.
+
+---
+
+## Knowledge check
+
+1. Model card khác system card thế nào?
+2. SHAP/LIME giải thích loại model/workload nào tốt nhất?
+3. Vì sao attention visualization không luôn là explanation causal?
+4. User-facing explanation nên có những phần nào?
+5. Vì sao transparency cần versioning?
+
+---
+
+## Answer key
+
+1. Model card mô tả một model/checkpoint; system card mô tả toàn bộ sản phẩm AI gồm model, RAG, tools, guardrails, logging và process.
+2. Thường phù hợp nhất với tabular/classic ML hoặc classifiers có features rõ.
+3. Attention cho biết một cơ chế weighting trong model, nhưng không chứng minh feature/token đó là nguyên nhân quyết định output.
+4. Answer, evidence/citations, confidence, assumptions/limitations và next step/escalation.
+5. Vì model/prompt/data/policy thay đổi theo release; nếu artifact không versioned thì audit không biết output đến từ cấu hình nào.
+
+---
+
+## Điểm cần nhớ
+
+- Transparency không có nghĩa show chain-of-thought; nó là documentation, evidence, limitations và auditability.
+- Model cards mô tả model; system cards mô tả sản phẩm AI end-to-end.
+- SHAP, LIME, attention, citations và traces phục vụ các loại explanation khác nhau.
+- Explanations phải có privacy/access control, đặc biệt với citations và internal traces.
+- User-facing explanations nên nêu evidence, confidence, assumptions, limitations và escalation path.
+
+## Next chapter bridge
+
+Transparency giúp con người hiểu và audit hệ thống. Nhưng responsible AI production còn cần controls chạy thật: moderation, safety classifiers, human review, audit logs, incident response và governance frameworks. Chương tiếp theo: **Responsible AI in Production** — nơi chúng ta gom toàn bộ safety, privacy, fairness và transparency thành một operating model production.

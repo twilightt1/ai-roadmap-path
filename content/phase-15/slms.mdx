@@ -1,0 +1,373 @@
+Không phải mọi tác vụ AI đều cần mô hình frontier. Rất nhiều sản phẩm đang đốt tiền vì dùng model quá lớn cho những việc như phân loại intent, trích xuất vài trường JSON, rewrite câu ngắn, autocomplete nội bộ hoặc routing request. Trong các workload đó, Small Language Models (SLMs) có thể thắng LLM lớn về latency, chi phí, privacy và khả năng triển khai local.
+
+SLM không phải là “model yếu”. Nó là lựa chọn kiến trúc: dùng đúng kích thước model cho đúng tác vụ.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: GPT-4 cho tác vụ yes/no">
+**Bối cảnh:** Một ứng dụng support automation dùng frontier LLM để phân loại ticket vào 12 nhãn: billing, bug, refund, abuse, feature request... Mỗi ticket chỉ cần trả về một JSON ngắn.
+
+**Sự cố:** Hệ thống gửi toàn bộ ticket history lên model đắt nhất vì “cho chắc”. Sau khi volume tăng lên 500,000 tickets/tháng, chi phí inference vượt chi phí nhân sự tiết kiệm được.
+
+1. 92% tickets có pattern rất rõ và không cần reasoning sâu.
+2. Latency trung bình 2.8 giây làm workflow agent chậm.
+3. Dữ liệu support nhạy cảm phải rời khỏi môi trường nội bộ.
+
+**Hậu quả:** Tính năng AI có demo đẹp nhưng ROI âm. Sau audit, team nhận ra một model 3B fine-tuned hoặc một SLM local có thể xử lý phần lớn traffic với chi phí thấp hơn nhiều.
+</Callout>
+
+Bài học rút ra: Model lớn nhất không phải lúc nào cũng là model tốt nhất. Trong production, model tốt nhất là model đáp ứng yêu cầu chất lượng dưới ràng buộc latency, privacy và chi phí.
+
+---
+
+## 2. Architecture Blueprint (Model Right-Sizing)
+
+Một kiến trúc AI tiết kiệm thường dùng nhiều tầng model:
+
+```text
+[ User Request ]
+       │
+       ▼
+[ Lightweight Router / Classifier ]
+       │
+       ├── Simple / repetitive task ─────> [ SLM 1B-7B local/self-hosted ]
+       │                                    - extraction
+       │                                    - classification
+       │                                    - short rewrite
+       │
+       ├── Medium task ──────────────────> [ 7B-14B quantized model ]
+       │                                    - domain assistant
+       │                                    - code helper hẹp
+       │
+       └── Hard / high-risk task ────────> [ Frontier LLM / larger model ]
+                                            - deep reasoning
+                                            - legal/medical review
+                                            - escalation path
+```
+
+SLM không thay thế toàn bộ LLM lớn. Nó giảm tải cho các tác vụ thường xuyên, hẹp và có thể đánh giá rõ.
+
+---
+
+## 3. What is an SLM?
+
+Small Language Model thường là model có số tham số nhỏ hơn nhiều so với frontier LLM, nhưng vẫn đủ mạnh cho tác vụ cụ thể.
+
+Không có ranh giới tuyệt đối, nhưng trong thực tế:
+
+| Scale | Vai trò phổ biến | Deployment footprint |
+|---|---|---|
+| < 1B | Classifier, tiny assistant, edge toy/task hẹp | CPU/mobile/NPU có thể khả thi |
+| 1B–3B | Intent, extraction, routing, local assistant nhẹ | Laptop/GPU nhỏ/edge |
+| 4B–7B | Chat assistant hẹp, code/domain task vừa | GPU consumer hoặc quantized local |
+| 8B–14B | General assistant self-hosted mức vừa | GPU server, vLLM/TGI/Ollama |
+| 30B+ | Reasoning/general quality cao hơn | Multi-GPU hoặc API |
+
+SLM mạnh khi task có:
+
+- Input/output format rõ.
+- Domain hẹp.
+- Evaluation set tốt.
+- Latency SLA chặt.
+- Privacy/offline requirement.
+- Khối lượng request lớn.
+
+<Callout type="tip" title="SLM là một sản phẩm, không chỉ là checkpoint">
+SLM tốt trong production thường đi kèm prompt template, fine-tuning/distillation, eval set, fallback policy và monitoring. Chỉ tải một model nhỏ về không tự động tạo unit economics tốt.
+</Callout>
+
+---
+
+## 4. Key SLM Families
+
+Một số family thường gặp trong AI engineering:
+
+| Family | Điểm mạnh | Use case gợi ý |
+|---|---|---|
+| Phi-3 / Phi-4 | Nhỏ, reasoning tốt trong kích thước nhỏ | Edge assistant, educational, routing |
+| Gemma 2 2B | Google ecosystem, model nhỏ dễ thử nghiệm | Local assistant, classification/extraction |
+| Mistral 7B | 7B mạnh, ecosystem lớn | Self-hosted assistant, RAG vừa |
+| Qwen 2.5 1.5B/3B | Mạnh ở nhiều ngôn ngữ và code tùy variant | Multilingual, coding helper nhỏ |
+| SmolLM | Rất nhỏ, phù hợp thử nghiệm/local constrained | Tiny tasks, edge prototypes |
+
+Khi chọn SLM, đừng chỉ nhìn benchmark leaderboard tổng quát. Hãy hỏi:
+
+- Model có hỗ trợ tốt tiếng Việt/ngôn ngữ của bạn không?
+- License có cho phép commercial use không?
+- Context window đủ cho workload không?
+- Runtime bạn dùng có hỗ trợ quantized artifact không?
+- Model có instruction-tuned variant phù hợp không?
+
+---
+
+## 5. When SLMs Beat LLMs
+
+SLM có thể thắng LLM lớn khi “đủ thông minh” và rẻ/nhanh hơn rất nhiều.
+
+### Classification và routing
+
+Ví dụ:
+
+```json
+{
+  "intent": "billing_refund",
+  "urgency": "medium",
+  "requires_human": false
+}
+```
+
+Nếu label space rõ và có training/eval data, một SLM hoặc classifier nhỏ có thể đạt chất lượng gần frontier LLM với latency thấp hơn.
+
+### Extraction
+
+Tác vụ trích xuất field từ invoice, ticket, email hoặc log thường có schema rõ. SLM fine-tuned có thể trả JSON ổn định hơn model lớn dùng prompt dài.
+
+### Autocomplete và rewrite ngắn
+
+Autocomplete cần cực nhanh. Model lớn với latency 1–3 giây là không phù hợp. SLM local/edge có thể tốt hơn nếu chất lượng đủ.
+
+### Domain-specific assistant
+
+Một SLM fine-tuned/distilled trên domain hẹp có thể vượt model lớn general-purpose trong các câu hỏi lặp lại, vì nó học đúng style, schema và thuật ngữ.
+
+### On-device/offline/private AI
+
+Nếu dữ liệu không được rời thiết bị hoặc cần chạy offline, SLM quantized là lựa chọn thực tế hơn API frontier.
+
+---
+
+## 6. Selection Framework (Khung chọn SLM)
+
+Dùng bảng sau trước khi quyết định model:
+
+| Câu hỏi | Ý nghĩa |
+|---|---|
+| Quality target là gì? | Cần 95% accuracy hay chỉ cần draft/suggestion? |
+| Latency SLA bao nhiêu? | 100ms, 500ms, 2s hay async? |
+| Hardware target là gì? | CPU, mobile NPU, GPU 8GB, A10, A100? |
+| Context length cần bao nhiêu? | 2K/4K/8K/32K ảnh hưởng mạnh tới memory |
+| Output format có chặt không? | JSON/extraction dễ đánh giá hơn open-ended reasoning |
+| Volume request lớn không? | Volume cao làm cost saving của SLM rất lớn |
+| License có phù hợp không? | Commercial, redistribution, fine-tuning constraints |
+| Fallback policy là gì? | Khi SLM không chắc, route sang model lớn ra sao? |
+
+Một decision rule thực dụng:
+
+```text
+Nếu task có output schema rõ + eval set rõ + volume cao:
+  thử SLM trước.
+Nếu task cần reasoning sâu + rủi ro cao + output mở:
+  dùng model lớn hoặc hybrid router.
+Nếu privacy/offline là yêu cầu cứng:
+  ưu tiên SLM quantized/on-device.
+```
+
+---
+
+## 7. On-device AI
+
+On-device AI đưa model chạy trên laptop, mobile, browser hoặc edge device. Điều này thay đổi cả kiến trúc sản phẩm.
+
+Lợi ích:
+
+- Dữ liệu không rời thiết bị.
+- Latency thấp nếu model vừa phần cứng.
+- Offline-first experience.
+- Giảm chi phí server inference.
+- Cá nhân hóa local tốt hơn.
+
+Ràng buộc:
+
+- RAM/VRAM/NPU memory hạn chế.
+- Battery/thermal throttling.
+- Model update phức tạp.
+- Context window thường nhỏ hơn.
+- Observability khó hơn server-side.
+
+```text
+[ Mobile / Desktop App ]
+       │
+       ├── Local SLM INT4/GGUF
+       │     - quick rewrite
+       │     - private summarization
+       │     - offline Q&A over local docs
+       │
+       └── Optional Cloud Fallback
+             - hard reasoning
+             - long context
+             - enterprise audit
+```
+
+<Callout type="warning" title="On-device không có nghĩa là miễn phí">
+Bạn giảm server cost, nhưng tăng chi phí QA trên nhiều thiết bị, model distribution, update strategy, telemetry hạn chế và rủi ro user chạy model trên phần cứng yếu.
+</Callout>
+
+---
+
+## 8. Implementation Playbook (Thực thi)
+
+Dưới đây là skeleton benchmark local models qua Ollama cho project **Local LLM Setup**.
+
+```python
+import time
+import requests
+
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODELS = [
+    "phi3:mini",
+    "gemma2:2b",
+    "qwen2.5:3b",
+    "mistral:7b",
+]
+
+PROMPTS = [
+    "Phân loại intent của câu sau thành billing, bug, refund, abuse hoặc feature_request: 'Tôi muốn hoàn tiền vì bị trừ phí hai lần.'",
+    "Trích xuất JSON gồm company, amount, due_date từ email sau: Công ty ACME cần thanh toán 12,500 USD trước ngày 2026-07-15.",
+    "Viết lại câu sau cho chuyên nghiệp hơn: app của bạn lag quá trời, tôi rất bực.",
+]
+
+
+def run_model(model: str, prompt: str):
+    start = time.perf_counter()
+    response = requests.post(
+        OLLAMA_URL,
+        json={
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.0, "num_predict": 128},
+        },
+        timeout=120,
+    )
+    response.raise_for_status()
+    elapsed = time.perf_counter() - start
+    data = response.json()
+    return {
+        "model": model,
+        "latency_sec": round(elapsed, 2),
+        "response": data.get("response", "").strip(),
+    }
+
+
+for model in MODELS:
+    print("=" * 80)
+    print(f"MODEL: {model}")
+    for prompt in PROMPTS:
+        result = run_model(model, prompt)
+        print(f"Latency: {result['latency_sec']}s")
+        print(result["response"][:500])
+```
+
+Benchmark nên ghi lại:
+
+| Model | Size | Quantization | Latency | Memory | JSON validity | Human quality |
+|---|---:|---|---:|---:|---:|---:|
+| Phi/Gemma/Qwen small | 1B–3B | Q4/Q8 | đo | đo | đo | đo |
+| Mistral 7B | 7B | Q4/Q8 | đo | đo | đo | đo |
+| Frontier API baseline | lớn | n/a | đo | n/a | đo | đo |
+
+Mục tiêu không phải chứng minh SLM luôn tốt hơn. Mục tiêu là tìm ranh giới: task nào SLM đủ tốt, task nào cần fallback.
+
+---
+
+## 9. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Demo prompt quá dễ">
+**Triệu chứng:** SLM trông rất tốt trong demo nhưng thất bại với dữ liệu thật.
+
+**Nguyên nhân:** Prompt demo sạch, ngắn và không có lỗi chính tả, trong khi production input dài, lộn xộn, đa ngôn ngữ và thiếu ngữ cảnh.
+
+**Cách khắc phục:** Tạo eval set từ logs production đã ẩn danh. Bao gồm edge cases, noisy inputs và negative examples.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Context window quá nhỏ">
+**Triệu chứng:** SLM trả lời tốt với câu ngắn nhưng thất bại khi cần đọc nhiều tài liệu.
+
+**Nguyên nhân:** Model nhỏ thường có context limit thấp hơn hoặc suy giảm chất lượng ở context dài.
+
+**Cách khắc phục:** Dùng RAG compression, reranking, chunk selection tốt hơn; hoặc route long-context tasks sang model lớn.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Bỏ qua license">
+**Triệu chứng:** Model đã tích hợp xong nhưng legal/compliance chặn trước release.
+
+**Nguyên nhân:** License không cho commercial use, có điều khoản redistribution hoặc output usage không phù hợp.
+
+**Cách khắc phục:** Kiểm tra license trước khi benchmark sâu. Ghi license vào model registry và ADR deployment.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Không có fallback policy">
+**Triệu chứng:** SLM trả lời sai chắc nịch trong các case khó.
+
+**Nguyên nhân:** Hệ thống ép mọi request qua SLM để tiết kiệm chi phí, không đo uncertainty hoặc complexity.
+
+**Cách khắc phục:** Dùng confidence score, rule-based guard, self-check, hoặc router để escalate sang model lớn khi input vượt khả năng SLM.
+</Callout>
+
+---
+
+## 10. Cost & Performance Unit Economics
+
+| Chiến lược | Lợi ích | Trade-off |
+|---|---|---|
+| SLM local | Latency thấp, dữ liệu không rời máy | Observability/update khó hơn |
+| SLM self-hosted | Cost/request thấp ở volume cao | Cần vận hành GPU/runtime |
+| SLM router + LLM fallback | Giảm chi phí phần lớn traffic | Router sai có thể giảm quality |
+| Fine-tuned SLM | Chất lượng cao cho task hẹp | Cần data/eval/MLOps |
+| Frontier-only | Chất lượng general mạnh | Chi phí và latency cao, privacy phụ thuộc provider |
+
+Một phép tính đơn giản:
+
+```text
+Nếu 80% request là task đơn giản,
+SLM xử lý được 80% đó với chi phí bằng 10% model lớn,
+thì blended cost có thể giảm ~72% trước khi tính overhead.
+```
+
+Nhưng nếu SLM làm tăng retry, khiếu nại hoặc escalation thủ công, saving trên giấy sẽ biến mất. Unit economics phải đo cả cost và outcome.
+
+---
+
+## Practice exercises
+
+1. Liệt kê 3 use case AI mà SLM (2B-3B) có thể thắng LLM, và 3 use case mà SLM không nên dùng. Giải thích vì sao.
+2. Viết pseudo-code Python (vLLM) để load một Phi-3-mini 3.8B cho classification task, và một wrapper để fallback sang LLM khi confidence thấp.
+3. Thiết kế một decision matrix so sánh 4 SLM (Phi-3, Gemma 2 2B, Qwen 2.5 3B, Mistral 7B) cho 3 tiêu chí: quality, latency, VRAM. Nêu 2 điều kiện cần thiết để chọn.
+4. Bạn đang build AI copilot cho thiết bị edge. Liệt kê 3 yếu tố cần cân nhắc khi chọn SLM, và đề xuất 1 metric để đo trade-off.
+5. Tính cost per 1M requests cho 3 model: 1B (0.1s/request, 0.5$/h GPU), 3B (0.3s, 0.5$/h), 7B (0.7s, 0.5$/h). Nêu 1 cách dùng blended routing để giảm cost.
+
+---
+
+## Knowledge check
+
+1. Định nghĩa "Small Language Model" và vì sao "nhỏ" không phải là yếu tố duy nhất.
+2. Vì sao SLM có thể thắng LLM về latency, privacy và unit economics trong một số use case?
+3. Khi nào SLM không nên dùng, và 2 lý do chính?
+4. Hybrid architecture (SLM + LLM) là gì và vì sao nó phổ biến?
+5. Vì sao benchmark SLM cần dữ liệu production thật, không chỉ demo prompt sạch?
+
+---
+
+## Answer key
+
+1. SLM thường là model 1-3B params, được tối ưu cho latency, cost, và deployment edge; "nhỏ" không phải duy nhất, cần đánh giá quality, context, và license.
+2. SLM có latency thấp hơn (decode nhanh), có thể chạy local/edge nên privacy, và cost per request thấp hơn; phù hợp khi workload hẹp và có thể route.
+3. SLM không nên dùng khi cần reasoning phức tạp, đa ngôn ngữ, hoặc context dài; 2 lý do là quality gap và khả năng hiểu context kém.
+4. Hybrid architecture: SLM xử lý majority request, LLM xử lý minority khó/rủi ro; phổ biến vì tối ưu cost và giữ quality.
+5. Demo prompt sạch không phản ánh phân phối, noise, và edge cases của dữ liệu thật; SLM có thể fail trên data thật mà không có trên demo.
+
+---
+
+## Điểm cần nhớ
+
+- SLM là chiến lược right-sizing model cho workload cụ thể, không phải phiên bản yếu hơn của LLM.
+- SLM mạnh cho classification, extraction, routing, rewrite ngắn, domain task hẹp và on-device/private AI.
+- Chọn SLM phải dựa trên quality target, latency SLA, hardware, context length, license và fallback policy.
+- Benchmark SLM cần dữ liệu production thật, không chỉ demo prompt sạch.
+- Hybrid architecture thường tốt nhất: SLM xử lý phần dễ, model lớn xử lý phần khó/rủi ro cao.
+
+## Next chapter bridge
+
+SLM giúp bạn chọn model nhỏ hơn. Nhưng làm sao để model nhỏ học được hành vi của model lớn trên task cụ thể? Đó là lúc Knowledge Distillation xuất hiện. Chương tiếp theo: **Knowledge Distillation** — nơi chúng ta nén capability từ teacher model sang student model để có chất lượng gần hơn với model lớn nhưng chi phí inference thấp hơn.

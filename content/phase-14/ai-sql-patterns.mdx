@@ -1,0 +1,515 @@
+SQL trong AI không chỉ là `SELECT` dữ liệu để hiển thị dashboard. Nó còn là nơi bạn chuẩn bị feature cho mô hình, lấy mẫu dữ liệu đánh giá, lưu JSON traces từ agent, và truy vấn vector embeddings cho RAG. Khi thiết kế đúng, PostgreSQL có thể trở thành một **AI Data Hub**: vừa giữ dữ liệu quan hệ, vừa giữ metadata, vừa chạy semantic search bằng pgvector.
+
+Bài này kết nối SQL truyền thống với các workload đặc thù của ML, LLM và RAG.
+
+---
+
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: RAG trả nhầm tài liệu của khách hàng khác">
+**Bối cảnh:** Một công ty xây chatbot RAG cho nhiều khách hàng enterprise. Embeddings được lưu trong một vector database riêng, còn metadata như `tenant_id`, `document_id`, `visibility` nằm trong PostgreSQL.
+
+**Sự cố:** Khi search, backend query vector DB trước để lấy top-k chunks, sau đó mới join metadata từ PostgreSQL. Một bug trong bước join làm filter `tenant_id` bị áp dụng sau khi đã lấy top-k toàn cục.
+
+1. Chunk của tenant A có vector rất gần với query của tenant B.
+2. Vector DB trả chunk đó trong top-k.
+3. Metadata filter bị thiếu trong một code path streaming.
+
+**Hậu quả:** Chatbot trích dẫn một đoạn tài liệu nội bộ của khách hàng khác. Đây không chỉ là bug retrieval, mà là sự cố bảo mật dữ liệu.
+</Callout>
+
+Bài học rút ra: Với AI workloads, vector search và metadata filtering phải được thiết kế như một truy vấn thống nhất. pgvector cho phép bạn đưa embedding gần dữ liệu quan hệ để giảm rủi ro consistency và security.
+
+---
+
+## 2. Architecture Blueprint (PostgreSQL as AI Data Hub)
+
+Một kiến trúc SQL-first cho AI workload có thể trông như sau:
+
+```text
+[ documents ]
+  id, tenant_id, title, source_uri, visibility, created_at
+       │
+       └──< [ chunks ]
+               id, document_id, tenant_id, chunk_index, content, metadata jsonb
+                    │
+                    └──< [ chunk_embeddings ]
+                            chunk_id, tenant_id, embedding vector(1536), model, created_at
+
+[ model_runs ]
+  id, tenant_id, user_id, feature, prompt_version_id, result jsonb, trace jsonb
+
+[ eval_samples ]
+  id, tenant_id, input, expected_output, label, split, metadata jsonb
+```
+
+Thiết kế này giúp bạn:
+
+- Filter theo `tenant_id` ngay trong vector query.
+- Join kết quả semantic search với document metadata bằng SQL.
+- Lưu trace JSONB từ LLM/agent mà không phải tạo cột mới cho mọi shape dữ liệu.
+- Dùng cùng database cho analytics, eval sampling và retrieval prototype.
+
+---
+
+## 3. Feature Engineering Queries
+
+Feature engineering bằng SQL là cách nhanh nhất để tạo tín hiệu cho mô hình routing, churn prediction, risk scoring hoặc abuse detection.
+
+```sql
+WITH user_activity AS (
+  SELECT
+    user_id,
+    COUNT(*) AS calls_30d,
+    SUM(input_tokens + output_tokens) AS tokens_30d,
+    SUM(cost_usd) AS cost_30d,
+    AVG(latency_ms) AS avg_latency_ms,
+    COUNT(error_code) AS errors_30d,
+    MAX(created_at) AS last_seen_at
+  FROM model_calls
+  WHERE created_at >= now() - interval '30 days'
+  GROUP BY user_id
+)
+SELECT
+  user_id,
+  calls_30d,
+  tokens_30d,
+  cost_30d,
+  errors_30d::float / NULLIF(calls_30d, 0) AS error_rate_30d,
+  EXTRACT(epoch FROM (now() - last_seen_at)) / 86400 AS days_since_last_seen,
+  cost_30d / NULLIF(calls_30d, 0) AS cost_per_call
+FROM user_activity;
+```
+
+Các feature thường gặp trong AI products:
+
+| Feature | Ý nghĩa |
+|---|---|
+| `calls_7d`, `calls_30d` | Mức độ sử dụng |
+| `cost_per_call` | Độ đắt của user/feature |
+| `error_rate_30d` | Chất lượng trải nghiệm |
+| `avg_output_tokens` | Mô hình có đang nói quá dài không |
+| `days_since_last_seen` | Churn/retention signal |
+| `premium_model_ratio` | Tỷ lệ dùng model đắt |
+
+<Callout type="tip" title="Feature SQL nên deterministic">
+Nếu cùng input mà query tạo feature khác nhau vì timezone, sampling ngẫu nhiên hoặc join không ổn định, mô hình downstream sẽ khó debug. Feature engineering cho ML cần khả năng tái lập giống như prompt versioning cho LLM.
+</Callout>
+
+---
+
+## 4. Pivoting Event Logs into Feature Tables
+
+AI logs thường ở dạng event rows: mỗi lần click, mỗi lần gọi model, mỗi feedback là một dòng. Mô hình ML lại thường cần bảng wide: mỗi user/session là một dòng với nhiều feature columns.
+
+```sql
+SELECT
+  user_id,
+  COUNT(*) FILTER (WHERE feature = 'chat') AS chat_calls,
+  COUNT(*) FILTER (WHERE feature = 'summarize') AS summarize_calls,
+  COUNT(*) FILTER (WHERE feature = 'contract_review') AS contract_review_calls,
+  SUM(cost_usd) FILTER (WHERE model LIKE '%mini%') AS cheap_model_cost,
+  SUM(cost_usd) FILTER (WHERE model NOT LIKE '%mini%') AS premium_model_cost,
+  AVG(latency_ms) FILTER (WHERE status = 'success') AS avg_success_latency_ms
+FROM model_calls
+WHERE created_at >= now() - interval '30 days'
+GROUP BY user_id;
+```
+
+Nếu database không hỗ trợ `FILTER`, bạn có thể dùng `CASE WHEN`:
+
+```sql
+SELECT
+  user_id,
+  SUM(CASE WHEN feature = 'chat' THEN 1 ELSE 0 END) AS chat_calls,
+  SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END) AS failed_calls,
+  SUM(CASE WHEN model LIKE '%gpt-4%' THEN cost_usd ELSE 0 END) AS gpt4_cost
+FROM model_calls
+GROUP BY user_id;
+```
+
+Pivoting đặc biệt hữu ích cho:
+
+- Feature matrix cho churn model.
+- Routing model quyết định dùng model rẻ hay đắt.
+- Abuse detection dựa trên pattern usage.
+- Evaluation report theo feature/model/prompt version.
+
+---
+
+## 5. Sampling for Training and Evaluation
+
+Lấy mẫu dữ liệu train/eval không thể chỉ `ORDER BY RANDOM()` trên bảng khổng lồ rồi hy vọng ổn.
+
+```sql
+-- Dùng được cho bảng nhỏ hoặc notebook exploratory
+SELECT id, input, expected_output, label
+FROM eval_samples
+WHERE tenant_id = 'tenant_123'
+ORDER BY random()
+LIMIT 100;
+```
+
+Với production evaluation, bạn thường cần stratified sampling để mỗi label/feature/model đều có đại diện:
+
+```sql
+WITH ranked AS (
+  SELECT
+    id,
+    feature,
+    label,
+    input,
+    expected_output,
+    ROW_NUMBER() OVER (
+      PARTITION BY feature, label
+      ORDER BY random()
+    ) AS rn
+  FROM eval_samples
+  WHERE created_at >= now() - interval '90 days'
+)
+SELECT *
+FROM ranked
+WHERE rn <= 50
+ORDER BY feature, label, rn;
+```
+
+<Callout type="warning" title="ORDER BY RANDOM() không scale">
+`ORDER BY random()` phải gán số ngẫu nhiên và sort rất nhiều dòng. Với bảng vài triệu dòng, nó có thể làm nghẽn database. Ở quy mô lớn, hãy sampling theo ID range, reservoir sampling ở job offline, hoặc lưu sẵn `random_bucket` khi ingest.
+</Callout>
+
+---
+
+## 6. JSONB Columns for AI Workloads
+
+LLM outputs, tool calls và traces thường có shape thay đổi liên tục. Nếu tạo cột mới cho mọi trường, schema sẽ nổ tung. PostgreSQL `jsonb` cho phép lưu payload linh hoạt nhưng vẫn query được.
+
+```sql
+CREATE TABLE model_runs (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  feature text NOT NULL,
+  prompt_version_id uuid,
+  result jsonb NOT NULL,
+  trace jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+Query JSONB:
+
+```sql
+-- Lấy các run mà tool web_search được gọi
+SELECT id, feature, trace->'tools' AS tools
+FROM model_runs
+WHERE trace @> '{"tools": [{"name": "web_search"}]}'::jsonb;
+
+-- Trích confidence score từ result JSON
+SELECT
+  id,
+  result->>'answer' AS answer,
+  (result->>'confidence')::float AS confidence
+FROM model_runs
+WHERE (result->>'confidence')::float < 0.5;
+```
+
+Index JSONB phổ biến:
+
+```sql
+CREATE INDEX idx_model_runs_trace_gin
+ON model_runs USING gin (trace);
+```
+
+JSONB rất mạnh, nhưng không nên biến database thành bãi rác schema-less. Các trường thường dùng để filter/join như `tenant_id`, `feature`, `created_at`, `prompt_version_id` nên là cột thật.
+
+---
+
+## 7. pgvector Fundamentals
+
+`pgvector` thêm kiểu dữ liệu vector vào PostgreSQL, giúp bạn lưu embeddings và query similarity bằng SQL.
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE chunks (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  document_id uuid NOT NULL,
+  content text NOT NULL,
+  metadata jsonb NOT NULL DEFAULT '{}',
+  embedding vector(1536),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+Top-k semantic search với metadata filtering:
+
+```sql
+SELECT
+  id,
+  document_id,
+  left(content, 200) AS preview,
+  metadata,
+  embedding <=> $1 AS cosine_distance
+FROM chunks
+WHERE tenant_id = $2
+  AND metadata @> '{"language": "vi"}'::jsonb
+ORDER BY embedding <=> $1
+LIMIT 5;
+```
+
+Ở đây `$1` là query embedding, `$2` là tenant hiện tại. Điều quan trọng nhất: filter `tenant_id` nằm trong cùng truy vấn với vector search.
+
+---
+
+## 8. pgvector Distance Operators
+
+pgvector có nhiều operator. Dùng sai operator có thể làm retrieval chất lượng kém dù embedding model tốt.
+
+| Operator | Ý nghĩa | Khi dùng |
+|---|---|---|
+| `<->` | L2 distance | Vector không normalize, cần khoảng cách Euclidean |
+| `<#>` | Negative inner product | Khi model/documentation khuyến nghị inner product |
+| `<=>` | Cosine distance | Phổ biến cho text embeddings đã hoặc sẽ so sánh theo góc |
+
+Ví dụ với cosine distance:
+
+```sql
+SELECT id, content
+FROM chunks
+WHERE tenant_id = $2
+ORDER BY embedding <=> $1
+LIMIT 10;
+```
+
+<Callout type="info" title="Distance nhỏ hơn là gần hơn">
+Với `<=>` cosine distance, giá trị nhỏ hơn nghĩa là vector gần hơn. Nếu bạn muốn similarity score lớn hơn là tốt hơn, có thể hiển thị `1 - (embedding <=> query_embedding)` như một score tương đối.
+</Callout>
+
+---
+
+## 9. Vector Indexes: HNSW vs IVFFlat
+
+Không có index, vector search phải scan nhiều embeddings. Với vài nghìn chunks thì ổn; với hàng triệu chunks thì không.
+
+```sql
+-- HNSW: thường dễ dùng, recall tốt, build index tốn tài nguyên hơn
+CREATE INDEX idx_chunks_embedding_hnsw
+ON chunks USING hnsw (embedding vector_cosine_ops);
+
+-- IVFFlat: cần lists và thường nên ANALYZE sau khi load dữ liệu
+CREATE INDEX idx_chunks_embedding_ivfflat
+ON chunks USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+```
+
+| Index | Điểm mạnh | Trade-off |
+|---|---|---|
+| HNSW | Recall/latency tốt, không cần training phase rõ ràng | Tốn memory và thời gian build |
+| IVFFlat | Đơn giản, kiểm soát bằng `lists`/`probes` | Cần đủ dữ liệu trước khi build, recall nhạy với cấu hình |
+| No index | Chính xác brute force | Chỉ hợp dataset nhỏ/prototype |
+
+Một pattern tốt cho RAG production là filter mạnh trước: `tenant_id`, `visibility`, `language`, `document_type`, rồi mới order theo vector distance.
+
+---
+
+## 10. Implementation Playbook (Thực thi)
+
+Dưới đây là skeleton cho project **pgvector Semantic Search**.
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE documents (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  title text NOT NULL,
+  source_uri text,
+  visibility text NOT NULL DEFAULT 'private',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE chunks (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  document_id uuid NOT NULL REFERENCES documents(id),
+  chunk_index int NOT NULL,
+  content text NOT NULL,
+  metadata jsonb NOT NULL DEFAULT '{}',
+  embedding vector(1536) NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_chunks_tenant_document
+ON chunks (tenant_id, document_id, chunk_index);
+
+CREATE INDEX idx_chunks_metadata_gin
+ON chunks USING gin (metadata);
+
+CREATE INDEX idx_chunks_embedding_hnsw
+ON chunks USING hnsw (embedding vector_cosine_ops);
+
+-- Query retrieval an toàn theo tenant
+SELECT
+  c.id,
+  d.title,
+  c.chunk_index,
+  c.content,
+  1 - (c.embedding <=> $1) AS similarity
+FROM chunks c
+JOIN documents d ON d.id = c.document_id
+WHERE c.tenant_id = $2
+  AND d.tenant_id = $2
+  AND d.visibility IN ('private', 'shared')
+ORDER BY c.embedding <=> $1
+LIMIT 8;
+```
+
+Nếu route API nhận `tenant_id` từ token/session thay vì request body, bạn giảm nguy cơ người dùng tự đổi tenant trong request.
+
+---
+
+## Project Guide: pgvector Semantic Search (Phase 14 Medium)
+
+Mục tiêu project: xây một semantic search service dùng PostgreSQL + pgvector, có metadata filtering và tenant isolation đúng ngay từ truy vấn SQL.
+
+### Requirements
+
+- Tạo schema `documents`, `chunks`, `chunk_embeddings` hoặc một bảng `chunks` có cột `embedding vector(...)`.
+- Viết ingestion script chia document thành chunks, tạo embeddings và lưu metadata như `tenant_id`, `source_uri`, `language`, `visibility`.
+- Tạo HNSW index cho embedding và B-tree/GiN index cho metadata thường filter.
+- Xây FastAPI endpoint `POST /search` nhận query text, tạo query embedding và trả top-k chunks.
+- `tenant_id` phải lấy từ auth/session, không tin request body.
+
+### Suggested architecture
+
+```text
+[ Documents ] -> [ Chunker ] -> [ Embedding API ] -> [ PostgreSQL + pgvector ]
+                                                            │
+[ Client ] -> [ FastAPI /search ] -> [ Query embedding ] ----┘
+                                                            │
+                                                            ▼
+                                                Top-k chunks + metadata
+```
+
+### Tenant-safe search query
+
+```sql
+SELECT
+  c.id,
+  d.title,
+  c.content,
+  c.metadata,
+  1 - (c.embedding <=> $1) AS similarity
+FROM chunks c
+JOIN documents d
+  ON d.id = c.document_id
+ AND d.tenant_id = c.tenant_id
+WHERE c.tenant_id = $2
+  AND d.visibility IN ('private', 'shared')
+ORDER BY c.embedding <=> $1
+LIMIT $3;
+```
+
+### Acceptance criteria
+
+- Endpoint trả kết quả dưới 500ms với dataset mẫu vài nghìn chunks.
+- Có `EXPLAIN ANALYZE` cho query search trước và sau khi tạo index.
+- Test chứng minh tenant A không bao giờ nhận chunk của tenant B dù query embedding rất giống.
+- README giải thích operator đang dùng (`<=>`, `<->` hoặc `<#>`) và vì sao phù hợp với embedding model.
+- Có script backfill embeddings có checkpoint để resume nếu job bị dừng.
+
+Stretch goal: thêm hybrid search bằng cách kết hợp full-text search PostgreSQL với vector similarity.
+
+---
+
+## 11. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Sai distance operator">
+**Triệu chứng:** Search trả về chunks có vẻ không liên quan dù embeddings đúng.
+
+**Nguyên nhân:** Embedding model được tối ưu cho cosine similarity nhưng query dùng L2, hoặc ngược lại.
+
+**Cách khắc phục:** Đọc documentation của embedding model, thống nhất operator/index ops, và viết regression test với vài query/chunk kỳ vọng.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Embedding dimension mismatch">
+**Triệu chứng:** Insert lỗi khi đổi embedding model.
+
+**Nguyên nhân:** Cột `vector(1536)` nhưng model mới sinh vector 3072 chiều.
+
+**Cách khắc phục:** Version embeddings theo model. Không overwrite cùng một cột nếu migration chưa rõ. Có thể tạo bảng embeddings riêng với `embedding_model` và dimension tương ứng.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Thiếu tenant filter trong semantic search">
+**Triệu chứng:** RAG trả kết quả đúng về mặt ngữ nghĩa nhưng sai quyền truy cập.
+
+**Nguyên nhân:** Vector search được chạy top-k toàn cục rồi mới filter tenant ở application layer.
+
+**Cách khắc phục:** Đưa `tenant_id` và access control vào SQL query. Với multi-tenant nghiêm ngặt, cân nhắc Row-Level Security (RLS), schema tách riêng hoặc index theo tenant.
+</Callout>
+
+<Callout type="warning" title="Pitfall 4: Vector index không được dùng">
+**Triệu chứng:** Query vẫn chậm sau khi tạo HNSW/IVFFlat index.
+
+**Nguyên nhân:** Operator trong `ORDER BY` không khớp index ops, thiếu `LIMIT`, hoặc query expression khác với index definition.
+
+**Cách khắc phục:** Dùng `EXPLAIN ANALYZE`, kiểm tra operator class (`vector_cosine_ops`, `vector_l2_ops`, `vector_ip_ops`) và đảm bảo query có `ORDER BY embedding <operator> query LIMIT k`.
+</Callout>
+
+---
+
+## 12. Cost & Performance Unit Economics
+
+| Lựa chọn | Lợi ích | Chi phí/Trade-off |
+|---|---|---|
+| pgvector trong PostgreSQL | Ít moving parts, join metadata dễ, transaction/backup quen thuộc | Tăng tải lên primary DB nếu không tách workload |
+| Dedicated vector DB | Scale vector search chuyên biệt | Thêm hệ thống, đồng bộ metadata phức tạp |
+| JSONB metadata | Linh hoạt cho AI traces/tool outputs | Query chậm nếu thiếu GIN index hoặc lạm dụng payload lớn |
+| HNSW index | Latency tốt cho top-k search | Tốn memory/storage, build index lâu |
+| Feature SQL in DB | Nhanh để prototype và audit | Pipeline ML lớn cần orchestration/offline store |
+
+Nguyên tắc thực dụng: nếu đội nhỏ, dữ liệu vừa phải và metadata quan hệ quan trọng, PostgreSQL + pgvector là lựa chọn rất mạnh. Khi vector workload trở thành bottleneck độc lập, hãy tách sang vector DB chuyên dụng với chiến lược đồng bộ metadata rõ ràng.
+
+---
+
+## Practice exercises
+
+1. Viết query tạo feature table theo user gồm `calls_30d`, `tokens_30d`, `error_rate_30d` và `cost_per_call`.
+2. Pivot bảng `model_calls` để đếm số request theo từng `feature` bằng `FILTER` hoặc `CASE WHEN`.
+3. Thiết kế stratified sampling query lấy 50 eval samples cho mỗi cặp `feature` và `label`.
+4. Viết query JSONB tìm các `model_runs` có tool call tên `web_search` và confidence dưới 0.5.
+5. Viết semantic search query pgvector có filter `tenant_id`, `visibility`, `language` và `LIMIT`.
+
+---
+
+## Knowledge check
+
+1. Vì sao các cột như `tenant_id`, `feature`, `created_at` không nên chỉ nằm trong JSONB?
+2. `ORDER BY random()` có vấn đề gì trên bảng lớn?
+3. Với pgvector, `<=>` biểu thị điều gì?
+4. Vì sao embedding model change có thể gây lỗi dimension mismatch?
+5. Vì sao vector search và metadata filtering nên nằm trong cùng SQL query?
+
+---
+
+## Answer key
+
+1. Vì chúng thường dùng để filter/join/index; để trong cột thật giúp query nhanh hơn, rõ quyền truy cập hơn và dễ enforce constraint hơn.
+2. Database phải gán số ngẫu nhiên và sort rất nhiều dòng, có thể gây chậm hoặc nghẽn primary DB.
+3. `<=>` là cosine distance; giá trị nhỏ hơn nghĩa là vector gần hơn theo góc cosine.
+4. Cột `vector(1536)` chỉ nhận vector đúng 1536 chiều; model mới 3072 chiều cần schema/table/version mới.
+5. Nếu lấy top-k toàn cục rồi filter ở app layer, kết quả có thể leak tenant khác hoặc bỏ mất chunk đúng; filter security phải cùng nằm trong truy vấn retrieval.
+
+---
+
+## Điểm cần nhớ
+
+- AI-specific SQL bao gồm feature engineering, pivoting, sampling, JSONB traces và vector search.
+- Các cột access control như `tenant_id` nên là cột thật, không chôn hoàn toàn trong JSON.
+- pgvector giúp semantic search sống gần relational metadata, giảm rủi ro join/filter sai.
+- Với pgvector: `<->` là L2 distance, `<#>` là negative inner product, `<=>` là cosine distance.
+- Vector search production luôn phải đi cùng metadata filtering, indexing và security boundary.
+
+## Next chapter bridge
+
+Bạn đã biết cách query dữ liệu AI đặc thù. Nhưng để hệ thống sống lâu, bạn cần thiết kế schema ngay từ đầu: conversation history, prompt versions, token usage, user memory, indexes và migrations. Chương tiếp theo: **Database Design for AI Applications** — biến các query rời rạc thành một kiến trúc dữ liệu production-grade.

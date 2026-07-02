@@ -1,154 +1,340 @@
-Mô hình ngôn ngữ lớn (LLM) không thể được huấn luyện trên một chiếc máy tính xách tay. Nó đòi hỏi một kiến trúc hạ tầng tính toán (Compute Infrastructure) phân tán ở quy mô công nghiệp. Chương này không dạy bạn cách viết code PyTorch cơ bản; nó dạy bạn cách tổ chức hệ thống để hàng chục, thậm chí hàng trăm GPU có thể giao tiếp với nhau qua mạng (network fabric), chia sẻ dữ liệu và đồng bộ hóa gradient mà không bị sập (crash) hoặc nghẽn cổ chai (bottleneck).
+Bạn đã có dataset được version và experiment tracking để biết run nào tốt. Nhưng khi mô hình lớn hơn laptop và dataset lớn hơn ổ cứng local, câu hỏi tiếp theo là: làm sao chạy training ổn định trên nhiều GPU mà không đốt tiền vào idle time, OOM và checkpoint mất tích?
+
+**Training Infrastructure** là lớp hạ tầng giúp bạn biến script training thành một job có thể chịu lỗi, scale được và đo được. Với AI Engineer, đây không chỉ là DDP/DeepSpeed trên slide; đây là bài toán chọn GPU, network, precision, checkpoint, storage và scheduler sao cho training thật sự hoàn thành.
 
 ---
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: Nút thắt cổ chai 'Card mạng'">
-**Bối cảnh:** Nhóm MLOps thuê một cụm gồm 8 GPU A100 (tổng cộng 640GB VRAM) trên AWS để thực hiện Full Fine-Tuning cho mô hình LLaMA-70B. Họ sử dụng PyTorch `DataParallel` tiêu chuẩn để chạy script.
+<Callout type="danger" title="Báo cáo sự cố: Thuê 8 GPU A100 nhưng chỉ dùng được 20% công suất">
+**Bối cảnh:** Team muốn full fine-tune model 70B. Họ thuê một instance 8xA100 đắt tiền và chạy script PyTorch cũ bằng `DataParallel`.
 
-**Sự cố:** Sau khi khởi chạy, utilization (độ sử dụng) của GPU chính (GPU 0) luôn ở mức 100%, trong khi 7 GPU còn lại lẹt đẹt ở mức 15-20%. Thời gian hoàn thành 1 epoch dự kiến là 2 ngày bỗng kéo dài thành 10 ngày. Sau khi đào sâu phân tích, kỹ sư phát hiện ra GPU 0 đang đóng vai trò làm "Máy chủ trung tâm" tập hợp tất cả gradients từ các GPU khác qua giao tiếp PCIe thông thường, tạo ra một nút thắt cổ chai băng thông khổng lồ.
+**Sự cố:** GPU 0 luôn 100% utilization, 7 GPU còn lại chỉ 15-20%. Step time rất chậm. Sau vài giờ, job OOM ở GPU 0 vì optimizer states và gradient aggregation dồn về một nơi.
 
-**Hậu quả:** Lãng phí 80% sức mạnh tính toán của cụm GPU đắt đỏ (với giá thuê lên tới 32/giờ). Đốt hàng ngàn USD vào sự chờ đợi (Idle time).
+1. Dùng `DataParallel` cũ thay vì DistributedDataParallel/FSDP/DeepSpeed.
+2. Không tính memory footprint của weights, gradients, optimizer states và KV/activations.
+3. Không kiểm tra NVLink/InfiniBand giữa GPU.
+4. Checkpoint lưu local trên máy spot, không đẩy lên object storage.
+
+**Hậu quả:** Hàng nghìn USD GPU bị lãng phí, training không hoàn thành và team phải thiết kế lại stack bằng Accelerate + DeepSpeed ZeRO-3.
 </Callout>
 
-Bài học rút ra: Có nhiều GPU không đồng nghĩa với việc code sẽ tự động chạy nhanh hơn. Bạn cần một kiến trúc phần mềm phân tán (Distributed Architecture) có khả năng chia đều công việc và tối ưu hóa giao tiếp mạng.
+Bài học rút ra: nhiều GPU không tự động làm training nhanh hơn. Hạ tầng training tốt phải tối ưu **memory, communication, storage và fault tolerance** cùng lúc.
 
 ---
 
-## 2. Architecture Blueprint (Kiến trúc giải pháp)
+## 2. Architecture Blueprint (Distributed Training Job Stack)
 
-Trong môi trường huấn luyện đa GPU (Multi-GPU Training), chúng ta có hai mô hình kiến trúc cốt lõi:
-
-### 2.1. Data Parallelism (Song song Dữ liệu)
-Mô hình (Model weights) được copy nguyên bản (replica) sang toàn bộ các GPU. Mỗi GPU sẽ nhận một phần (mini-batch) khác nhau của tập dữ liệu huấn luyện (Dataset). Các GPU tính toán gradient song song, sau đó đồng bộ (All-Reduce) với nhau để cập nhật trọng số.
-- **Vấn đề:** Không hoạt động nếu dung lượng Mô hình lớn hơn dung lượng VRAM của 1 GPU.
-
-### 2.2. Model Parallelism & DeepSpeed / FSDP
-Mô hình quá lớn bị chia nhỏ (Sharding) thành từng phần.
-Kiến trúc tiêu chuẩn công nghiệp hiện tại là **ZeRO (Zero Redundancy Optimizer)** của thư viện DeepSpeed hoặc **FSDP (Fully Sharded Data Parallel)** của PyTorch.
+Một training job production không chỉ là `python train.py`:
 
 ```text
-[ GPU 0 ]                  [ GPU 1 ]                  [ GPU 2 ]
-  │                          │                          │
-  ├── Layers 1-10            ├── Layers 11-20           ├── Layers 21-30
-  ├── 1/3 Optimizer States   ├── 1/3 Optimizer States   ├── 1/3 Optimizer States
-  └── 1/3 Gradients          └── 1/3 Gradients          └── 1/3 Gradients
-       │                           │                          │
-       +<------ NVLink / InfiniBand (Giao tiếp siêu tốc) ---->+
-               (Đồng bộ thông số trong quá trình Forward/Backward)
+[ Dataset / object storage ]
+  - sharded parquet/jsonl
+  - cached locally
+  - deterministic split
+        │
+        ▼
+[ Job scheduler ]
+  - Slurm / Kubernetes / SageMaker / Vertex AI
+  - resource request: GPU, CPU, RAM
+  - retries and preemption policy
+        │
+        ▼
+[ Distributed launcher ]
+  - torchrun / accelerate / deepspeed
+  - world size, rank, master address
+        │
+        ▼
+[ Training workers ]
+  - DDP / FSDP / ZeRO
+  - mixed precision
+  - gradient checkpointing
+  - checkpoint writer
+        │
+        ├────────► [ Experiment tracking ]
+        │           metrics, artifacts, GPU telemetry
+        │
+        └────────► [ Checkpoint storage ]
+                    latest, best, resumable
 ```
 
-Kiến trúc này giải quyết triệt để lỗi OOM (Out-of-Memory) bằng cách chia nhỏ bộ nhớ trên toàn bộ cụm, biến 8 GPU x 80GB VRAM thành một "Siêu GPU" có 640GB VRAM.
+Mục tiêu: job có thể chạy trên nhiều GPU, log đúng metrics, resume sau khi bị kill và tận dụng GPU đủ cao để chi phí hợp lý.
 
 ---
 
-## 3. Tooling Landscape (Ma trận công cụ)
+## 3. Memory Anatomy of LLM Training
 
-| Công nghệ | Cấp độ | Đặc điểm | Khi nào dùng |
-|---|---|---|---|
-| **PyTorch DDP** (Distributed Data Parallel) | Cơ bản | Copy model sang từng GPU. Nhanh hơn DataParallel cũ do dùng multi-process thay vì multi-thread. Giao tiếp qua Ring All-Reduce. | Mô hình nhỏ (< 7B), nhét vừa vào VRAM của 1 GPU. Cần tăng tốc độ xử lý batch size lớn. |
-| **DeepSpeed** | Nâng cao | Sharding Weights/Gradients/Optimizer (ZeRO 1-2-3). Hỗ trợ offload sang RAM của CPU để nới rộng VRAM ảo. | Mô hình cực lớn (hàng chục tỷ tham số). Phù hợp nhất khi dùng với HuggingFace Accelerate. |
-| **FSDP** (Fully Sharded Data Parallel) | Nâng cao | Tích hợp sâu vào mã nguồn PyTorch. Cơ chế tương tự ZeRO-3 của DeepSpeed nhưng code thuần PyTorch hơn. | Các team muốn hạn chế phụ thuộc vào thư viện ngoài, làm chủ hoàn toàn pipeline PyTorch. |
-| **NVLink / NCCL** | Hạ tầng cứng | Giao thức giao tiếp giữa các GPU. NCCL (Nvidia Collective Communications Library) là phần mềm tối ưu luồng mạng. | Phải đảm bảo Provider Cloud có cung cấp NVLink (thường ghi rõ trong cấu hình Instance máy ảo). |
+Khi train LLM, VRAM không chỉ chứa model weights.
+
+| Thành phần | Vì sao tốn memory |
+|---|---|
+| Model weights | tham số model, thường FP16/BF16 |
+| Gradients | gradient tương ứng với weights |
+| Optimizer states | Adam thường lưu momentum/variance, rất lớn |
+| Activations | tensor trung gian cho backward pass |
+| Temporary buffers | communication, kernels, fragmentation |
+| Dataloader batch | input ids, attention masks, labels |
+
+Ước lượng đơn giản cho full fine-tuning với Adam có thể cần nhiều lần kích thước weights. Một model 7B FP16 khoảng 14GB weights, nhưng training có thể cần 60GB+ VRAM nếu không dùng sharding/checkpointing.
+
+<Callout type="warning" title="Inference fit không có nghĩa training fit">
+Nếu model chạy inference vừa trên 24GB VRAM, điều đó không có nghĩa bạn train được nó trên 24GB. Training cần gradients, optimizer states và activations nên memory cao hơn nhiều.
+</Callout>
 
 ---
 
-## 4. Implementation Playbook (Thực thi)
+## 4. DDP, FSDP và DeepSpeed ZeRO
 
-Thay vì phải tự viết code giao tiếp Socket phức tạp giữa các GPU, HuggingFace cung cấp thư viện **`accelerate`** để trừu tượng hóa toàn bộ quá trình này.
+### Data Parallelism / DDP
 
-### Bước 1: Khởi tạo cụm GPU với Accelerate
+DDP copy toàn bộ model lên mỗi GPU, mỗi GPU xử lý một mini-batch khác nhau rồi all-reduce gradients.
 
-Trên máy chủ chứa nhiều GPU, hãy chạy lệnh cấu hình:
+```text
+GPU0: full model + batch A
+GPU1: full model + batch B
+GPU2: full model + batch C
+GPU3: full model + batch D
+        │
+        ▼
+Ring all-reduce gradients
+```
+
+Phù hợp khi model fit vào một GPU và bạn muốn tăng throughput.
+
+### FSDP / ZeRO
+
+FSDP và DeepSpeed ZeRO shard weights/gradients/optimizer states để giảm memory per GPU.
+
+```text
+GPU0: shard weights + shard optimizer + shard gradients
+GPU1: shard weights + shard optimizer + shard gradients
+GPU2: shard weights + shard optimizer + shard gradients
+GPU3: shard weights + shard optimizer + shard gradients
+```
+
+| Phương pháp | Khi dùng | Trade-off |
+|---|---|---|
+| DDP | model fit trên mỗi GPU | đơn giản, nhanh, nhưng memory nhân bản |
+| ZeRO-1 | shard optimizer states | giảm memory vừa phải |
+| ZeRO-2 | shard optimizer + gradients | giảm nhiều hơn |
+| ZeRO-3 / FSDP | shard cả weights | fit model lớn nhưng communication cao |
+| CPU/NVMe offload | VRAM thiếu nghiêm trọng | train chậm hơn nhiều |
+
+---
+
+## 5. Precision, Checkpointing và Sequence Packing
+
+Ba đòn bẩy quan trọng nhất để tránh OOM:
+
+### Mixed precision
+
+- FP32: ổn định nhưng rất tốn memory.
+- FP16: tiết kiệm memory nhưng dễ NaN nếu scale không tốt.
+- BF16: thường ổn định hơn FP16 trên A100/H100 và nhiều GPU mới.
+
+### Gradient checkpointing
+
+Thay vì lưu mọi activation cho backward, hệ thống tính lại một phần activation khi backward.
+
+```text
+less VRAM  <---- trade-off ----> more compute time
+```
+
+### Sequence packing
+
+LLM training thường bị lãng phí vì nhiều câu ngắn bị padding đến max length. Packing ghép nhiều sample ngắn vào cùng một sequence.
+
+```text
+without packing: [short][PAD][PAD][PAD]
+with packing:    [short][short][short]
+```
+
+Packing tốt giúp tăng tokens/sec và giảm chi phí mỗi token train.
+
+---
+
+## Implementation Playbook: Accelerate + DeepSpeed ZeRO-3
+
+### Bước 1: Cấu hình Accelerate
 
 ```bash
-# Lệnh này sẽ mở ra một CLI tương tác hỏi bạn về cấu hình mạng GPU
+pip install accelerate deepspeed transformers datasets
 accelerate config
 ```
 
-Bạn sẽ chọn các thông số sau trong CLI:
-1. Máy này cấu hình cho: *This machine*
-2. Loại tính toán phân tán: *Multi-GPU*
-3. Số lượng GPU: *8*
-4. Sử dụng DeepSpeed: *Yes*
-5. ZeRO Stage: *3* (Phân tách toàn bộ Weights, Gradients, Optimizers)
+Một config mẫu:
 
-Lệnh trên sẽ tạo ra một file `default_config.yaml`.
+```yaml
+compute_environment: LOCAL_MACHINE
+distributed_type: DEEPSPEED
+num_processes: 8
+mixed_precision: bf16
+deepseed_config:
+  zero_stage: 3
+  gradient_accumulation_steps: 8
+  offload_optimizer_device: none
+  offload_param_device: none
+```
 
-### Bước 2: Tối ưu hóa bộ nhớ với Checkpointing và Mixed Precision
-Đoạn code trong file `train.py` của bạn không cần thay đổi nhiều, nhưng bắt buộc phải kích hoạt 2 cấu hình sau để hệ thống sống sót:
+### Bước 2: TrainingArguments an toàn hơn cho LLM
 
 ```python
 from transformers import TrainingArguments
 
 training_args = TrainingArguments(
-    output_dir="./model_output",
-    # 1. Kích hoạt Mixed Precision BF16 (Không dùng FP16 trên GPU Ampere để tránh NaNs)
-    bf16=True, 
-    # 2. Xóa các biến trung gian ở Forward Pass, tính lại ở Backward Pass -> Tiết kiệm 60% VRAM
-    gradient_checkpointing=True, 
-    # Batch size CỰC NHỎ trên mỗi GPU (vì ZeRO 3 phải liên tục đồng bộ qua mạng)
+    output_dir="s3_mount/checkpoints/customer-support-qlora",
     per_device_train_batch_size=1,
-    # Nhân dồn gradient để tạo batch size ảo lớn hơn
     gradient_accumulation_steps=16,
-    # Cấu hình DeepSpeed (Thường được Accelerate tự động nạp)
-    # deepspeed="./deepspeed_config.json" 
+    learning_rate=2e-5,
+    num_train_epochs=3,
+    bf16=True,
+    gradient_checkpointing=True,
+    logging_steps=10,
+    save_steps=500,
+    save_total_limit=3,
+    evaluation_strategy="steps",
+    eval_steps=500,
+    report_to="wandb",
+    dataloader_num_workers=8,
 )
 ```
 
-### Bước 3: Khởi chạy tập lệnh phân tán
-Thay vì dùng lệnh `python train.py` tiêu chuẩn (chỉ chạy trên 1 GPU), bạn sử dụng `accelerate` để ra lệnh cho toàn bộ cụm:
+### Bước 3: Launch distributed job
 
 ```bash
-# Khởi chạy script training trên tất cả 8 GPUs đồng thời
-accelerate launch --num_processes 8 train.py
+accelerate launch \
+  --num_processes 8 \
+  train.py \
+  --config configs/qlora_8gpu.yaml \
+  --resume_from_checkpoint auto
 ```
 
----
+### Bước 4: Checkpoint vào durable storage
 
-## 5. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+```python
+from pathlib import Path
 
-Triển khai phân tán (Distributed Deployment) luôn đi kèm với vô số lỗi mạng và bộ nhớ.
+checkpoint_dir = Path("/mnt/checkpoints/run-2026-07-02")
+checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-<Callout type="warning" title="Pitfall 1: OOM do không đóng gói câu (Sequence Packing)">
-**Triệu chứng:** Khi huấn luyện cụm 4 GPU, GPU 0 và GPU 1 hoạt động bình thường, nhưng GPU 2 đột ngột bị OOM (Out Of Memory) và kéo sập toàn hệ thống.
-**Nguyên nhân:** Do dataset có độ dài không đều. Một batch ngẫu nhiên rơi vào GPU 2 chứa toàn các câu dài 4000 tokens, vượt quá VRAM của nó.
-**Cách khắc phục (Fix):** Sử dụng tính năng Sequence Packing (hoặc Data Collator) để nhóm các câu ngắn lại, đảm bảo TẤT CẢ các batch đi vào các GPU đều có tổng chiều dài (Sequence Length) bằng nhau chuẩn xác (ví dụ 2048 tokens).
-</Callout>
+# Trainer sẽ lưu checkpoint vào path này.
+# Một sidecar hoặc job cuối có thể sync sang S3/GCS.
+```
 
-<Callout type="warning" title="Pitfall 2: 'Giao tiếp' chậm hơn 'Tính toán' (Network Bottleneck)">
-**Triệu chứng:** Sử dụng 8 GPU nhưng thời gian train không nhanh hơn 2 GPU là mấy. Chỉ số `GPU Volatile Uncore Utilization` thấp (dưới 50%).
-**Nguyên nhân:** Bạn đang thuê GPU không có liên kết NVLink (ví dụ trên AWS dùng loại g4dn thay vì p4d). Các GPU giao tiếp qua PCIe chủ (Host Motherboard), làm chậm quá trình All-Reduce của DeepSpeed.
-**Cách khắc phục (Fix):** Khi thuê Cloud cho Multi-GPU, bắt buộc chọn các instance có chữ "NVLink" hoặc "InfiniBand" (Ví dụ: AWS `p4d.24xlarge`, GCP `a2-highgpu-8g`).
-</Callout>
-
-<Callout type="danger" title="Pitfall 3: Tắt máy không lưu trạng thái (Checkpoint Loss)">
-**Triệu chứng:** Máy chủ Cloud (Spot/Preemptible instance) bị nhà cung cấp thu hồi đột ngột giữa đêm. Sáng hôm sau bạn phải chạy lại từ epoch 0.
-**Cách khắc phục (Fix):** Bắt buộc cấu hình `save_strategy="steps"` (ví dụ lưu sau mỗi 500 steps) và đẩy thẳng thư mục checkpoint lên S3/GCS. Khi chạy lại, truyền cờ `--resume_from_checkpoint` cho HuggingFace Trainer.
-</Callout>
+Nếu dùng spot/preemptible instance, checkpoint không được chỉ nằm trên local disk.
 
 ---
 
-## 6. Cost & Performance Unit Economics
+## 6. Scheduler Choices: Slurm, Kubernetes, Managed ML
 
-Huấn luyện LLM là cuộc chơi đốt tiền. Tính toán kinh tế là nhiệm vụ cốt lõi của kỹ sư hệ thống:
-
-| Tình huống / Quyết định | Phân tích SRE (Ý nghĩa kinh tế) | Tối ưu hóa (Optimization) |
+| Scheduler | Điểm mạnh | Khi nên dùng |
 |---|---|---|
-| **Thuê Cloud (On-demand vs Spot)** | Thuê 8x A100 On-demand giá khoảng ~32/giờ. Chạy 1 tuần tốn ~5,300. | Sử dụng Spot/Preemptible Instances (Máy chủ thừa của Cloud) có thể giảm giá tới 70% (chỉ còn ~10/giờ). Nhưng phải tự xây dựng cơ chế lưu Checkpoint tự động cực kỳ kiên cố vì máy bị giật lại bất cứ lúc nào. |
-| **GPU Utilization (Tỉ lệ tận dụng)** | Bạn thuê GPU đắt tiền nhưng Utilization < 60% (có thể xem qua lệnh `nvtop` hoặc `nvidia-smi`). Tức là bạn đang lãng phí 40% số tiền. | Nguyên nhân thường do CPU xử lý dữ liệu chậm (Data Loading Bottleneck). Hãy tăng tham số `dataloader_num_workers=8` trong `TrainingArguments` để CPU nạp dữ liệu nhanh bằng tốc độ GPU xử lý. |
-| **DeepSpeed ZeRO-Offload** | Bạn muốn train mô hình 70B nhưng cụm GPU không đủ VRAM. ZeRO-Offload đẩy bớt Optimizer states sang RAM của CPU để train tiếp. | Việc giao tiếp giữa RAM (CPU) và VRAM (GPU) cực kỳ chậm. Dù train được nhưng sẽ tốn thời gian gấp 3-5 lần. Đôi khi việc thuê thêm GPU để chạy ZeRO-3 hoàn toàn trên VRAM lại có tổng chi phí (TCO) rẻ hơn vì thời gian thuê ngắn hơn nhiều. |
+| Slurm | HPC truyền thống, multi-node GPU mạnh | research lab, cluster riêng |
+| Kubernetes | cloud-native, service + job cùng hệ sinh thái | platform team đã dùng K8s |
+| SageMaker/Vertex/Azure ML | managed jobs, logs, IAM, auto cleanup | team muốn giảm DevOps |
+| Ray | distributed Python, training + serving + data | workloads cần orchestration linh hoạt |
+
+Không có lựa chọn tuyệt đối. Nếu team thiếu SRE, managed ML jobs có thể rẻ hơn tự vận hành K8s dù giá list cao hơn.
+
+---
+
+## 7. Network and Storage Bottlenecks
+
+Training multi-GPU rất nhạy với network.
+
+| Bottleneck | Triệu chứng | Fix |
+|---|---|---|
+| Không có NVLink | scale 8 GPU không nhanh hơn 2 GPU | chọn instance có NVLink/InfiniBand |
+| Object storage đọc từng file nhỏ | GPU utilization răng cưa | pack data thành parquet/tar, local cache |
+| Checkpoint ghi quá thường xuyên | step time spike mỗi save | tăng save interval, async upload |
+| CPU preprocessing chậm | GPU idle | pre-tokenize, tăng workers, cache tokenized dataset |
+| Network multi-node yếu | all-reduce chậm | placement group, RDMA/InfiniBand |
+
+Một cụm GPU đắt nhất vẫn có thể thua một cụm nhỏ hơn nếu data loading và network kém.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: OOM chỉ xảy ra ở một vài GPU">
+**Triệu chứng:** GPU 2 OOM còn GPU khác ổn.
+
+**Nguyên nhân:** Batch chứa sequence dài hơn hoặc packing không đều.
+
+**Fix:** bucket theo length, sequence packing, giới hạn max sequence, log max tokens per batch.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: GPU utilization thấp dù VRAM đầy">
+**Triệu chứng:** VRAM 90% nhưng utilization 30%.
+
+**Nguyên nhân:** GPU đang chờ CPU/dataloader/storage hoặc communication.
+
+**Fix:** pre-tokenize data, tăng `dataloader_num_workers`, local NVMe cache, kiểm tra NCCL logs và network topology.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Spot instance bị thu hồi làm mất 18 giờ training">
+**Triệu chứng:** Cloud reclaim máy, job biến mất, checkpoint local mất theo.
+
+**Fix:** checkpoint định kỳ vào durable storage, bật resume, lưu optimizer/scheduler states, và test restore trước khi chạy job dài.
+</Callout>
+
+---
+
+## Cost / Throughput / Resilience Unit Economics
+
+| Quyết định | Tác động chi phí | Cách tối ưu |
+|---|---|---|
+| On-demand GPU | ổn định nhưng đắt | dùng cho jobs critical hoặc không resume được |
+| Spot GPU | rẻ hơn nhiều nhưng bị preempt | checkpoint thường xuyên, job idempotent |
+| ZeRO offload CPU | fit model lớn hơn | có thể chậm 3-5x; tính total cost thay vì hourly cost |
+| Batch size nhỏ | ít OOM | throughput thấp; dùng gradient accumulation |
+| Save checkpoint quá dày | an toàn hơn | tốn storage và pause; tune theo preemption risk |
+| Data streaming từ S3 | setup đơn giản | có thể chậm; cache local hoặc shard file lớn |
+
+Câu hỏi đúng không phải “GPU nào rẻ nhất mỗi giờ?” mà là “chi phí để hoàn thành một training run reproducible là bao nhiêu?”.
+
+---
+
+## Practice exercises
+
+1. Ước lượng memory footprint cho model 7B khi full fine-tune với Adam và BF16 ở mức khái niệm.
+2. So sánh DDP, FSDP và DeepSpeed ZeRO-3 cho một model 13B.
+3. Thiết kế checkpoint policy cho job 48 giờ chạy trên spot instances.
+4. Liệt kê 5 nguyên nhân GPU utilization thấp.
+5. Viết checklist trước khi thuê cụm multi-GPU cloud.
+
+---
+
+## Knowledge check
+
+1. Vì sao `DataParallel` cũ không phù hợp cho LLM training production?
+2. ZeRO-3/FSDP giảm VRAM bằng cách nào?
+3. Gradient checkpointing đánh đổi gì?
+4. Vì sao NVLink/InfiniBand quan trọng khi scale nhiều GPU?
+5. Tại sao checkpoint phải nằm trên durable storage khi dùng spot instance?
+
+---
+
+## Answer key
+
+1. Nó dồn nhiều việc về GPU chính và không tối ưu multi-process/all-reduce như DDP/FSDP.
+2. Shard weights, gradients và optimizer states qua nhiều GPU thay vì nhân bản đầy đủ.
+3. Giảm VRAM bằng cách tính lại activation, đổi lại tăng compute time.
+4. Multi-GPU training cần đồng bộ gradient/parameters liên tục; network chậm làm GPU chờ nhau.
+5. Spot có thể bị thu hồi, local disk mất; durable storage cho phép resume.
 
 ---
 
 ## Điểm cần nhớ
 
-- **Không bao giờ dùng DataParallel (DP) cũ:** Luôn sử dụng DistributedDataParallel (DDP) qua thư viện `accelerate` của HuggingFace để chạy đa GPU ổn định.
-- Khi mô hình lớn vượt quá VRAM, giải pháp chuẩn công nghiệp là phân mảnh (Sharding) bằng **DeepSpeed (ZeRO)** hoặc **PyTorch FSDP**.
-- Liên kết mạng giữa các GPU (**NVLink**) quan trọng không kém sức mạnh xử lý của chính con chip GPU đó. Không có NVLink, cụm đa GPU sẽ bị nghẽn cổ chai giao tiếp.
-- Mọi kiến trúc hạ tầng đều vô nghĩa nếu không có chiến lược **Resilience (Khả năng chịu lỗi)**: Lưu checkpoint liên tục và sẵn sàng phục hồi khi máy chủ cloud sập.
+- Training infrastructure là bài toán memory + communication + storage + resilience.
+- DDP phù hợp khi model fit trên mỗi GPU; FSDP/ZeRO dùng khi cần shard model lớn.
+- Mixed precision, gradient checkpointing và sequence packing là ba kỹ thuật tiết kiệm VRAM quan trọng.
+- GPU utilization thấp thường do data loading hoặc network, không phải model quá nhẹ.
+- Checkpoint restore phải được test trước khi tin vào spot/preemptible savings.
+
+---
 
 ## Next chapter bridge
 
-Sau khi kiến trúc hạ tầng vững chắc đã chạy xong và nhả ra file trọng số (Model Weights) hoàn hảo, liệu mô hình này có thực sự "tốt" như loss giảm trên biểu đồ? Khâu kiểm định là nơi chúng ta vạch trần những ảo tưởng của thuật toán. Chương tiếp theo: **Model Evaluation & Testing** — nơi chúng ta chuyển từ tư duy huấn luyện sang tư duy đánh giá khắt khe với các bộ test tự động và mô hình LLM đóng vai trò làm giám khảo (LLM-as-judge).
+Training job đã chạy ổn định và tạo ra checkpoint. Nhưng checkpoint không tự chứng minh nó tốt. Loss giảm có thể che giấu overfit, data leakage, format regression hoặc safety failures. Chương tiếp theo: **Model Evaluation & Testing** — nơi chúng ta xây eval gates để quyết định model nào được đi tiếp, model nào phải bị chặn trước production.

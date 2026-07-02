@@ -11,6 +11,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import { Map, Rocket, Award, Compass, BookOpen } from "lucide-react";
 
 export function SearchCommand() {
   const router = useRouter();
@@ -41,6 +42,17 @@ export function SearchCommand() {
     [router]
   );
 
+  const getPhaseHref = (phaseNumber: number) => {
+    const phase = phases.find((p) => p.number === phaseNumber);
+    return phase ? `/phase/${phase.slug}` : "/projects";
+  };
+
+  const difficultyIcon = (difficulty: string) => {
+    if (difficulty === "easy") return <span className="h-2 w-2 rounded-full bg-emerald-400" />;
+    if (difficulty === "medium") return <span className="h-2 w-2 rounded-full bg-amber-400" />;
+    return <span className="h-2 w-2 rounded-full bg-rose-400" />;
+  };
+
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
       <CommandInput placeholder="Tìm phase, dự án, chủ đề..." />
@@ -54,7 +66,7 @@ export function SearchCommand() {
               value={`${phase.number} ${phase.title} ${phase.summary}`}
               onSelect={() => onSelect(`/phase/${phase.slug}`)}
             >
-              <span className="text-muted-foreground">
+              <span className="text-muted-foreground font-mono text-xs">
                 {phase.isCapstone ? "★" : `P${phase.number}`}
               </span>
               <span className="ml-2">{phase.title}</span>
@@ -67,14 +79,10 @@ export function SearchCommand() {
             <CommandItem
               key={p.id}
               value={`${p.title} ${p.stack.join(" ")} ${p.description}`}
-              onSelect={() => onSelect(`/phase/${p.phase}`)}
+              onSelect={() => onSelect(getPhaseHref(p.phase))}
             >
-              <span className="text-muted-foreground">
-                {p.difficulty === "easy"
-                  ? "🟢"
-                  : p.difficulty === "medium"
-                  ? "🟡"
-                  : "🔴"}
+              <span className="flex items-center">
+                {difficultyIcon(p.difficulty)}
               </span>
               <span className="ml-2">{p.title}</span>
             </CommandItem>
@@ -86,31 +94,36 @@ export function SearchCommand() {
             value="roadmap timeline lộ trình"
             onSelect={() => onSelect("/roadmap")}
           >
-            🗺️ Timeline lộ trình
+            <Map className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="ml-2">Timeline lộ trình</span>
           </CommandItem>
           <CommandItem
             value="projects dự án"
             onSelect={() => onSelect("/projects")}
           >
-            🚀 Dự án thực hành
+            <Rocket className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="ml-2">Dự án thực hành</span>
           </CommandItem>
           <CommandItem
             value="skills kỹ năng"
             onSelect={() => onSelect("/skills")}
           >
-            🏅 Kỹ năng thị trường
+            <Award className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="ml-2">Kỹ năng thị trường</span>
           </CommandItem>
           <CommandItem
             value="paths con đường"
             onSelect={() => onSelect("/paths")}
           >
-            📍 Con đường học
+            <Compass className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="ml-2">Con đường học</span>
           </CommandItem>
           <CommandItem
             value="resources tài liệu"
             onSelect={() => onSelect("/resources")}
           >
-            📖 Tài liệu tham khảo
+            <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="ml-2">Tài liệu tham khảo</span>
           </CommandItem>
         </CommandGroup>
       </CommandList>
