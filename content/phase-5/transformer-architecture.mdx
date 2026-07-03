@@ -1,46 +1,64 @@
-Transformer là kiến trúc đứng sau BERT, GPT, Claude, Gemini, LLaMA và hầu hết LLM hiện đại. Ý tưởng cốt lõi: mỗi token tự quyết định nên chú ý tới token nào khác bằng self-attention. Chương này đi từ token embeddings, Q/K/V, scaled dot-product attention, multi-head attention, positional encoding, transformer block tới encoder/decoder và causal masking.
+Transformer là kiến trúc đứng sau BERT, GPT, Claude, Gemini, LLaMA và hầu hết LLM hiện đại. Ý tưởng cốt lõi: mỗi token tự quyết định nên chú ý tới token nào khác bằng self-attention. Chương này đi từ token embeddings, Q/K/V, scaled dot-product attention, multi-head attention, positional encoding, transformer block tới encoder/decoder và causal masking. Trong vai trò giảng viên AI, tôi muốn bạn hiểu transformer không chỉ là lý thuyết, mà là abstraction nền giúp debug token budget, latency, fine-tuning, retrieval và prompt formatting tốt hơn.
 
-## Why this matters
+---
 
-Nếu bạn build LLM/RAG apps, transformer không chỉ là lý thuyết. Nó giải thích nhiều hiện tượng thực tế:
+## 1. The Incident (Tình huống sự cố)
 
-- Vì sao context window có giới hạn.
-- Vì sao prompt dài tốn compute hơn nhiều.
-- Vì sao causal LM generate từng token một.
-- Vì sao attention mask/padding mask quan trọng.
-- Vì sao decoder-only models như GPT phù hợp chat/generation.
-- Vì sao encoder models như BERT phù hợp classification/retrieval.
+<Callout type="danger" title="Báo cáo sự cố: causal mask sai chiều, model leak future tokens, generation fail">
+**Bối cảnh:** Một team build decoder-only LLM. Họ viết causal mask sai chiều, mask che nhầm quá khứ thay vì tương lai. Họ không có unit test cho mask.
 
-<Callout type="info" title="Transformer là abstraction nền của LLM engineering">
-Bạn không cần tự train GPT từ đầu, nhưng hiểu attention/masking/positional encoding giúp debug token budget, latency, fine-tuning, retrieval và prompt formatting tốt hơn.
+**Sự cố:** Model leak future tokens trong training. Model cheat khi training, fail khi generation. Họ không biết vì sao.
+
+1. Causal mask sai chiều, che nhầm quá khứ.
+2. Model leak future tokens trong training.
+3. Model cheat khi training, fail khi generation.
+4. Không có unit test cho mask.
+5. Không có assert cho `d_model % n_heads == 0`.
+
+**Hậu quả:** 1 tuần train model, 2 tuần debug. Họ phải viết unit test cho mask, assert cho `d_model % n_heads == 0`, và in shapes debug rõ ràng. Hóa đơn incident response 2 tuần.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: mask sai chiều có thể cho model nhìn future tokens hoặc che nhầm quá khứ. Đây là bug nghiêm trọng trong language modeling. Luôn có unit test cho mask, assert cho `d_model % n_heads == 0`, và in shapes debug rõ ràng.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Giải thích vì sao transformer thay RNN trong NLP hiện đại.
-2. Mô tả token IDs → embeddings → transformer blocks.
-3. Hiểu Q/K/V bằng trực giác “query tìm, key được tìm, value truyền thông tin”.
-4. Tính scaled dot-product attention ở mức tensor shape.
-5. Giải thích vì sao cần chia `√d_k`.
-6. Hiểu multi-head attention học nhiều quan hệ song song.
-7. Hiểu positional encoding/RoPE thêm thông tin thứ tự.
-8. Phân biệt encoder-only, decoder-only và encoder-decoder.
-9. Giải thích causal mask trong autoregressive generation.
-10. Nhận diện compute/memory cost của attention.
+## 2. Architecture Blueprint (Transformer Block)
 
-## Prerequisites
+Pipeline transformer block:
 
-Bạn nên biết:
+```text
+[ input_ids ]
+        │
+        ▼
+[ token embeddings ]
+        │
+        ▼
+[ + positional encoding ]
+        │
+        ▼
+[ transformer block ]
+        │
+        ├── [ Multi-head attention ]
+        │       │
+        │       ├── [ Q, K, V projections ]
+        │       ├── [ scaled dot-product attention ]
+        │       └── [ causal mask ]
+        │
+        ├── [ residual + LayerNorm ]
+        │
+        ├── [ Feed-forward network (FFN/MLP) ]
+        │
+        └── [ residual + LayerNorm ]
+        │
+        ▼
+[ output logits ]
+```
 
-- Matrix multiplication cơ bản.
-- Softmax.
-- Tokenization và embeddings từ các chương trước.
-- Neural network layer, residual connection, LayerNorm ở mức khái niệm.
-- PyTorch tensor shape cơ bản.
+Key insight: transformer thay recurrence bằng self-attention, parallel tốt và học long-range dependency mạnh.
 
-## Core intuition: tokens talk to each other
+---
+
+## 3. Core intuition: tokens talk to each other
 
 RNN đọc sequence tuần tự:
 
@@ -66,7 +84,9 @@ Token `it` cần biết nó liên quan tới `animal`, không phải `street`. S
 attention = learned routing of information between tokens
 ```
 
-## From token IDs to embeddings
+---
+
+## 4. From token IDs to embeddings
 
 Sau tokenization:
 
@@ -99,7 +119,9 @@ x.shape = (2, 4, 768)
 
 `x` là representation ban đầu của tokens trước khi đi qua nhiều transformer blocks.
 
-## Vì sao Transformer thay RNN
+---
+
+## 5. Vì sao Transformer thay RNN
 
 RNN có ba hạn chế lớn:
 
@@ -113,18 +135,15 @@ Transformer xử lý toàn sequence song song trong training:
 all tokens → attention matrix → updated token representations
 ```
 
-Ưu điểm:
-
-- Parallel tốt trên GPU/TPU.
-- Long-range dependency tốt hơn.
-- Scale tốt khi tăng data/model size.
-- Kiến trúc chung dùng được cho language, vision, audio, multimodal.
+Ưu điểm: parallel tốt trên GPU/TPU, long-range dependency tốt hơn, scale tốt khi tăng data/model size, kiến trúc chung dùng được cho language, vision, audio, multimodal.
 
 <Callout type="warning" title="Attention không miễn phí">
 Self-attention chuẩn có cost theo `seq_len²`. Context càng dài, compute/memory càng tăng mạnh.
 </Callout>
 
-## Self-attention
+---
+
+## 6. Self-attention
 
 Mỗi token representation tạo 3 vector:
 
@@ -153,7 +172,9 @@ Attention(Q,K,V) = softmax(QKᵀ / √d_k) V
 3. `softmax`: biến scores thành attention weights.
 4. `weights V`: trộn thông tin value theo weights.
 
-## Tensor shapes
+---
+
+## 7. Tensor shapes
 
 Giả sử:
 
@@ -187,7 +208,9 @@ weights @ V → (2, 4, 64)
 
 Mỗi token vẫn có một vector output, nhưng vector đó đã trộn thông tin từ các token khác.
 
-## PyTorch implementation: single-head attention
+---
+
+## 8. PyTorch implementation: single-head attention
 
 ```python
 import torch
@@ -212,7 +235,9 @@ print(out.shape)
 Dot product với dimension lớn có variance lớn. Nếu không chia `√d_k`, softmax dễ quá sắc, gradient nhỏ và training kém ổn định.
 </Callout>
 
-## Worked example: attention as weighted average
+---
+
+## 9. Worked example: attention as weighted average
 
 Giả sử token `it` có attention weights:
 
@@ -236,7 +261,9 @@ Nghĩa là representation mới của `it` chứa nhiều thông tin từ `anima
 Attention cho thấy routing của thông tin, nhưng không nên xem heatmap attention là giải thích tuyệt đối cho quyết định của model. Các layer/MLP/residual cũng ảnh hưởng mạnh.
 </Callout>
 
-## Multi-head attention
+---
+
+## 10. Multi-head attention
 
 Một attention head chỉ nhìn sequence theo một không gian projection. Multi-head attention chạy nhiều heads song song.
 
@@ -245,14 +272,7 @@ head_i = Attention(XW_i^Q, XW_i^K, XW_i^V)
 output = concat(head_1, ..., head_h) W^O
 ```
 
-Mỗi head có thể học quan hệ khác nhau:
-
-- dependency cú pháp,
-- coreference,
-- local neighboring tokens,
-- long-range relation,
-- delimiter/format structure,
-- semantic relation.
+Mỗi head có thể học quan hệ khác nhau: dependency cú pháp, coreference, local neighboring tokens, long-range relation, delimiter/format structure, semantic relation.
 
 Nếu:
 
@@ -273,7 +293,9 @@ Multi-head output vẫn có shape:
 (batch, seq_len, d_model)
 ```
 
-## Positional information
+---
+
+## 11. Positional information
 
 Self-attention tự nó không biết thứ tự. Nếu không có positional info, attention gần như permutation-invariant: tokens bị đảo vị trí có thể khó phân biệt.
 
@@ -282,8 +304,6 @@ Cần thêm thông tin vị trí:
 ```text
 token_embedding + position_information → transformer input
 ```
-
-Các cách phổ biến:
 
 | Method | Ý tưởng | Ghi chú |
 |---|---|---|
@@ -294,7 +314,9 @@ Các cách phổ biến:
 
 RoPE giúp attention score phụ thuộc vào vị trí tương đối, không chỉ vị trí tuyệt đối.
 
-## Transformer block
+---
+
+## 12. Transformer block
 
 Một transformer block hiện đại thường gồm:
 
@@ -326,7 +348,9 @@ FFN       = feature/channel mixing
 
 Residual connections giúp gradient đi qua nhiều layers. LayerNorm giúp scale ổn định.
 
-## Encoder, Decoder, Encoder-Decoder
+---
+
+## 13. Encoder, Decoder, Encoder-Decoder
 
 | Kiến trúc | Ví dụ | Attention | Dùng cho |
 |---|---|---|---|
@@ -364,7 +388,9 @@ source text → encoder → decoder generates target text
 
 Tốt cho translation/summarization truyền thống.
 
-## Causal masking
+---
+
+## 14. Causal masking
 
 Trong autoregressive generation, token hiện tại không được nhìn token tương lai.
 
@@ -398,9 +424,9 @@ Vị trí `i` chỉ attend được các vị trí `≤ i`.
 Nếu decoder nhìn được token tương lai, model cheat khi training và fail khi generation. Causal mask là bắt buộc cho autoregressive language modeling.
 </Callout>
 
-## Padding mask vs causal mask
+---
 
-Hai loại mask thường gặp:
+## 15. Padding mask vs causal mask
 
 | Mask | Mục đích |
 |---|---|
@@ -415,7 +441,9 @@ final_mask = padding_mask + causal_mask
 
 Nếu batch có padding mà không mask, model có thể học từ padding noise. Nếu generation không causal mask, model bị future leakage.
 
-## Compute and memory cost
+---
+
+## 16. Compute and memory cost
 
 Self-attention chuẩn tạo attention matrix:
 
@@ -431,19 +459,15 @@ O(seq_len²)
 
 Nếu tăng context từ 4k lên 8k, attention matrix tăng khoảng 4 lần.
 
-Điều này ảnh hưởng:
-
-- latency,
-- GPU memory,
-- max batch size,
-- training/inference cost,
-- RAG chunk packing.
+Điều này ảnh hưởng: latency, GPU memory, max batch size, training/inference cost, RAG chunk packing.
 
 <Callout type="tip" title="Prompt ngắn hơn thường nhanh hơn và rẻ hơn">
 Không nhồi toàn bộ documents vào prompt nếu retrieval/rerank có thể chọn context tốt hơn. Long context hữu ích, nhưng không miễn phí.
 </Callout>
 
-## KV cache in generation
+---
+
+## 17. KV cache in generation
 
 Khi generate token từng bước, decoder không cần tính lại K/V cho toàn bộ prefix mỗi lần. Nó cache Key/Value của tokens đã qua.
 
@@ -462,7 +486,25 @@ layers × heads × seq_len × d_head
 
 Đây là lý do context dài và batch lớn làm serving LLM tốn VRAM.
 
-## Implementation lab: minimal masked self-attention
+---
+
+## 18. Tokenization pitfalls
+
+<Callout type="warning" title="Mistake 1: sai tensor shape khi split heads">
+Multi-head attention rất dễ bug ở `view`, `transpose`, `contiguous`. Luôn print/assert shapes ở từng bước.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: quên positional information">
+Attention không tự biết thứ tự. Nếu build toy transformer mà không thêm positional encoding/RoPE, model khó học sequence order.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: mask sai chiều">
+Mask sai có thể cho model nhìn future tokens hoặc che nhầm quá khứ. Đây là bug nghiêm trọng trong language modeling.
+</Callout>
+
+---
+
+## Implementation Playbook: Minimal Masked Self-Attention
 
 ```python
 import torch
@@ -517,32 +559,78 @@ print(y.shape)  # (2, 8, 64)
 
 Bài lab này chưa có positional encoding, dropout, LayerNorm, FFN hoặc KV cache, nhưng đủ để thấy Q/K/V, multi-head và causal mask.
 
-## Common mistakes & debugging checklist
+**Extend lab milestones:**
 
-<Callout type="warning" title="Mistake 1: sai tensor shape khi split heads">
-Multi-head attention rất dễ bug ở `view`, `transpose`, `contiguous`. Luôn print/assert shapes ở từng bước.
+1. Với `seq_len=5`, vẽ causal mask 5×5.
+2. Viết single-head attention và kiểm tra output shape.
+3. Thêm padding mask vào attention scores.
+4. So sánh output khi có/không chia `√d_k` bằng cách quan sát entropy của softmax.
+5. Tính `d_head` khi `d_model=1024`, `n_heads=16`.
+
+---
+
+## Empirical lab: attention cost
+
+**Goal:** đo ảnh hưởng của sequence length đến compute/memory.
+
+**Setup:** dùng single-head attention với `seq_len` tăng dần.
+
+**Steps:**
+
+1. Tạo `seq_len = [512, 1024, 2048, 4096]`.
+2. Đo attention matrix size.
+3. Đo latency forward pass.
+4. Đo GPU memory.
+5. So sánh cost với `seq_len²`.
+
+Record:
+
+| Trial | seq_len | Attention matrix size | Latency | GPU memory | Cost |
+|---|---|---|---:|---:|---:|
+| 1 | 512 | | | | |
+| 2 | 1024 | | | | |
+| 3 | 2048 | | | | |
+| 4 | 4096 | | | | |
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: sai tensor shape khi split heads">
+**Triệu chứng:** Multi-head attention rất dễ bug ở `view`, `transpose`, `contiguous`. Model crash.
+
+**Fix:** Luôn print/assert shapes ở từng bước. Dùng `d_model % n_heads == 0` assert. In shapes debug rõ ràng.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: quên positional information">
-Attention không tự biết thứ tự. Nếu build toy transformer mà không thêm positional encoding/RoPE, model khó học sequence order.
+<Callout type="warning" title="Pitfall 2: quên positional information">
+**Triệu chứng:** Attention không tự biết thứ tự. Model khó học sequence order.
+
+**Fix:** Thêm positional encoding/RoPE. Dùng model card để check positional encoding.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: mask sai chiều">
-Mask sai có thể cho model nhìn future tokens hoặc che nhầm quá khứ. Đây là bug nghiêm trọng trong language modeling.
+<Callout type="danger" title="Pitfall 3: mask sai chiều">
+**Triệu chứng:** Mask sai có thể cho model nhìn future tokens hoặc che nhầm quá khứ. Model cheat khi training, fail khi generation.
+
+**Fix:** Viết unit test cho mask. Assert `d_model % n_heads == 0`. In shapes debug rõ ràng.
 </Callout>
 
-Checklist:
+---
 
-1. `input_ids` shape có đúng `(batch, seq_len)` không?
-2. Embedding output có đúng `(batch, seq_len, d_model)` không?
-3. `d_model % n_heads == 0` không?
-4. Q/K/V shapes có đúng sau split heads không?
-5. Attention scores có shape `(batch, heads, seq, seq)` không?
-6. Mask có broadcast đúng batch/head dimensions không?
-7. Softmax dùng đúng dimension cuối không?
-8. Có positional information không?
-9. Residual/LayerNorm placement có đúng kiến trúc không?
-10. Với decoder, causal mask có chặn future tokens không?
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Encoder-only | hiểu input hai chiều, tốt cho classification/NER | không generate |
+| Decoder-only | generate autoregressive, tốt cho chat/generation | causal mask, không hiểu input hai chiều |
+| Encoder-Decoder | seq2seq, tốt cho translation/summarization | phức tạp hơn |
+| Long context | phân tích tài liệu dài | cost/latency tăng theo `seq_len²` |
+| KV cache | generation nhanh hơn | tốn VRAM |
+| Multi-head | học nhiều quan hệ song song | phức tạp hơn |
+| RoPE | positional encoding tốt hơn | cần model card |
+| Pre-norm | train deep transformers ổn định hơn | không phải kiến trúc gốc |
+| Quantization | giảm VRAM, rẻ hơn | có thể giảm quality |
+
+---
 
 ## Practice exercises
 
@@ -553,6 +641,8 @@ Checklist:
 5. Tính `d_head` khi `d_model=1024`, `n_heads=16`.
 6. Ước lượng attention matrix size khi `batch=2`, `heads=32`, `seq_len=4096`.
 7. Đọc config của một Hugging Face model và tìm `num_attention_heads`, `hidden_size`, `max_position_embeddings`.
+
+---
 
 ## Knowledge check
 
@@ -567,6 +657,8 @@ Checklist:
 9. Attention chuẩn có cost theo `seq_len` như thế nào?
 10. KV cache giúp gì khi generation?
 
+---
+
 ## Answer key
 
 1. Giảm xử lý tuần tự, học dependency xa tốt hơn và parallel tốt hơn.
@@ -579,6 +671,8 @@ Checklist:
 8. Chặn token hiện tại nhìn token tương lai.
 9. `O(seq_len²)` cho attention matrix.
 10. Cache K/V của prefix để không tính lại toàn bộ khi generate từng token.
+
+---
 
 ## Mini-project: Tiny transformer block
 
@@ -601,6 +695,8 @@ Checklist:
 - Có assert cho `d_model % n_heads == 0`.
 - Code in shapes/debug rõ ràng.
 
+---
+
 ## Điểm cần nhớ
 
 - Transformer thay recurrence bằng self-attention, parallel tốt và học long-range dependency mạnh.
@@ -612,6 +708,8 @@ Checklist:
 - Encoder-only phù hợp understanding; decoder-only phù hợp generation; encoder-decoder phù hợp seq2seq.
 - Causal mask ngăn decoder nhìn tương lai.
 - Attention cost tăng theo `seq_len²`; KV cache rất quan trọng khi serving LLM.
+
+---
 
 ## Next chapter bridge
 

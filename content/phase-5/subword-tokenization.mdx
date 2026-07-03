@@ -1,45 +1,55 @@
-LLM không đọc raw text trực tiếp. Nó đọc **token IDs**. Tokenization là bước biến text thành chuỗi số mà model có thể xử lý. Subword tokenization là lý do LLM xử lý từ hiếm, tên riêng, multilingual text, emoji và code tốt hơn word-level tokenizer.
+LLM không đọc raw text trực tiếp. Nó đọc **token IDs**. Tokenization là bước biến text thành chuỗi số mà model có thể xử lý. Subword tokenization là lý do LLM xử lý từ hiếm, tên riêng, multilingual text, emoji và code tốt hơn word-level tokenizer. Trong vai trò giảng viên AI, tôi muốn bạn hiểu tokenizer là một phần của model — đổi tokenizer tùy tiện phá model. Token IDs phải khớp với embedding matrix mà model đã train.
 
-## Why this matters
+---
 
-Khi gọi LLM API, bạn trả tiền theo token, bị giới hạn bởi context window và model chỉ hiểu input thông qua tokenizer của nó.
+## 1. The Incident (Tình huống sự cố)
 
-Ví dụ cùng một câu có thể có token count khác nhau giữa các model:
+<Callout type="danger" title="Báo cáo sự cố: chunk theo số từ thay vì token, prompt bị truncation, 5,000 user nhận câu trả lời sai">
+**Bối cảnh:** Một team build RAG với model context window 8,192 tokens. Họ chunk theo số từ, không phải số token. Họ không có token budget guard. Họ tin "word count ≈ token count" là đủ.
 
-```text
-"Tôi đang học transformer tokenization 🚀"
-```
+**Sự cố:** User query tiếng Việt, code, URL, emoji. Token count sai 30-50% so với word count. Prompt bị truncation, mất phần quan trọng. 5,000 user nhận câu trả lời sai.
 
-Một tokenizer có thể tách tiếng Việt/emoji thành nhiều tokens hơn tokenizer khác. Nếu bạn ước lượng bằng số từ, bạn sẽ tính sai cost, chunk sai hoặc vượt context length.
+1. Chunk theo word count — token count sai 30-50%.
+2. Không có token budget guard — không biết prompt bị truncation.
+3. Không có chat template — special tokens không đúng.
+4. Không có `attention_mask` — padding không đúng.
+5. Không log truncation — không biết prompt bị cắt.
 
-<Callout type="danger" title="Tokenizer mismatch có thể phá model">
-Tokenizer là một phần của model. Token IDs phải khớp với embedding matrix mà model đã train. Đổi tokenizer tùy tiện khiến cùng text thành IDs khác, model hiểu sai hoàn toàn.
+**Hậu quả:** 5,000 user nhận câu trả lời sai. Họ phải tắt chatbot, thêm token budget guard, và thiết kế lại chunking. Hóa đơn incident response 2 tuần.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: token count không bằng word count. Context window, cost và truncation đều tính theo token. Chunking RAG nên dùng tokenizer của model/provider, không dùng word count ước lượng.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Giải thích text → tokens → token IDs → embeddings.
-2. Phân biệt word-level, character-level và subword tokenization.
-3. Hiểu vì sao subword giảm OOV nhưng không làm sequence quá dài như char-level.
-4. Hiểu BPE, WordPiece và SentencePiece ở mức trực giác.
-5. Biết vai trò của special tokens như `[CLS]`, `[SEP]`, `<bos>`, `<eos>`, `[PAD]`.
-6. Dùng `attention_mask` cho padding.
-7. Hiểu vocab size tradeoff.
-8. Tính token count bằng tokenizer đúng model/provider.
-9. Nhận diện tokenization pitfalls trong RAG/LLM apps.
+## 2. Architecture Blueprint (Tokenization Pipeline)
 
-## Prerequisites
+Pipeline input của LLM:
 
-Bạn nên biết:
+```text
+[ Raw text ]
+        │
+        ▼
+[ Tokenizer ]
+        │
+        ▼
+[ Token strings/pieces ]
+        │
+        ▼
+[ Token IDs ]
+        │
+        ▼
+[ Embedding lookup ]
+        │
+        ▼
+[ Transformer ]
+```
 
-- String processing cơ bản.
-- Word embeddings từ chương trước.
-- Transformer/LLM ở mức khái niệm.
-- RAG/chunking và context window là gì.
+Key insight: model thấy IDs, không thấy chữ. Token IDs phải khớp với embedding matrix mà model đã train.
 
-## Core intuition: model thấy IDs, không thấy chữ
+---
+
+## 3. Core intuition: model thấy IDs, không thấy chữ
 
 Pipeline input của LLM:
 
@@ -71,7 +81,9 @@ embedding_matrix[15592] → vector cho " AI"
 Nhiều tokenizer encode cả dấu cách trong token, ví dụ token `" AI"` khác `"AI"`. Vì vậy thêm/bớt whitespace có thể đổi tokenization.
 </Callout>
 
-## Word-level vs character-level vs subword
+---
+
+## 4. Word-level vs character-level vs subword
 
 ### Word-level tokenization
 
@@ -124,7 +136,9 @@ Nhược điểm:
 subword = balance giữa word-level và character-level
 ```
 
-## Byte Pair Encoding (BPE)
+---
+
+## 5. Byte Pair Encoding (BPE)
 
 BPE bắt đầu từ ký tự hoặc byte, rồi lặp lại việc merge cặp xuất hiện nhiều nhất.
 
@@ -182,7 +196,9 @@ print(len(ids))
 Byte-level tokenizer có thể biểu diễn hầu như mọi Unicode text bằng bytes. Điều này hữu ích cho emoji, code, ký tự lạ và multilingual input.
 </Callout>
 
-## WordPiece
+---
+
+## 6. WordPiece
 
 WordPiece được dùng trong BERT-style models. Nó giống BPE ở tinh thần merge subwords, nhưng chọn merge dựa trên likelihood/objective khác.
 
@@ -209,7 +225,9 @@ print(tok("unaffordable playing")["input_ids"])
 `bert-base-uncased` và `bert-base-cased` có tokenizer/model khác nhau. Nếu task cần tên riêng, acronym hoặc code identifier, casing có thể quan trọng.
 </Callout>
 
-## SentencePiece
+---
+
+## 7. SentencePiece
 
 SentencePiece tokenizes raw text trực tiếp, không cần tách space trước. Nó thường dùng ký hiệu `▁` để biểu thị khoảng trắng trước token.
 
@@ -233,7 +251,9 @@ print(tok("Hello world"))
 - Hữu ích cho multilingual text.
 - Xử lý ngôn ngữ không dùng space rõ như tiếng Nhật/Trung tốt hơn word split đơn giản.
 
-## Special tokens
+---
+
+## 8. Special tokens
 
 Special tokens có nghĩa riêng trong input format.
 
@@ -263,7 +283,9 @@ Ví dụ decoder/generative model:
 Chat LLM không chỉ nhận text plain. Tokenizer có thể thêm special tokens cho role như system/user/assistant. Khi fine-tune hoặc count token, phải dùng đúng chat template của model.
 </Callout>
 
-## Padding, truncation và attention_mask
+---
+
+## 9. Padding, truncation và attention_mask
 
 Batch training/inference thường cần các sequence cùng length. Ta dùng padding:
 
@@ -300,7 +322,9 @@ print(encoded["attention_mask"])
 
 Nếu quên attention mask, model có thể attend vào padding tokens và output nhiễu.
 
-## Vocabulary size tradeoff
+---
+
+## 10. Vocabulary size tradeoff
 
 Vocab lớn:
 
@@ -330,7 +354,9 @@ Ví dụ:
 
 Chỉ riêng token embeddings đã có thể rất lớn.
 
-## Token count không bằng word count
+---
+
+## 11. Token count không bằng word count
 
 Câu tiếng Anh đơn giản thường gần số từ hơn:
 
@@ -353,7 +379,9 @@ Nhưng các loại text sau có thể tốn nhiều tokens:
 Context window, cost và truncation đều tính theo token. Chunking RAG nên dùng tokenizer của model/provider, không dùng word count ước lượng.
 </Callout>
 
-## Worked example: token budget for RAG
+---
+
+## 12. Worked example: token budget for RAG
 
 Giả sử model có context window 8,192 tokens.
 
@@ -380,7 +408,25 @@ floor(6292 / 700) = 8 chunks
 
 Nếu bạn tính bằng số từ và sai 30–50%, prompt có thể bị truncation.
 
-## Implementation lab: token counter and chunk guard
+---
+
+## 13. Tokenization pitfalls
+
+<Callout type="warning" title="Mistake 1: dùng tokenizer khác model">
+Token IDs chỉ có nghĩa với đúng model/tokenizer pair. Khi dùng Hugging Face, luôn load tokenizer cùng checkpoint với model.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: ước lượng token bằng số từ">
+Word count có thể sai mạnh với tiếng Việt, code, URL, emoji và data bẩn. Dùng tokenizer thật.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: quên truncation/padding behavior">
+Silent truncation có thể cắt mất phần quan trọng của prompt/context. Luôn log token count và kiểm tra input sau truncation trong pipeline quan trọng.
+</Callout>
+
+---
+
+## Implementation Playbook: Token Counter and Chunk Guard
 
 Cài đặt:
 
@@ -416,61 +462,80 @@ print(count_tokens(sample))
 print(trim_to_token_budget(sample, budget=10))
 ```
 
-Use cases:
+**Extend lab milestones:**
 
-- Count prompt cost.
-- Guard RAG context length.
-- Trim long user input safely by token budget.
-- Compare tokenization across providers/models.
+1. Count tokens cho 10 câu tiếng Anh và 10 câu tiếng Việt.
+2. So sánh token count của một URL ngắn và một URL dài.
+3. Dùng BERT tokenizer xem `playing`, `unaffordable`, `ChatGPT` bị split thế nào.
+4. Dùng T5 tokenizer quan sát ký hiệu `▁` trong SentencePiece.
+5. Tính RAG budget cho model context window 32k tokens.
 
-## Tokenization and multilingual/code data
+---
 
-Tokenizer quality ảnh hưởng trực tiếp tới hiệu quả model.
+## Empirical lab: token count vs word count
 
-Nếu tiếng Việt bị tách quá vụn:
+**Goal:** đo ảnh hưởng của token count vs word count đến chunking.
 
-```text
-"trí tuệ nhân tạo" → nhiều subword pieces
-```
+**Setup:** dùng 20 text có tiếng Việt, code, URL, emoji.
 
-Sequence dài hơn, cost cao hơn, context ít hơn. Với code:
+**Steps:**
 
-```text
-getUserById, HTTP_404_NOT_FOUND, snake_case_variable
-```
+1. Tạo 20 text có tiếng Việt, code, URL, emoji.
+2. Count word count cho mỗi text.
+3. Count token count cho mỗi text (gpt-4o-mini, bert-base-uncased).
+4. Tính ratio token/word.
+5. So sánh token count giữa 2 tokenizer.
 
-Tokenizer có thể split identifier thành nhiều pieces. Điều này không sai, nhưng bạn cần biết khi:
+Record:
 
-- chunk code,
-- search exact identifiers,
-- fine-tune model cho code/domain,
-- tính cost.
+| Trial | Text type | Word count | Token count (gpt-4o-mini) | Token count (BERT) | Ratio |
+|---|---|---:|---:|---:|---:|
+| 1 | English | | | | |
+| 2 | Vietnamese | | | | |
+| 3 | code | | | | |
+| 4 | URL | | | | |
+| 5 | emoji | | | | |
 
-## Common mistakes & debugging checklist
+---
 
-<Callout type="warning" title="Mistake 1: dùng tokenizer khác model">
-Token IDs chỉ có nghĩa với đúng model/tokenizer pair. Khi dùng Hugging Face, luôn load tokenizer cùng checkpoint với model.
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: dùng tokenizer khác model">
+**Triệu chứng:** Token IDs chỉ có nghĩa với đúng model/tokenizer pair. Nếu dùng tokenizer khác model, model hiểu sai hoàn toàn.
+
+**Fix:** Khi dùng Hugging Face, luôn load tokenizer cùng checkpoint với model. Không đổi tokenizer tùy tiện.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: ước lượng token bằng số từ">
-Word count có thể sai mạnh với tiếng Việt, code, URL, emoji và data bẩn. Dùng tokenizer thật.
+<Callout type="warning" title="Pitfall 2: ước lượng token bằng số từ">
+**Triệu chứng:** Word count sai 30-50% với tiếng Việt, code, URL, emoji. Prompt bị truncation. Chunking sai.
+
+**Fix:** Dùng tokenizer thật. Count token bằng tokenizer của model/provider. Log token count.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: quên truncation/padding behavior">
-Silent truncation có thể cắt mất phần quan trọng của prompt/context. Luôn log token count và kiểm tra input sau truncation trong pipeline quan trọng.
+<Callout type="danger" title="Pitfall 3: quên truncation/padding behavior">
+**Triệu chứng:** Silent truncation cắt mất phần quan trọng của prompt/context. `attention_mask` không đúng, model attend vào padding.
+
+**Fix:** Luôn log token count và kiểm tra input sau truncation. Dùng `attention_mask` đúng khi padding.
 </Callout>
 
-Checklist:
+---
 
-1. Tokenizer có đúng model/checkpoint không?
-2. Có dùng đúng chat template cho chat model không?
-3. Token count có được đo bằng tokenizer thật không?
-4. RAG chunk size tính theo tokens chưa?
-5. Có chừa answer budget trong context window không?
-6. Có log truncation không?
-7. `attention_mask` có đúng khi padding không?
-8. Special tokens có được thêm đúng không?
-9. Multilingual/code/URL có bị token hóa quá dài không?
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Word-level | dễ hiểu, sequence ngắn | OOV, vocab lớn |
+| Character-level | không OOV, vocab nhỏ | sequence dài |
+| Subword | balance OOV/sequence | không có |
+| BPE | phổ biến GPT-family | không có |
+| WordPiece | phổ biến BERT | không có |
+| SentencePiece | multilingual, không phụ thuộc whitespace | không có |
+| Vocab lớn | sequence ngắn | embedding matrix lớn |
+| Vocab nhỏ | embedding matrix nhỏ | sequence dài |
+| Chat template | đúng role/format | không có |
+| Token budget guard | không truncation | không có |
+
+---
 
 ## Practice exercises
 
@@ -481,6 +546,9 @@ Checklist:
 5. Viết function trim text theo token budget.
 6. Tính RAG budget cho model context window 32k tokens.
 7. Kiểm tra tokenization của một đoạn code Python/TypeScript.
+8. Test chat template của một chat model.
+
+---
 
 ## Knowledge check
 
@@ -495,6 +563,8 @@ Checklist:
 9. Vocab size lớn làm tăng phần nào của model?
 10. Vì sao token count không bằng word count?
 
+---
+
 ## Answer key
 
 1. Token IDs.
@@ -507,6 +577,8 @@ Checklist:
 8. Phân biệt token thật và padding token.
 9. Embedding matrix và output projection/softmax nếu tied hoặc LM head tương ứng.
 10. Một từ có thể thành nhiều tokens; whitespace, Unicode, code, URL, emoji ảnh hưởng mạnh.
+
+---
 
 ## Mini-project: Token budget analyzer
 
@@ -527,6 +599,8 @@ Checklist:
 - Có log rõ phần nào bị truncate/drop.
 - Có test với tiếng Việt, code, URL và emoji.
 
+---
+
 ## Điểm cần nhớ
 
 - LLM đọc token IDs, không đọc raw text trực tiếp.
@@ -536,6 +610,8 @@ Checklist:
 - `attention_mask` phân biệt token thật và padding.
 - Vocab size tradeoff giữa sequence length và model size.
 - Luôn tính token bằng tokenizer đúng model/provider.
+
+---
 
 ## Next chapter bridge
 

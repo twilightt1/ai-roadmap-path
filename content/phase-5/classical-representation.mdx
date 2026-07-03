@@ -1,32 +1,67 @@
-Classical text representation là nền của NLP trước transformer: Bag of Words, TF-IDF, n-grams, one-hot. Dù nghe “cũ”, chúng vẫn cực kỳ quan trọng trong production: search keyword, BM25, hybrid RAG, baseline classification, explainable models.
+Classical text representation là nền của NLP trước transformer: Bag of Words, TF-IDF, n-grams, one-hot. Dù nghe "cũ", chúng vẫn cực kỳ quan trọng trong production: search keyword, BM25, hybrid RAG, baseline classification, explainable models. Trong vai trò giảng viên AI, tôi muốn bạn hiểu sparse representation không phải "cổ lỗ" — nó là component mạnh trong hybrid retrieval, bắt exact identifiers mà dense embedding miss.
 
-## Why this matters
+---
 
-Một RAG system chỉ dùng vector search có thể miss exact keyword như error code `ORA-00942`, API name `getUserById`, hoặc policy ID `HR-17`. Keyword search classic bắt những thứ này rất tốt. Vì vậy production RAG thường dùng:
+## 1. The Incident (Tình huống sự cố)
+
+<Callout type="danger" title="Báo cáo sự cố: RAG chỉ dùng vector search, miss error code `ORA-00942`, 5,000 user nhận câu trả lời sai">
+**Bối cảnh:** Một team build RAG cho enterprise docs. Họ dùng vector-only search với embedding model. Họ không có sparse fallback, không có hybrid search. Họ tin embedding search "semantic" sẽ thắng mọi thứ.
+
+**Sự cố:** User query "ORA-00942" — error code Oracle. Embedding search không match exact error code vì dense embedding không hiểu exact identifier. Model trả lời "tôi không tìm thấy thông tin" trong khi document có error code `ORA-00942` trong title. 5,000 user query error code, 5,000 user nhận sai.
+
+1. Không có hybrid search — chỉ vector-only.
+2. Không có sparse fallback — BM25/TF-IDF không có.
+3. Không có eval set cho exact identifiers — chỉ eval happy path.
+4. Không hiểu sparse vs dense — tin embedding search "semantic" thắng mọi thứ.
+5. Không có reranker — không rerank top-k.
+
+**Hậu quả:** 5,000 user query error code, 5,000 user nhận sai. Họ phải tắt chatbot, thêm BM25 sparse search, và thiết kế lại hybrid retrieval. Hóa đơn incident response 2 tuần.
+</Callout>
+
+Bài học rút ra: dense embedding không bắt exact identifiers. Sparse search bắt exact keyword, code, API name, error ID. Production RAG thường dùng hybrid: `sparse retrieval + dense retrieval + reranker`. Hiểu sparse representation để build hybrid retrieval tốt.
+
+---
+
+## 2. Architecture Blueprint (Hybrid Retrieval)
+
+Pipeline hybrid retrieval production:
 
 ```text
-BM25 / TF-IDF sparse search + dense embedding search + reranker
+[ Query ]
+        │
+        ├── [ Sparse search (BM25/TF-IDF) ]
+        │
+        ├── [ Dense search (embedding) ]
+        │
+        ▼
+[ Merge scores ]
+        │
+        ▼
+[ Reranker ]
+        │
+        ▼
+[ Top-k context ]
+        │
+        ▼
+[ LLM answer ]
 ```
 
-Bạn cần hiểu sparse representations để build hybrid retrieval tốt.
+Key insight: sparse search bắt exact keyword, code, API name, error ID. Dense search bắt meaning/synonyms. Reranker chọn kết quả cuối. Đây là kiến trúc mạnh hơn chỉ vector search.
 
-## Learning objectives
+---
 
-Sau chương này, bạn sẽ có thể:
+## 3. Core intuition: đếm từ là baseline mạnh
 
-1. Giải thích Bag of Words và hạn chế của nó.
-2. Tính TF-IDF trực giác và hiểu IDF.
-3. Dùng n-grams để capture phrase.
-4. Hiểu one-hot và vì sao nó không semantic.
-5. Phân biệt sparse vs dense vectors.
-6. Build TF-IDF + Logistic Regression baseline.
-7. Giải thích vai trò sparse search trong hybrid RAG.
+Nếu document nói nhiều từ "refund", "invoice", "charged", có khả năng topic billing. BoW/TF-IDF tận dụng tín hiệu này mà không cần deep model.
 
-## Core intuition: đếm từ là baseline mạnh
+```text
+sparse = exact match, explainable, fast
+dense = semantic similarity, paraphrase, synonyms
+```
 
-Nếu document nói nhiều từ “refund”, “invoice”, “charged”, có khả năng topic billing. BoW/TF-IDF tận dụng tín hiệu này mà không cần deep model.
+---
 
-## Bag of Words
+## 4. Bag of Words
 
 BoW tạo vocabulary rồi đếm số lần mỗi từ xuất hiện.
 
@@ -45,13 +80,15 @@ print(vec.get_feature_names_out())
 print(X.toarray())
 ```
 
-BoW bỏ thứ tự. “dog bites man” và “man bites dog” có vector giống nhau.
+BoW bỏ thứ tự. "dog bites man" và "man bites dog" có vector giống nhau.
 
 <Callout type="warning" title="BoW mất ngữ cảnh">
 BoW không hiểu phủ định, thứ tự, synonym. `not good` và `good` đều có từ `good`. Vì vậy cần n-grams hoặc model semantic hơn.
 </Callout>
 
-## TF-IDF
+---
+
+## 5. TF-IDF
 
 TF-IDF giảm trọng số từ phổ biến và tăng trọng số từ đặc trưng.
 
@@ -62,7 +99,9 @@ IDF(term) = log(N / df(term))
 
 Nếu từ xuất hiện trong mọi document (`the`, `and`), IDF thấp. Nếu từ hiếm nhưng xuất hiện trong document, TF-IDF cao.
 
-## Worked example by hand
+---
+
+## 6. Worked example by hand
 
 Corpus 3 docs:
 
@@ -94,7 +133,9 @@ TF-IDF(invoice,D1)=1.099
 
 `invoice` đặc trưng hơn `refund` vì hiếm hơn.
 
-## N-grams
+---
+
+## 7. N-grams
 
 N-gram là chuỗi n tokens liên tiếp.
 
@@ -113,7 +154,9 @@ X = vec.fit_transform(texts)
 
 N-grams giúp capture phrase nhưng làm dimension tăng nhanh.
 
-## One-hot encoding
+---
+
+## 8. One-hot encoding
 
 One-hot biểu diễn mỗi token bằng vector có đúng một vị trí 1.
 
@@ -126,7 +169,9 @@ bank = [0,0,1]
 
 Vấn đề: mọi từ cách nhau như nhau. `cat` không gần `dog` hơn `bank`. Không có semantic similarity.
 
-## Sparse vs Dense
+---
+
+## 9. Sparse vs Dense
 
 | Representation | Example | Pros | Cons |
 |---|---|---|---|
@@ -137,7 +182,25 @@ Vấn đề: mọi từ cách nhau như nhau. `cat` không gần `dog` hơn `ban
 Sparse search bắt exact terms như code/API/error IDs. Dense search bắt meaning/synonyms. Reranker chọn kết quả cuối. Đây là kiến trúc mạnh hơn chỉ vector search.
 </Callout>
 
-## Implementation lab: TF-IDF classifier
+---
+
+## 10. Tokenization pitfalls
+
+<Callout type="warning" title="Mistake 1: fit vectorizer trước split">
+Nếu vocabulary học từ test data, đó là leakage. Đưa vectorizer vào Pipeline.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: max_features quá thấp">
+Nếu giới hạn vocab quá thấp, bạn có thể mất terms quan trọng như product names/error codes.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: chỉ dense search trong enterprise docs">
+Enterprise docs có nhiều exact identifiers. Vector-only có thể miss. Sparse/hybrid search thường cần thiết.
+</Callout>
+
+---
+
+## Implementation Playbook: TF-IDF Classifier
 
 ```python
 from sklearn.pipeline import Pipeline
@@ -165,27 +228,77 @@ pipe.fit(X_train, y_train)
 print(classification_report(y_test, pipe.predict(X_test)))
 ```
 
-## Common mistakes & debugging checklist
+**Extend lab milestones:**
 
-<Callout type="warning" title="Mistake 1: fit vectorizer trước split">
-Nếu vocabulary học từ test data, đó là leakage. Đưa vectorizer vào Pipeline.
+1. Test với 5 sample text có error code.
+2. Test với 5 sample text có API name.
+3. Test với 5 sample text có paraphrase.
+4. So sánh TF-IDF vs embedding search.
+5. Build hybrid score: `0.5*sparse + 0.5*dense`.
+
+---
+
+## Empirical lab: sparse vs dense retrieval
+
+**Goal:** đo ảnh hưởng của sparse vs dense retrieval đến exact identifier.
+
+**Setup:** dùng 50 documents có error code, API name, paraphrase.
+
+**Steps:**
+
+1. Tạo 50 documents có error code, API name, paraphrase.
+2. Tạo 10 query: 5 exact identifier, 5 paraphrase.
+3. Build sparse search (BM25/TF-IDF).
+4. Build dense search (embedding).
+5. Build hybrid search.
+6. Đo top-1 accuracy cho cả 3.
+
+Record:
+
+| Trial | Query type | Sparse top-1 | Dense top-1 | Hybrid top-1 |
+|---|---|---:|---:|---:|
+| 1 | exact identifier | | | |
+| 2 | paraphrase | | | |
+| 3 | mixed | | | |
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: leakage do fit vectorizer trước split">
+**Triệu chứng:** Model đánh giá tốt trên test, nhưng khi deploy, performance kém. Nguyên nhân: vectorizer học vocabulary từ test data.
+
+**Fix:** Đưa vectorizer vào Pipeline trước khi train. Không fit vectorizer trước split.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: max_features quá thấp">
-Nếu giới hạn vocab quá thấp, bạn có thể mất terms quan trọng như product names/error codes.
+<Callout type="warning" title="Pitfall 2: max_features quá thấp">
+**Triệu chứng:** Model miss product names, error codes, API names. Vì `max_features` quá thấp, terms quan trọng bị loại.
+
+**Fix:** Tăng `max_features` hoặc dùng `min_df`/`max_df` để filter terms ít phổ biến.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: chỉ dense search trong enterprise docs">
-Enterprise docs có nhiều exact identifiers. Vector-only có thể miss. Sparse/hybrid search thường cần thiết.
+<Callout type="danger" title="Pitfall 3: chỉ dense search trong enterprise docs">
+**Triệu chứng:** User query error code, API name, policy ID. Dense embedding miss. Model trả lời "tôi không tìm thấy".
+
+**Fix:** Thêm sparse search (BM25/TF-IDF). Dùng hybrid: `0.5*sparse + 0.5*dense`. Reranker chọn kết quả cuối.
 </Callout>
 
-Checklist:
+---
 
-1. Vectorizer có trong Pipeline không?
-2. Có dùng n-grams cho phrase/phủ định không?
-3. `min_df/max_df` có loại bỏ quá nhiều term không?
-4. Có giữ error code/API names không?
-5. Có so sánh sparse vs dense retrieval chưa?
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| BoW | đơn giản, nhanh | không semantic |
+| TF-IDF | giảm trọng số từ phổ biến | không semantic |
+| N-grams (1,2) | capture phrase | tăng dimension |
+| N-grams (1,3) | capture phrase dài | tăng dimension mạnh |
+| Sparse-only | exact match, explainable | miss paraphrase |
+| Dense-only | semantic similarity | miss exact identifier |
+| Hybrid | best of both | tốn compute hơn |
+| Reranker | top-k chất lượng cao | tốn compute, latency |
+
+---
 
 ## Practice exercises
 
@@ -194,6 +307,11 @@ Checklist:
 3. So sánh unigram vs bigram cho sentiment `not good`.
 4. Train TF-IDF + LogisticRegression cho dataset spam nhỏ.
 5. Thiết kế hybrid search pipeline sparse+dense cho docs kỹ thuật.
+6. Test TF-IDF vs embedding search cho 5 query exact identifier.
+7. Test TF-IDF vs embedding search cho 5 query paraphrase.
+8. Build hybrid score: `0.5*sparse + 0.5*dense`.
+
+---
 
 ## Knowledge check
 
@@ -204,6 +322,9 @@ Checklist:
 5. Sparse search mạnh ở loại query nào?
 6. Dense embedding mạnh ở loại query nào?
 7. Vì sao dùng Pipeline với TfidfVectorizer?
+8. Vì sao hybrid search thường tốt hơn vector-only?
+
+---
 
 ## Answer key
 
@@ -214,6 +335,9 @@ Checklist:
 5. Exact keyword, code, IDs, tên API.
 6. Semantic paraphrase/synonym.
 7. Tránh leakage và lưu preprocessing cùng model.
+8. Sparse bắt exact terms; dense bắt semantic similarity; hai loại bổ sung nhau.
+
+---
 
 ## Mini-project: Hybrid retrieval prototype
 
@@ -232,6 +356,8 @@ Checklist:
 - Có ví dụ query semantic dense thắng.
 - Có nhận xét khi hybrid tốt hơn.
 
+---
+
 ## Điểm cần nhớ
 
 - BoW/TF-IDF vẫn là baseline và search component mạnh.
@@ -240,6 +366,8 @@ Checklist:
 - One-hot không semantic.
 - Sparse và dense bổ sung cho nhau.
 - Hybrid search là pattern RAG production quan trọng.
+
+---
 
 ## Next chapter bridge
 

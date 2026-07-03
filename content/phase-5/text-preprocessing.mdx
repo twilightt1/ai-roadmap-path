@@ -1,47 +1,60 @@
-Text preprocessing là bước biến text thô thành input đáng tin cậy cho model. Trong NLP classic, preprocessing thường rất mạnh tay: lowercase, remove punctuation, remove stopwords, stemming. Trong transformer/LLM hiện đại, preprocessing cần tinh tế hơn: làm sạch lỗi hệ thống nhưng **không phá phân phối ngôn ngữ** mà tokenizer/model đã học.
+Text preprocessing là bước biến text thô thành input đáng tin cậy cho model. Trong vai trò giảng viên AI, tôi muốn bạn hiểu preprocessing không phải "xóa càng nhiều càng tốt" — nó là **kỹ thuật làm sạch nhiễu hệ thống nhưng không phá phân phối ngôn ngữ** mà tokenizer/model đã học. Trong NLP classic, preprocessing thường mạnh tay: lowercase, remove punctuation, remove stopwords, stemming. Trong transformer/LLM hiện đại, preprocessing cần tinh tế hơn: giữ signal, bỏ noise, mask PII và bảo vệ meaning.
 
-## Why this matters
+---
 
-Bạn đang xây RAG từ PDF, website, ticket support, Slack logs. Text thô có:
+## 1. The Incident (Tình huống sự cố)
 
-- encoding lỗi,
-- dấu xuống dòng vô nghĩa,
-- header/footer lặp,
-- email/phone/API key,
-- URL dài,
-- OCR lỗi,
-- emoji/ký tự đặc biệt,
-- nhiều ngôn ngữ.
+<Callout type="danger" title="Báo cáo sự cố: API key bị leak qua RAG, 5,000 user thấy nội dung nhạy cảm">
+**Bối cảnh:** Một team build RAG từ PDF, Slack logs và ticket support. Họ preprocessing mạnh tay kiểu classic: lowercase, remove punctuation, remove stopwords. Họ không có PII masking, không có secret scanning, không có Unicode normalization.
 
-Nếu preprocessing kém, embedding kém, retrieval kém, LLM trả lời kém. Garbage in, garbage out.
+**Sự cố:** API key xuất hiện trong Slack logs. Họ không mask, gửi thẳng vào LLM API. Một user query "show me the system prompt" khiến model trả lời toàn bộ system prompt, trong đó có API key. Họ không có Unicode normalization, nên `Café` và `Cafe\u0301` được embed thành hai vector khác nhau, retrieval miss.
 
-<Callout type="danger" title="Preprocessing là security boundary">
-Trước khi gửi text tới LLM API, bạn có thể cần mask PII/API keys. Đây không chỉ là NLP hygiene mà là bảo mật và compliance.
+1. Không có PII masking — API key, email, phone đi thẳng vào provider.
+2. Không có secret scanning — API key trong system prompt.
+3. Không có Unicode normalization — `Café` và `Cafe\u0301` embed khác nhau.
+4. Lowercase mọi thứ — mất tín hiệu tên riêng, acronym, code identifier.
+5. Remove stopwords cho transformer — phá cấu trúc câu.
+
+**Hậu quả:** API key bị leak. 5,000 user thấy nội dung nhạy cảm. Họ phải tắt chatbot, rotate API key, audit log, và thiết kế lại toàn bộ preprocessing pipeline. Hóa đơn incident response 2 tuần.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: preprocessing là security boundary và data quality boundary. Nó không chỉ là NLP hygiene mà là bảo mật và compliance. Nếu preprocessing kém, embedding kém, retrieval kém, LLM trả lời kém. Garbage in, garbage out.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Phân biệt word/subword/character tokenization.
-2. Quyết định khi nào lowercase/remove punctuation/stopwords.
-3. Hiểu stemming vs lemmatization và khi nào dùng.
-4. Dùng sentence segmentation cho chunking RAG.
-5. Xử lý URL/email/hashtag/PII bằng regex đơn giản.
-6. Hiểu Unicode normalization và lỗi encoding.
-7. Thiết kế preprocessing pipeline không phá meaning.
+## 2. Architecture Blueprint (Preprocessing Pipeline)
 
-## Prerequisites
+Pipeline preprocessing production đi qua nhiều bước:
 
-Bạn nên biết:
+```text
+[ Raw text ]
+        │
+        ▼
+[ Unicode normalization ]
+        │
+        ▼
+[ PII / secret masking ]
+        │
+        ▼
+[ Whitespace cleanup ]
+        │
+        ▼
+[ Sentence segmentation ]
+        │
+        ▼
+[ Chunk-ready output ]
+        │
+        ▼
+[ Embed / store ]
+```
 
-- Python string/regex cơ bản.
-- Tokenization concept.
-- RAG/chunking ở mức khái niệm.
+Key insight: preprocessing không phải "xóa càng nhiều càng tốt". Mục tiêu là `remove noise, preserve signal`.
 
-## Core intuition: làm sạch nhưng không làm mất nghĩa
+---
 
-Preprocessing không phải “xóa càng nhiều càng tốt”. Mục tiêu là:
+## 3. Core intuition: làm sạch nhưng không làm mất nghĩa
+
+Preprocessing không phải "xóa càng nhiều càng tốt". Mục tiêu là:
 
 ```text
 remove noise, preserve signal
@@ -63,7 +76,9 @@ Bạn mất tín hiệu cảm xúc mạnh từ uppercase và `!!!`.
 
 Với sentiment analysis, điều đó xấu. Với topic classification classic, có thể chấp nhận.
 
-## Tokenization
+---
+
+## 4. Tokenization
 
 Tokenization chia text thành đơn vị nhỏ.
 
@@ -93,7 +108,9 @@ Không OOV nhưng sequence dài.
 
 LLM hiện đại dùng subword. Chương 5.4 sẽ đi sâu.
 
-## Normalization decisions
+---
+
+## 5. Normalization decisions
 
 | Operation | Classic NLP | Transformer/LLM |
 |---|---|---|
@@ -108,7 +125,9 @@ LLM hiện đại dùng subword. Chương 5.4 sẽ đi sâu.
 Transformer tokenizer đã được train trên text tự nhiên với punctuation, casing, stopwords. Xóa bừa có thể làm text lệch khỏi distribution pretrained.
 </Callout>
 
-## Stemming vs Lemmatization
+---
+
+## 6. Stemming vs Lemmatization
 
 Stemming cắt từ về gốc thô:
 
@@ -134,7 +153,9 @@ Dùng cho:
 
 Không thường dùng cho transformer.
 
-## Sentence segmentation
+---
+
+## 7. Sentence segmentation
 
 Chunking RAG tốt nên tôn trọng ranh giới câu/đoạn.
 
@@ -149,7 +170,9 @@ for sent in doc.sents:
 
 Nếu chỉ split theo dấu chấm, `Dr.` làm sai. spaCy tốt hơn.
 
-## Regex for special tokens
+---
+
+## 8. Regex for special tokens
 
 ```python
 import re
@@ -170,7 +193,9 @@ def mask_pii(text: str) -> str:
 Mask `<EMAIL>` tốt hơn xóa hoàn toàn vì giữ tín hiệu rằng text có email. Với support ticket, email xuất hiện có thể quan trọng.
 </Callout>
 
-## Unicode normalization
+---
+
+## 9. Unicode normalization
 
 ```python
 import unicodedata
@@ -187,7 +212,25 @@ print(s1n == s2n)  # True
 
 Luôn đọc/ghi text bằng UTF-8.
 
-## Implementation lab: safe preprocessing pipeline
+---
+
+## 10. Tokenization pitfalls
+
+<Callout type="warning" title="Mistake 1: lowercase mọi thứ">
+Lowercase làm mất tín hiệu tên riêng, acronym, code identifier. Với NER/code/LLM prompts, hãy cẩn thận.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: remove stopwords cho transformer">
+Stopwords giúp transformer hiểu cấu trúc câu. Remove chúng thường không cần và có thể hại.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: quên mask secrets">
+Logs có thể chứa API keys, passwords, emails. Gửi thẳng vào LLM API có thể vi phạm security. Thêm secret/PII scanner trước ingestion.
+</Callout>
+
+---
+
+## Implementation Playbook: Safe Preprocessing Pipeline
 
 ```python
 import re
@@ -215,6 +258,7 @@ def preprocess_for_rag(text: str) -> str:
     text = clean_whitespace(text)
     return text
 
+
 sample = "Contact me at john@example.com\n\nVisit https://example.com   Café"
 print(preprocess_for_rag(sample))
 ```
@@ -225,28 +269,76 @@ Expected:
 Contact me at <EMAIL> Visit <URL> Café
 ```
 
-## Common mistakes & debugging checklist
+**Extend lab milestones:**
 
-<Callout type="warning" title="Mistake 1: lowercase mọi thứ">
-Lowercase làm mất tín hiệu tên riêng, acronym, code identifier. Với NER/code/LLM prompts, hãy cẩn thận.
+1. Test với 5 sample text có Unicode, email, URL.
+2. Test với text có API key (regex `sk-`).
+3. Test với text có emoji.
+4. Test với text có code identifier.
+5. So sánh output trước/sau khi normalize Unicode.
+
+---
+
+## Empirical lab: preprocessing impact on retrieval
+
+**Goal:** đo ảnh hưởng của preprocessing đến embedding quality.
+
+**Setup:** dùng một embedding model và 50 documents.
+
+**Steps:**
+
+1. Tạo 50 documents có Unicode, email, URL, code.
+2. Tạo 2 versions: raw và preprocessed.
+3. Embed cả 2 versions.
+4. Tạo 10 query paraphrase.
+5. Đo top-1 accuracy cho cả 2 versions.
+
+Record:
+
+| Trial | Preprocessing | Top-1 accuracy | Avg cosine score | Missed facts |
+|---|---|---:|---:|---:|
+| 1 | raw | | | |
+| 2 | Unicode normalize | | | |
+| 3 | PII mask + normalize | | | |
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: nghĩ preprocessing càng nhiều càng tốt">
+**Triệu chứng:** Xóa stopwords/punctuation cho transformer có thể phá phân phối ngôn ngữ. Model học từ text tự nhiên, không phải text đã bị "clean" quá mức.
+
+**Fix:** Chỉ xóa noise thực sự (header/footer, encoding lỗi, whitespace). Giữ signal (punctuation, casing, stopwords).
 </Callout>
 
-<Callout type="warning" title="Mistake 2: remove stopwords cho transformer">
-Stopwords giúp transformer hiểu cấu trúc câu. Remove chúng thường không cần và có thể hại.
+<Callout type="warning" title="Pitfall 2: không normalize Unicode">
+**Triệu chứng:** `Café` và `Cafe\u0301` embed thành hai vector khác nhau. Retrieval miss. Bug khó debug vì visual giống nhau.
+
+**Fix:** Luôn normalize Unicode (NFC) trước khi embed. Kiểm tra bằng `unicodedata.normalize("NFC", s1) == unicodedata.normalize("NFC", s2)`.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: quên mask secrets">
-Logs có thể chứa API keys, passwords, emails. Gửi thẳng vào LLM API có thể vi phạm security. Thêm secret/PII scanner trước ingestion.
+<Callout type="danger" title="Pitfall 3: không mask PII/secrets">
+**Triệu chứng:** API key, email, phone, password đi thẳng vào LLM API. Vi phạm security, compliance. API key có thể bị leak.
+
+**Fix:** Thêm secret/PII scanner trước ingestion. Mask thay vì xóa. Log masked version, không log raw.
 </Callout>
 
-Checklist:
+---
 
-1. Encoding có UTF-8 không?
-2. Unicode đã normalize chưa?
-3. Có PII/secrets cần mask không?
-4. Có remove thông tin có ý nghĩa không?
-5. Chunking có phá câu/đoạn không?
-6. Pipeline preprocessing train/inference có giống nhau không?
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Lowercase | giảm vocab | mất signal tên riêng, acronym |
+| Remove stopwords | giảm vocab | phá cấu trúc câu cho transformer |
+| Remove punctuation | giảm vocab | mất signal cảm xúc |
+| Unicode normalize | embedding nhất quán | không có |
+| PII masking | security, compliance | không có |
+| Whitespace cleanup | giảm noise | không có |
+| Stemming | giảm vocab | thô, không cho transformer |
+| Sentence segmentation | chunk tốt hơn | tốn compute |
+
+---
 
 ## Practice exercises
 
@@ -255,6 +347,11 @@ Checklist:
 3. Dùng spaCy tách câu một paragraph có abbreviation.
 4. Tạo pipeline preprocessing cho RAG PDF text.
 5. Tìm 5 lỗi OCR phổ biến và đề xuất cách clean.
+6. Test Unicode normalization với `Café` và `Cafe\u0301`.
+7. Viết regex mask API key (pattern `sk-`).
+8. Test pipeline với 5 sample text có Unicode, email, URL, code.
+
+---
 
 ## Knowledge check
 
@@ -265,6 +362,9 @@ Checklist:
 5. NFC normalization giải quyết vấn đề gì?
 6. Vì sao mask PII thay vì xóa?
 7. LLM hiện đại thường dùng tokenization loại nào?
+8. Vì sao không nên lowercase mọi thứ cho transformer?
+
+---
 
 ## Answer key
 
@@ -275,6 +375,9 @@ Checklist:
 5. Các biểu diễn Unicode khác nhau của cùng ký tự.
 6. Giữ tín hiệu loại thông tin mà không lộ giá trị thật.
 7. Subword tokenization.
+8. Mất tín hiệu tên riêng, acronym, code identifier.
+
+---
 
 ## Mini-project: RAG text cleaner
 
@@ -295,6 +398,8 @@ Checklist:
 - Output sạch để chunk/embed.
 - Có checklist cho production ingestion.
 
+---
+
 ## Điểm cần nhớ
 
 - Preprocessing đúng là giữ signal, bỏ noise.
@@ -303,6 +408,8 @@ Checklist:
 - Sentence segmentation quan trọng cho RAG chunking.
 - Unicode/encoding lỗi rất phổ biến trong multilingual data.
 - PII/secrets masking là yêu cầu production.
+
+---
 
 ## Next chapter bridge
 

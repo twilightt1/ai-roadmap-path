@@ -1,52 +1,64 @@
-Language modeling là nhiệm vụ dự đoán phân phối token. LLM hiện đại như GPT, Claude, LLaMA học từ objective rất đơn giản nhưng cực mạnh: **dự đoán token tiếp theo**. Từ objective này, model học grammar, facts, style, reasoning patterns và khả năng generate text.
+Language modeling là nhiệm vụ dự đoán phân phối token. LLM hiện đại như GPT, Claude, LLaMA học từ objective rất đơn giản nhưng cực mạnh: **dự đoán token tiếp theo**. Từ objective này, model học grammar, facts, style, reasoning patterns và khả năng generate text. Trong vai trò giảng viên AI, tôi muốn bạn hiểu language modeling không phải "magic" — nó là một vòng lặp autoregressive, và decoding settings (temperature, top-k, top-p) quyết định output chất lượng.
 
-## Why this matters
+---
 
-Khi bạn dùng chat LLM, phía dưới vẫn là một vòng lặp:
+## 1. The Incident (Tình huống sự cố)
 
-```text
-prompt → predict next token → append token → predict next token → ...
-```
+<Callout type="danger" title="Báo cáo sự cố: temperature cao cho factual QA, 5,000 user nhận câu trả lời sai, hallucination">
+**Bối cảnh:** Một team build RAG cho enterprise docs. Họ dùng temperature 0.7 cho mọi use case. Họ không có eval set, không log decoding settings, không có stop condition.
 
-Hiểu language modeling giúp bạn debug:
+**Sự cố:** User query "What is the refund policy?" — model trả lời "The refund policy is 30 days for all products, no exceptions." Document nói "30 days for digital products, 60 days for physical products." Temperature 0.7 khiến model paraphrase quá mức, thêm chi tiết không có trong context. 5,000 user nhận câu trả lời sai.
 
-- Vì sao model có thể lặp.
-- Vì sao temperature làm output sáng tạo hơn.
-- Vì sao hallucination có thể xảy ra.
-- Vì sao perplexity không trực tiếp đo chat quality.
-- Vì sao greedy decoding ổn định nhưng dễ khô.
-- Vì sao top-p/top-k ảnh hưởng mạnh tới generation.
+1. Temperature 0.7 cho factual QA — quá cao, paraphrase quá mức.
+2. Không có eval set — không biết output quality.
+3. Không log decoding settings — không debug được.
+4. Không có stop condition — output dài, tốn cost.
+5. Không có hallucination check — không biết model sai.
 
-<Callout type="info" title="LLM không trả lời nguyên câu trong một bước">
-Model tạo từng token một. Mỗi token mới lại trở thành context cho bước tiếp theo. Một lỗi nhỏ ở đầu generation có thể kéo output đi lệch ở các token sau.
+**Hậu quả:** 5,000 user nhận câu trả lời sai. Họ phải tắt chatbot, giảm temperature, thêm eval set, và thiết kế lại decoding settings. Hóa đơn incident response 2 tuần.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: decoding settings phải phù hợp use case. Factual QA/RAG cần temperature thấp (0.0-0.3). Creative writing cần temperature cao (0.7-1.2). Production cần log decoding settings và evaluate theo task.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Giải thích autoregressive next-token prediction.
-2. Hiểu training targets của GPT-style language model.
-3. Phân biệt autoregressive LM và masked language modeling.
-4. Hiểu cross-entropy loss và perplexity ở mức trực giác.
-5. Biết vì sao perplexity chỉ nên so sánh cùng tokenizer/data.
-6. Phân biệt greedy decoding, sampling và beam search.
-7. Hiểu temperature, top-k, top-p/nucleus sampling.
-8. Nhận diện decoding failure modes như repetition, randomness, mode collapse.
-9. Chọn decoding settings cho factual QA, creative writing và code.
-10. Thiết kế eval đơn giản cho generation outputs.
+## 2. Architecture Blueprint (Autoregressive Generation)
 
-## Prerequisites
+Pipeline generation của LLM:
 
-Bạn nên biết:
+```text
+[ Prompt ]
+        │
+        ▼
+[ Tokenize ]
+        │
+        ▼
+[ Model forward pass → logits ]
+        │
+        ▼
+[ Decoding: temperature, top-k, top-p ]
+        │
+        ▼
+[ Sample next token ]
+        │
+        ▼
+[ Append token to context ]
+        │
+        ▼
+[ Repeat until stop condition ]
+        │
+        ▼
+[ Detokenize ]
+        │
+        ▼
+[ Output text ]
+```
 
-- Tokenization và token IDs.
-- Transformer decoder và causal mask.
-- Softmax và probability distribution.
-- Cross-entropy ở mức cơ bản.
-- Classification logits là gì.
+Key insight: model không trả lời nguyên câu trong một bước. Nó tạo từng token một. Mỗi token mới lại trở thành context cho bước tiếp theo.
 
-## Core intuition: predict the next token
+---
+
+## 3. Core intuition: predict the next token
 
 Autoregressive language model học xác suất của chuỗi bằng cách nhân xác suất từng token theo quá khứ:
 
@@ -71,9 +83,15 @@ the:   0.02
 ...
 ```
 
-Model không “chọn câu trả lời” trực tiếp. Nó chọn token tiếp theo từ distribution, rồi tiếp tục.
+Model không "chọn câu trả lời" trực tiếp. Nó chọn token tiếp theo từ distribution, rồi tiếp tục.
 
-## GPT-style training target
+<Callout type="info" title="LLM không trả lời nguyên câu trong một bước">
+Model tạo từng token một. Mỗi token mới lại trở thành context cho bước tiếp theo. Một lỗi nhỏ ở đầu generation có thể kéo output đi lệch ở các token sau.
+</Callout>
+
+---
+
+## 4. GPT-style training target
 
 Trong training, ta shift input một token để tạo target.
 
@@ -112,7 +130,9 @@ logits shape = (batch, seq_len, vocab_size)
 
 Cross-entropy so sánh logits ở position `t` với target token ở position `t`.
 
-## Causal mask and teacher forcing
+---
+
+## 5. Causal mask and teacher forcing
 
 Khi training decoder-only LM, model nhận cả sequence nhưng causal mask đảm bảo vị trí hiện tại không nhìn token tương lai.
 
@@ -133,7 +153,9 @@ generate: predict next token from model-generated previous tokens
 Khi generate, lỗi của model được append vào context và có thể ảnh hưởng các bước sau. Đây là một lý do output có thể drift hoặc lặp.
 </Callout>
 
-## Cross-entropy loss
+---
+
+## 6. Cross-entropy loss
 
 Nếu target token là `Paris`, model tốt sẽ gán xác suất cao cho `Paris`.
 
@@ -171,12 +193,14 @@ loss = F.cross_entropy(
 print(loss.item())
 ```
 
-## Masked Language Modeling
+---
+
+## 7. Masked Language Modeling
 
 BERT không train bằng next-token prediction. BERT dùng Masked Language Modeling (MLM): che một số token và dự đoán token bị che.
 
 ```text
-The [MASK] sat on the mat → cat
+The  [MASK]  sat on the mat → cat
 ```
 
 Vì BERT encoder nhìn hai chiều, nó có thể dùng cả trái và phải:
@@ -195,7 +219,9 @@ MLM tốt cho understanding tasks:
 
 Nhưng MLM không tự nhiên cho free-form generation token-by-token như GPT.
 
-## Autoregressive vs Masked LM
+---
+
+## 8. Autoregressive vs Masked LM
 
 | Aspect | Autoregressive LM | Masked LM |
 |---|---|---|
@@ -209,9 +235,11 @@ Nhưng MLM không tự nhiên cho free-form generation token-by-token như GPT.
 Nếu cần chat/generation, decoder-only autoregressive là mặc định. Nếu cần classification/NER nhanh rẻ, encoder-only BERT-style vẫn rất mạnh.
 </Callout>
 
-## Perplexity
+---
 
-Perplexity đo model “bối rối” bao nhiêu khi dự đoán token.
+## 9. Perplexity
+
+Perplexity đo model "bối rối" bao nhiêu khi dự đoán token.
 
 ```text
 perplexity = exp(cross_entropy_loss)
@@ -238,7 +266,9 @@ PPL cao  → model bối rối hơn
 Perplexity phụ thuộc tokenizer, preprocessing, context length và corpus. Không so sánh PPL giữa hai model dùng tokenizer/data khác nhau một cách trực tiếp.
 </Callout>
 
-## Perplexity is not chat quality
+---
+
+## 10. Perplexity is not chat quality
 
 Perplexity hữu ích cho:
 
@@ -258,7 +288,9 @@ Nhưng PPL không đo trực tiếp:
 
 Một model có PPL tốt vẫn có thể hallucinate hoặc không follow instruction.
 
-## From logits to probabilities
+---
+
+## 11. From logits to probabilities
 
 Ở mỗi bước generation, model output logits:
 
@@ -279,7 +311,11 @@ print(probs)
 
 Decoding strategy quyết định chọn token nào từ distribution này.
 
-## Greedy decoding
+---
+
+## 12. Decoding strategies
+
+### Greedy decoding
 
 Greedy chọn token có xác suất cao nhất:
 
@@ -287,44 +323,27 @@ Greedy chọn token có xác suất cao nhất:
 next_token = argmax(probs)
 ```
 
-Ưu điểm:
+Ưu điểm: deterministic, nhanh, tốt cho output cần ổn định.
 
-- Deterministic.
-- Nhanh.
-- Tốt cho output cần ổn định.
+Nhược điểm: dễ lặp, ít đa dạng, có thể chọn local optimum xấu.
 
-Nhược điểm:
+### Sampling
 
-- Dễ lặp.
-- Ít đa dạng.
-- Có thể chọn local optimum xấu.
+Sampling lấy token theo probability distribution. Token xác suất cao vẫn dễ được chọn hơn, nhưng token khác cũng có cơ hội.
 
-Ví dụ dùng greedy cho creative writing thường khiến văn khô và predictable.
+Ưu điểm: đa dạng hơn, tốt cho brainstorming/creative tasks.
 
-## Sampling
+Nhược điểm: có thể sai hoặc lan man, không ổn định giữa các lần chạy.
 
-Sampling lấy token theo probability distribution:
+### Beam search
 
-```text
-Paris: 0.70
-Lyon:  0.10
-Rome:  0.05
-...
-```
+Beam search giữ `k` chuỗi tốt nhất tại mỗi bước. Phổ biến trong translation/summarization cổ điển. Với chat LLM, beam search ít dùng hơn vì output dễ khô, thiếu đa dạng, tốn compute hơn.
 
-Token xác suất cao vẫn dễ được chọn hơn, nhưng token khác cũng có cơ hội.
+---
 
-Ưu điểm:
+## 13. Temperature, top-k, top-p
 
-- Đa dạng hơn.
-- Tốt cho brainstorming/creative tasks.
-
-Nhược điểm:
-
-- Có thể sai hoặc lan man.
-- Không ổn định giữa các lần chạy.
-
-## Temperature
+### Temperature
 
 Temperature điều chỉnh độ sắc của distribution:
 
@@ -336,45 +355,26 @@ softmax(logits / T)
 - `T = 1`: giữ nguyên distribution.
 - `T > 1`: distribution phẳng hơn, random hơn.
 
-Ví dụ trực giác:
-
-```text
-low temperature  → safer, more deterministic
-high temperature → more diverse, more risky
-```
-
 <Callout type="warning" title="Temperature cao không tạo reasoning tốt hơn">
 Temperature cao chỉ tăng randomness. Nó có thể giúp đa dạng ý tưởng, nhưng thường làm factual QA/code kém ổn định hơn.
 </Callout>
 
-## Top-k sampling
+### Top-k sampling
 
 Top-k chỉ giữ `k` token xác suất cao nhất, loại bỏ phần còn lại.
-
-Ví dụ `k=3`:
 
 ```text
 Before: [Paris, Lyon, Rome, banana, quantum, ...]
 After:  [Paris, Lyon, Rome]
 ```
 
-Sau đó sample trong top 3.
+Ưu điểm: loại token cực kỳ unlikely, dễ hiểu.
 
-Ưu điểm:
+Nhược điểm: `k` cố định không thích nghi với distribution.
 
-- Loại token cực kỳ unlikely.
-- Dễ hiểu.
-
-Nhược điểm:
-
-- `k` cố định không thích nghi với distribution.
-- Có lúc cần ít hơn nhiều token, có lúc cần nhiều hơn.
-
-## Top-p / nucleus sampling
+### Top-p / nucleus sampling
 
 Top-p chọn tập token nhỏ nhất có tổng xác suất ≥ `p`.
-
-Ví dụ `p=0.9`:
 
 ```text
 Paris 0.60
@@ -391,28 +391,11 @@ Nucleus set có thể là:
 Paris + Lyon + Rome + Nice = 0.90
 ```
 
-Rồi sample trong tập đó.
-
 Top-p thích nghi hơn top-k: nếu distribution rất chắc, tập nhỏ; nếu distribution phẳng, tập lớn hơn.
 
-## Beam search
+---
 
-Beam search giữ `k` chuỗi tốt nhất tại mỗi bước.
-
-```text
-beam=3 → giữ 3 candidate sequences tốt nhất
-```
-
-Phổ biến trong translation/summarization cổ điển vì output có reference tương đối rõ.
-
-Với chat LLM, beam search ít dùng hơn vì:
-
-- output dễ khô,
-- thiếu đa dạng,
-- có thể ưu tiên câu generic,
-- tốn compute hơn greedy/sampling.
-
-## Repetition and degeneration
+## 14. Repetition and degeneration
 
 Language models có thể lặp:
 
@@ -439,7 +422,9 @@ Một số knobs thường gặp:
 
 Không phải provider nào cũng có cùng tên/ý nghĩa chính xác.
 
-## Practical decoding presets
+---
+
+## 15. Practical decoding presets
 
 | Use case | Temperature | Top-p | Notes |
 |---|---:|---:|---|
@@ -454,7 +439,25 @@ Không phải provider nào cũng có cùng tên/ý nghĩa chính xác.
 Khi debug output xấu, bạn cần biết model, prompt, token count, temperature, top_p, max_tokens, stop sequences và seed nếu có.
 </Callout>
 
-## Implementation lab: toy decoding
+---
+
+## 16. Tokenization pitfalls
+
+<Callout type="warning" title="Mistake 1: dùng temperature cao cho factual RAG">
+RAG cần grounded answer. Temperature quá cao làm model dễ paraphrase quá mức, thêm chi tiết không có trong context hoặc trả lời không ổn định.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: đánh giá chat bằng perplexity בלבד">
+Perplexity không đo instruction following, factuality hay safety. Dùng task-specific eval/human eval/LLM-as-judge có rubric.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: không đặt stop condition/max tokens">
+Nếu không giới hạn output hoặc stop sequences phù hợp, model có thể generate dài, lặp, tốn cost hoặc phá format.
+</Callout>
+
+---
+
+## Implementation Playbook: Toy Decoding
 
 ```python
 import torch
@@ -507,34 +510,79 @@ for _ in range(5):
     print(vocab[idx])
 ```
 
-Mục tiêu không phải tạo LLM thật, mà hiểu các bước từ logits đến token.
+**Extend lab milestones:**
 
-## Common mistakes & debugging checklist
+1. Tính perplexity khi cross-entropy loss là `1.5`, `2.0`, `3.0`.
+2. So sánh output của cùng prompt ở temperature `0`, `0.7`, `1.2`.
+3. Test với 5 prompts factual QA và 5 prompts creative.
+4. Tạo 10 prompts và thử decoding settings khác nhau.
+5. Tìm một ví dụ greedy decoding bị lặp.
 
-<Callout type="warning" title="Mistake 1: dùng temperature cao cho factual RAG">
-RAG cần grounded answer. Temperature quá cao làm model dễ paraphrase quá mức, thêm chi tiết không có trong context hoặc trả lời không ổn định.
+---
+
+## Empirical lab: decoding settings impact
+
+**Goal:** đo ảnh hưởng của decoding settings đến output quality.
+
+**Setup:** dùng 20 prompts chia thành factual QA, creative, code, JSON extraction.
+
+**Steps:**
+
+1. Tạo 20 prompts chia thành factual QA, creative, code, JSON extraction.
+2. Chạy ít nhất 4 decoding configs.
+3. Log model, prompt, token count, temperature, top_p, max_tokens.
+4. Human rating theo rubric đơn giản.
+5. Report failure modes: hallucination, repetition, format error, low diversity.
+
+Record:
+
+| Trial | Prompt type | Temperature | Top-p | Rating | Failure mode |
+|---|---|---:|---:|---:|---|
+| 1 | factual QA | 0.0 | 0.9 | | |
+| 2 | factual QA | 0.7 | 0.9 | | |
+| 3 | creative | 0.7 | 0.9 | | |
+| 4 | creative | 1.2 | 0.9 | | |
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: dùng temperature cao cho factual RAG">
+**Triệu chứng:** RAG cần grounded answer. Temperature quá cao làm model paraphrase quá mức, thêm chi tiết không có trong context. 5,000 user nhận câu trả lời sai.
+
+**Fix:** Giảm temperature xuống 0.0-0.3. Dùng structured output nếu có. Log decoding settings.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: đánh giá chat bằng perplexity בלבד">
-Perplexity không đo instruction following, factuality hay safety. Dùng task-specific eval/human eval/LLM-as-judge có rubric.
+<Callout type="warning" title="Pitfall 2: đánh giá chat bằng perplexity בלבד">
+**Triệu chứng:** PPL tốt không đo helpfulness, factuality, instruction following. Model có PPL tốt vẫn hallucinate.
+
+**Fix:** Dùng task-specific eval/human eval/LLM-as-judge có rubric. Tạo eval set.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: không đặt stop condition/max tokens">
-Nếu không giới hạn output hoặc stop sequences phù hợp, model có thể generate dài, lặp, tốn cost hoặc phá format.
+<Callout type="danger" title="Pitfall 3: không đặt stop condition/max tokens">
+**Triệu chứng:** Model generate dài, lặp, tốn cost hoặc phá format. Không có stop condition.
+
+**Fix:** Đặt `max_tokens`/stop sequences phù hợp. Log output length. Giới hạn output.
 </Callout>
 
-Checklist:
+---
 
-1. Task cần deterministic hay creative?
-2. Temperature/top_p có phù hợp use case không?
-3. Có `max_tokens`/stop sequences chưa?
-4. Có log decoding settings không?
-5. Output có bị lặp không?
-6. Với RAG, answer có grounded vào context không?
-7. Với JSON extraction, có schema/validator không?
-8. Có eval set thay vì nhìn vài ví dụ không?
-9. Perplexity có được so trên cùng tokenizer/data không?
-10. Có kiểm tra hallucination/factuality riêng không?
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Greedy decoding | deterministic, nhanh | dễ lặp, ít đa dạng |
+| Sampling | đa dạng | không ổn định |
+| Beam search | top-k chuỗi tốt | tốn compute, khô |
+| Temperature thấp | ổn định, grounded | ít đa dạng |
+| Temperature cao | đa dạng | hallucination, không ổn định |
+| Top-k | loại token unlikely | không thích nghi |
+| Top-p | thích nghi | không có |
+| Repetition penalty | giảm lặp | có thể phá format |
+| Stop sequences | dừng đúng | không có |
+| Log decoding settings | debug được | không có |
+
+---
 
 ## Practice exercises
 
@@ -546,6 +594,8 @@ Checklist:
 6. Tạo 10 prompts factual QA và thử decoding settings khác nhau.
 7. Tìm một ví dụ greedy decoding bị lặp.
 8. Thiết kế rubric đánh giá answer RAG: correctness, groundedness, completeness.
+
+---
 
 ## Knowledge check
 
@@ -560,6 +610,8 @@ Checklist:
 9. Top-k khác top-p thế nào?
 10. Vì sao beam search không phải mặc định tốt cho chat LLM?
 
+---
+
 ## Answer key
 
 1. `P(next token | previous tokens)` và xác suất chuỗi theo tích các xác suất có điều kiện.
@@ -572,6 +624,8 @@ Checklist:
 8. Làm distribution phẳng hơn, tăng randomness/diversity.
 9. Top-k giữ số token cố định; top-p giữ tập token có tổng xác suất đạt ngưỡng p.
 10. Nó thường tạo output khô/generic, thiếu đa dạng và tốn compute.
+
+---
 
 ## Mini-project: Decoding playground
 
@@ -592,6 +646,8 @@ Checklist:
 - Có ví dụ sampling giúp creative writing đa dạng hơn.
 - Có recommendation rõ cho production defaults.
 
+---
+
 ## Điểm cần nhớ
 
 - Autoregressive LM học `P(next token | previous tokens)` — objective của GPT/Claude/LLaMA-style models.
@@ -602,6 +658,8 @@ Checklist:
 - Temperature điều chỉnh độ sắc distribution; top-k/top-p giới hạn vùng sample.
 - Beam search hữu ích trong seq2seq cổ điển, không phải mặc định cho chat.
 - Production cần log decoding settings và evaluate theo task, không chỉ nhìn cảm giác.
+
+---
 
 ## Next chapter bridge
 

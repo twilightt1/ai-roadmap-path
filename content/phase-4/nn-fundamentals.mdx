@@ -1,50 +1,60 @@
-Neural Networks là bước chuyển từ “ta tự thiết kế feature” sang “model tự học representation”. Nếu linear/logistic regression học một decision boundary đơn giản, neural network học nhiều tầng biến đổi: tầng đầu học pattern đơn giản, tầng sau kết hợp pattern thành khái niệm phức tạp hơn.
+Neural Networks là bước chuyển từ "ta tự thiết kế feature" sang "model tự học representation". Nếu linear/logistic regression học một decision boundary đơn giản, neural network học nhiều tầng biến đổi: tầng đầu học pattern đơn giản, tầng sau kết hợp pattern thành khái niệm phức tạp hơn. Một LLM hàng tỷ parameter nghe có vẻ xa lạ, nhưng bên trong vẫn là nhiều lần lặp của khối cơ bản `linear transformation → nonlinearity → normalization → residual → repeat`. Nếu bạn không hiểu một `Linear` layer làm gì, activation làm gì, gradient chảy thế nào, bạn sẽ khó debug loss không giảm, gradient NaN, model overfit, fine-tune phá model, hidden size shape mismatch, hoặc GPU memory tăng bất thường. Trong vai trò giảng viên AI, tôi muốn bạn nắm vững neuron, activation, forward pass, loss, backpropagation và initialization — nền của toàn bộ Phase 4–10.
 
-Để hiểu transformer, LLM, CNN, RNN, fine-tuning, bạn phải hiểu neural network cơ bản: neuron, activation, forward pass, loss, backpropagation, initialization. Chương này là nền của toàn bộ Phase 4–10.
+---
 
-## Why this matters
+## 1. The Incident (Tình huống sự cố)
 
-Một LLM có hàng tỷ parameter nghe có vẻ rất xa lạ, nhưng bên trong vẫn là nhiều lần lặp của các khối cơ bản:
+<Callout type="danger" title="Báo cáo sự cố: MLP training loss NaN sau 30 epoch đầu tiên, model churn giữ accuracy 0.51">
+**Bối cảnh:** Một team ML train một MLP 4 layer trên dataset phân loại churn (15 feature, 50k mẫu). Mục tiêu ship model demo trong tuần. Họ dùng `nn.Sequential` với 4 Linear layer, không có activation, init bằng `nn.init.zeros_` (weight toàn 0), optimizer AdamW `lr=1e-1`.
 
-```text
-linear transformation → nonlinearity → normalization → residual → repeat
-```
+Không có activation giữa các Linear layer. Không kiểm gradient sau `backward()`. Không kiểm weight init. Trust loss curve mà không kiểm accuracy. Train 200 epoch trên toàn dataset trước khi evaluate.
 
-Nếu bạn không hiểu một `Linear` layer làm gì, activation làm gì, gradient chảy thế nào, bạn sẽ khó debug:
+1. Không activation giữa Linear layers → 4 layer vẫn chỉ là 1 linear layer, model chỉ học linear function.
+2. Weight init bằng `zeros_` → gradient theo mọi weight đều giống nhau và bằng 0, không neuron nào học được gì.
+3. Loss giữ `0.693` (log(2) của binary classification) trong 10 epoch đầu, không giảm.
+4. Từ epoch 11, AdamW với `lr=1e-1` làm weight nhảy → loss `1.2e18` → `inf` → `nan`.
+5. Team tưởng LR quá lớn, giảm xuống `1e-5`, nhưng loss vẫn không giảm vì model vẫn chỉ học linear và gradient vẫn 0.
 
-- loss không giảm,
-- gradient NaN,
-- model overfit,
-- fine-tune phá model,
-- hidden size shape mismatch,
-- GPU memory tăng bất thường.
-
-<Callout type="info" title="LLM vẫn là neural network">
-Transformer có attention phức tạp, nhưng feed-forward network trong mỗi transformer block vẫn là MLP: Linear → activation → Linear. Hiểu MLP là bước đầu để hiểu LLM.
+**Hậu quả:** Demo bị hủy, mất 2 ngày debug trước khi phát hiện ra: (a) không có activation, (b) weight init bằng 0. Accuracy trên test set vẫn 0.51 (gần ngẫu nhiên). Phải retrain lại từ đầu.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: mỗi Linear layer phải có activation giữa chúng. Không bao giờ init weight bằng 0 (cũng không nên init bằng hằng số) — khi đó gradient theo mọi weight đều giống nhau, mọi neuron học cùng một thứ. Luôn init theo Kaiming (ReLU) hoặc Xavier (tanh/sigmoid). Khi loss NaN, kiểm `lr`, init, và activation trước khi đổ lỗi cho data.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Giải thích neuron tính `w·x+b` và activation tạo phi tuyến.
-2. Phân biệt perceptron, MLP và deep neural network.
-3. Theo dõi shape qua một forward pass.
-4. Hiểu vì sao không có activation thì nhiều layer vẫn chỉ là linear.
-5. Mô tả backpropagation ở mức chain rule.
-6. Nhận biết vai trò của initialization trong gradient flow.
-7. Viết một MLP PyTorch đơn giản và training loop tối thiểu.
+## 2. Architecture Blueprint (MLP Forward + Backward Pass)
 
-## Prerequisites
+```text
+                    ┌──────────────────────────────────────────────────────────────┐
+                    │                  MLP FORWARD PASS + BACKWARD PASS            │
+                    └──────────────────────────────────────────────────────────────┘
 
-Bạn nên biết:
+  Input X        Linear(1)        Activation        Linear(2)        Activation        Linear(3)         Loss
+  (batch,d)      (batch,h)        (batch,h)         (batch,h)        (batch,h)         (batch,c)        (scalar)
+  ┌─────┐       ┌─────────┐       ┌─────┐          ┌─────────┐      ┌─────┐          ┌─────────┐      ┌─────┐
+  │  X  │ ───▶ │ W1·X + b1│ ───▶ │ φ(z)│ ───▶ ... │ W2·a + b2│ ───▶ │ φ(z)│ ───▶ ... │ W3·a + b3│ ───▶ │ L(ŷ)│
+  └─────┘       └────┬────┘       └─────┘          └─────────┘      └─────┘          └─────────┘      └──┬──┘
+                     │ z1 = w^T x + b              a1 = φ(z1)        z2 = w^T a1 + b                    │
+                     │                                                               │
+                     └───────────────────────────────────────────────────────────────┘
+                                          │
+                                          ▼
+                    ┌──────────────────────────────────────────────────────────────┐
+                    │  BACKWARD: loss.backward()  →  ∂L/∂W3, ∂L/∂W2, ∂L/∂W1        │
+                    │  chain rule: ∂L/∂W1 = ∂L/∂a1 · ∂a1/∂z1 · ∂z1/∂W1             │
+                    └──────────────────────────────────────────────────────────────┘
+                                          │
+                                          ▼
+                    ┌──────────────────────────────────────────────────────────────┐
+                    │  optimizer.step()  →  W = W - lr · ∂L/∂W                      │
+                    └──────────────────────────────────────────────────────────────┘
+```
 
-- Dot product và matrix multiplication.
-- Gradient và chain rule.
-- Loss/optimization từ Phase 2.
-- PyTorch tensor căn bản sẽ được học sâu hơn ở chương 4.6, nhưng chương này có dùng code PyTorch đơn giản.
+Key insight: mỗi layer là một "trạm biến đổi" — Linear là phép biến đổi affine, activation là phép biến đổi phi tuyến. Bỏ activation thì cả pipeline chỉ là một phép biến đổi tuyến tính, gradient chảy bình thường nhưng không có gì để học phi tuyến.
 
-## Core intuition: neuron là một “feature detector”
+---
+
+## 3. Core intuition: neuron là một "feature detector"
 
 Một neuron nhận nhiều input feature, gán trọng số cho từng feature, cộng lại rồi quyết định mức kích hoạt.
 
@@ -52,7 +62,7 @@ Một neuron nhận nhiều input feature, gán trọng số cho từng feature,
 z = w1*x1 + w2*x2 + ... + wn*xn + b
 ```
 
-Nếu `z` lớn, neuron “phát hiện” pattern nào đó mạnh. Nếu `z` nhỏ, pattern yếu.
+Nếu `z` lớn, neuron "phát hiện" pattern nào đó mạnh. Nếu `z` nhỏ, pattern yếu.
 
 Ví dụ classifier spam:
 
@@ -64,7 +74,13 @@ Ví dụ classifier spam:
 
 Neuron tuyến tính cộng các evidence. Activation biến score thành output phi tuyến.
 
-## Formal definition
+<Callout type="info" title="LLM vẫn là neural network">
+Transformer có attention phức tạp, nhưng feed-forward network trong mỗi transformer block vẫn là MLP: `Linear → activation → Linear`. Hiểu MLP là bước đầu để hiểu LLM.
+</Callout>
+
+---
+
+## 4. Formal definition
 
 Với input vector:
 
@@ -89,12 +105,14 @@ Với batch:
 X shape: (batch_size, input_dim)
 W shape: (input_dim, output_dim)
 b shape: (output_dim,)
-Z = XW + b shape: (batch_size, output_dim)
+Z = XW + b   shape: (batch_size, output_dim)
 ```
 
 Trong PyTorch, `nn.Linear(input_dim, output_dim)` lưu weight shape `(output_dim, input_dim)`, nhưng bạn chỉ cần nhớ output shape là `(batch, output_dim)`.
 
-## Perceptron vs MLP
+---
+
+## 5. Perceptron vs MLP
 
 ### Perceptron
 
@@ -127,7 +145,9 @@ logits = model(x)
 print(logits.shape)  # torch.Size([16, 2])
 ```
 
-## Vì sao activation cần thiết?
+---
+
+## 6. Vì sao activation cần thiết?
 
 Nếu không có activation, hai linear layers vẫn chỉ là một linear layer:
 
@@ -142,7 +162,9 @@ Nghĩa là dù bạn xếp 100 linear layers, nếu không có nonlinearity, mod
 Một mạng nhiều tầng nhưng không có activation giữa layers không mạnh hơn một linear model. Đây là lỗi khái niệm rất cơ bản nhưng cực quan trọng.
 </Callout>
 
-## Activation functions
+---
+
+## 7. Activation functions
 
 | Activation | Công thức | Dùng ở đâu |
 |---|---|---|
@@ -160,7 +182,7 @@ x = torch.tensor([-2.0, -0.5, 0.0, 1.0, 3.0])
 print(torch.relu(x))  # [0,0,0,1,3]
 ```
 
-ReLU đơn giản và gradient tốt khi `x > 0`, nhưng có thể “chết” nếu neuron luôn âm.
+ReLU đơn giản và gradient tốt khi `x > 0`, nhưng có thể "chết" nếu neuron luôn âm.
 
 ### GELU
 
@@ -171,7 +193,9 @@ import torch.nn.functional as F
 print(F.gelu(x))
 ```
 
-## Worked example by hand: một neuron
+---
+
+## 8. Worked example by hand: một neuron
 
 Input:
 
@@ -203,7 +227,9 @@ a = 1/(1+e^-1.6) ≈ 0.832
 
 Nếu đây là spam classifier, sigmoid 0.832 nghĩa là model khá tự tin positive.
 
-## Forward pass và loss
+---
+
+## 9. Forward pass và loss
 
 Forward pass là data đi qua model để tạo prediction:
 
@@ -222,7 +248,9 @@ loss = loss_fn(logits, labels)
 PyTorch `nn.CrossEntropyLoss()` tự làm `log_softmax` bên trong để ổn định số. Nếu bạn softmax trước rồi đưa vào, training có thể kém ổn định và sai ý nghĩa.
 </Callout>
 
-## Backpropagation trực giác
+---
+
+## 10. Backpropagation trực giác
 
 Backpropagation trả lời:
 
@@ -246,7 +274,9 @@ loss.backward()
 optimizer.step()
 ```
 
-## Weight initialization
+---
+
+## 11. Weight initialization
 
 Initialization ảnh hưởng gradient flow.
 
@@ -275,7 +305,27 @@ nn.init.kaiming_normal_(layer.weight, nonlinearity="relu")
 nn.init.zeros_(layer.bias)
 ```
 
-## Implementation lab: train MLP on toy data
+---
+
+## 12. Common mistakes
+
+<Callout type="warning" title="Mistake 1: init weight bằng 0 hoặc hằng số">
+Khi mọi weight bằng nhau, gradient theo mọi weight đều giống nhau → mọi neuron học cùng một thứ → model thực chất chỉ có 1 neuron. Luôn init bằng Kaiming/Xavier.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: không có activation giữa Linear layers">
+Nhiều Linear layer nối tiếp không có activation vẫn chỉ là một linear layer. Model "chạy" được, loss giảm, nhưng không học được phi tuyến.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: trust loss curve mà không kiểm accuracy">
+Loss có thể giảm vì model học mean, nhưng accuracy vẫn 0.50 (ngẫu nhiên). Luôn log cả loss và accuracy, kiểm `weight.grad` khác 0 sau `backward()`.
+</Callout>
+
+---
+
+## Implementation Playbook: MLP trên make_moons
+
+Đây là MLP tối thiểu train trên `make_moons` — một dataset phi tuyến quen thuộc. Chạy được, đo được, sửa được.
 
 ```python
 import torch
@@ -323,21 +373,84 @@ print("test accuracy:", acc)
 
 Expected: MLP học boundary phi tuyến của moons tốt hơn logistic regression tuyến tính.
 
-## Common mistakes & debugging checklist
+**Extend lab milestones:**
 
-<Callout type="warning" title="Mistake 1: shape mismatch">
-Lỗi phổ biến nhất là input dimension không khớp `nn.Linear`. Luôn in `.shape` ở từng bước. Với batch input, shape thường là `(batch, features)`.
+1. Bỏ activation (để `nn.Identity()` thay ReLU) — đo accuracy, chứng minh model chỉ ngang logistic regression.
+2. Thay `nn.init.zeros_(layer.weight)` cho toàn bộ layer — đo accuracy, chứng minh gradient = 0, model không học.
+3. Thay ReLU bằng GELU, Sigmoid, Tanh — đo accuracy và quan sát loss curve.
+4. Thay `nn.init.kaiming_normal_` bằng `nn.init.normal_(std=0.01)` và `nn.init.normal_(std=10.0)` — đo độ ổn định của loss, quan sát vanishing/exploding gradient.
+5. Thay lr từ `1e-1 → 1e-2 → 1e-3 → 1e-5` — vẽ loss curve, quan sát divergence (lr=1e-1) vs học chậm (lr=1e-5).
+6. Thêm gradient clipping (`torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)`) và đo xem loss có ổn định hơn khi lr=1e-1 không.
+7. Thêm BatchNorm/LayerNorm giữa các layer — đo accuracy và tốc độ hội tụ.
+
+---
+
+## Empirical lab: activation, init, lr
+
+**Goal:** Lượng hóa tác động của activation function, init strategy, và learning rate lên accuracy và độ ổn định của loss.
+
+**Setup:** Dataset `make_moons` (n_samples=1000, noise=0.2), MLP 2-32-32-2, AdamW, 200 epoch, GPU hoặc CPU. Mỗi trial chạy 3 lần lấy trung bình.
+
+**Steps:**
+
+1. Baseline: ReLU + Kaiming + lr=1e-3 (run trên Playbook).
+2. Thay đổi lần lượt một biến: activation, init, lr.
+3. Ghi lại accuracy, loss cuối, epoch đầu tiên loss < 0.5, và failure mode (NaN/đứng yên/không giảm).
+4. Lặp lại 3 lần, lấy trung bình.
+
+**Record:**
+
+| Trial | Task | Tool | Latency | Cost | Quality | Failure mode |
+|---|---|---|---|---|---|---|
+| T1 | ReLU + Kaiming + lr=1e-3 | PyTorch AdamW | ~3s/200ep | ~$0.001 | acc ~0.97 | không |
+| T2 | No activation + Kaiming + lr=1e-3 | PyTorch AdamW | ~3s | ~$0.001 | acc ~0.82 | chỉ học linear |
+| T3 | Sigmoid + Kaiming + lr=1e-3 | PyTorch AdamW | ~3s | ~$0.001 | acc ~0.90 | vanishing gradient |
+| T4 | Tanh + Xavier + lr=1e-3 | PyTorch AdamW | ~3s | ~$0.001 | acc ~0.95 | nhẹ |
+| T5 | GELU + Kaiming + lr=1e-3 | PyTorch AdamW | ~3s | ~$0.001 | acc ~0.97 | không |
+| T6 | ReLU + zeros_ + lr=1e-3 | PyTorch AdamW | ~3s | ~$0.001 | acc ~0.50 | gradient = 0, không học |
+| T7 | ReLU + small normal (std=0.01) | PyTorch AdamW | ~3s | ~$0.001 | acc ~0.85 | vanishing gradient |
+| T8 | ReLU + large normal (std=10.0) | PyTorch AdamW | ~3s | ~$0.001 | acc ~0.50 | loss NaN |
+| T9 | ReLU + Kaiming + lr=1e-1 | PyTorch AdamW | ~3s | ~$0.001 | acc ~0.50 | loss NaN |
+| T10 | ReLU + Kaiming + lr=1e-5 | PyTorch AdamW | ~3s | ~$0.001 | acc ~0.85 | học chậm |
+| T11 | ReLU + Kaiming + lr=1e-1 + grad clip 1.0 | PyTorch AdamW | ~3s | ~$0.001 | acc ~0.95 | không |
+
+Ghi chú: số liệu trên là ước lượng điển hình — bạn cần chạy và ghi lại con số thực tế. Pattern quan trọng: lỗi init/activation dù model "chạy" nhưng accuracy vẫn 0.50 (ngẫu nhiên) — đây là dấu hiệu nhận biết "deep model giả".
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Post-Mortem 1: shape mismatch">
+**Triệu chứng:** `RuntimeError: mat1 and mat2 shapes cannot be multiplied at ...` khi forward pass, hoặc `Expected input batch_size ... to match target batch_size ...`.
+
+**Fix:** In `.shape` ở từng bước `forward` — `print(x.shape)`, `print(model(x).shape)`. Với batch input, shape thường là `(batch, features)`. Kiểm tra `nn.Linear(input_dim, output_dim)` — input_dim phải khớp `x.shape[-1]`. Đảm bảo `labels` shape `(batch,)` (không phải `(batch, 1)`).
 </Callout>
 
-<Callout type="warning" title="Mistake 2: quên zero_grad">
-PyTorch cộng dồn gradient. Nếu quên `optimizer.zero_grad()`, gradient batch trước dính vào batch sau, training sai.
+<Callout type="warning" title="Post-Mortem 2: gradient tích lũy">
+**Triệu chứng:** Loss ban đầu giảm nhưng sau đó tăng lên, hoặc gradient tăng dần theo batch, hoặc training không ổn định.
+
+**Fix:** Thêm `optimizer.zero_grad()` ở đầu mỗi training step. PyTorch cộng dồn gradient mặc định — nếu quên `zero_grad()`, gradient batch trước dính vào batch sau, training sai. Pattern chuẩn: `optimizer.zero_grad() → forward → loss → backward → step`.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: loss NaN">
-Loss NaN thường do learning rate quá lớn, exploding gradients, data có NaN/inf, hoặc numerical instability. Giảm LR, kiểm tra data, dùng gradient clipping.
+<Callout type="danger" title="Post-Mortem 3: loss NaN">
+**Triệu chứng:** Loss in ra `nan` (thường là `nan` ngay từ epoch 1, hoặc `inf` rồi `nan`).
+
+**Fix:** Kiểm tra theo thứ tự: (a) giảm learning rate (1e-3 → 1e-4), (b) kiểm tra `data` có `NaN/inf` không (`torch.isnan(x).any()`), (c) thêm gradient clipping (`torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)`), (d) kiểm tra init không phải `zeros_` và không phải `std` quá lớn. Nguyên nhân phổ biến: LR quá lớn, exploding gradients, data có NaN/inf, numerical instability.
 </Callout>
 
-Checklist:
+<Callout type="danger" title="Post-Mortem 4: accuracy đứng yên ở 0.50">
+**Triệu chứng:** Model train 200 epoch nhưng accuracy vẫn 0.50 (binary classification) — không học gì.
+
+**Fix:** Kiểm tra: (a) có activation giữa linear layers không? (b) weight init có bằng `zeros_` hoặc hằng số không? (c) gradient có khác 0 không? (in `model[0].weight.grad`). Nếu gradient = 0, model không học. Nếu không có activation, model vẫn chỉ là linear — thử với `make_circles` (hoàn toàn phi tuyến) để thấy accuracy 0.50.
+</Callout>
+
+<Callout type="warning" title="Post-Mortem 5: softmax trước CrossEntropyLoss">
+**Triệu chứng:** Loss không giảm, hoặc loss âm, hoặc accuracy thấp hơn baseline.
+
+**Fix:** Đừng softmax trước `CrossEntropyLoss`. PyTorch `nn.CrossEntropyLoss()` tự làm `log_softmax` bên trong để ổn định số. Nếu bạn softmax trước rồi đưa vào, training kém ổn định và sai ý nghĩa. Truyền trực tiếp `logits` vào `loss_fn`.
+</Callout>
+
+**Checklist:**
 
 1. Input shape có đúng với first Linear không?
 2. Labels có đúng dtype `long` cho CrossEntropyLoss không?
@@ -346,14 +459,39 @@ Checklist:
 5. Learning rate có quá lớn không?
 6. Data có NaN/inf không?
 7. Model có activation giữa linear layers không?
+8. Weight init có bằng 0 hoặc hằng số không?
+9. Gradient có khác 0 không? (in `.grad` để kiểm tra)
+
+---
+
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| ReLU thay vì Sigmoid | gradient ổn định, học nhanh, không vanishing gradient | Dying ReLU khi neuron luôn âm, gradient = 0 |
+| Sigmoid/Tanh | gradient mượt, output có giới hạn, dễ giải thích | Vanishing gradient khi mạng sâu, học chậm |
+| GELU thay vì ReLU | mượt hơn, gradient tốt hơn ở x=0, dùng nhiều trong LLM | tính toán phức tạp hơn (hàm exp), chậm hơn ReLU |
+| Kaiming init thay vì zeros_ | gradient khác 0, model học được, gradient flow ổn | cần biết activation function (ReLU vs tanh) để chọn đúng |
+| Xavier init thay vì Kaiming | phù hợp tanh/sigmoid, gradient flow ổn | không phù hợp ReLU, có thể gây exploding gradient |
+| Mạng sâu hơn (4 layer) | học được biểu diễn phức tạp hơn, capacity cao | vanishing gradient, overfit, train lâu hơn, GPU memory tăng |
+| Mạng nông (2 layer) | train nhanh, ít overfit, dễ debug | không học được biểu diễn phức tạp, accuracy thấp |
+| lr=1e-3 | ổn định, học nhanh, điểm khởi đầu tốt | có thể quá chậm cho một số task, cần warmup |
+| lr=1e-1 | học nhanh, hội tụ nhanh | risk NaN, exploding gradient, loss nhảy |
+| Gradient clipping | ổn định loss, chống exploding gradient, train được với lr lớn | có thể làm chậm hội tụ, che giấu vấn đề init/lr |
+| BatchNorm/LayerNorm | ổn định gradient flow, train được mạng sâu, dùng lr lớn | thêm parameter, thêm compute, có thể giảm tốc độ inference |
+| AdamW thay vì SGD | hội tụ nhanh, ít cần tuning lr, tự adaptive | memory lớn hơn (2x state), có thể overfit hơn, không tốt cho generalization |
+
+---
 
 ## Practice exercises
 
 1. Với `x=[1,2]`, `w=[0.5,-1]`, `b=0.2`, tính `z` và ReLU output.
 2. Chứng minh 2 linear layers không activation tương đương 1 linear layer.
-3. Viết MLP PyTorch input_dim=20, hidden=64, num_classes=3.
+3. Viết MLP PyTorch `input_dim=20`, `hidden=64`, `num_classes=3`.
 4. Thay ReLU bằng GELU trong lab và so sánh accuracy.
 5. Tạo lỗi shape mismatch rồi sửa bằng cách in `.shape`.
+
+---
 
 ## Knowledge check
 
@@ -364,6 +502,8 @@ Checklist:
 5. Vì sao cần `zero_grad()`?
 6. Initialization sai có thể gây vấn đề gì?
 7. ReLU có nhược điểm gì?
+
+---
 
 ## Answer key
 
@@ -381,6 +521,8 @@ Bài tập 1:
 z = 1*0.5 + 2*(-1) + 0.2 = -1.3
 ReLU(z) = 0
 ```
+
+---
 
 ## Mini-project: Nonlinear classifier with MLP
 
@@ -400,6 +542,8 @@ ReLU(z) = 0
 - Có giải thích vì sao nonlinearity giúp.
 - Có kiểm tra overfitting bằng train/test accuracy.
 
+---
+
 ## Điểm cần nhớ
 
 - Neuron tính `w·x+b`; activation tạo phi tuyến.
@@ -409,6 +553,9 @@ ReLU(z) = 0
 - Backprop dùng chain rule để tính gradient.
 - PyTorch training loop cơ bản: `zero_grad → forward → loss → backward → step`.
 - Initialization đúng giúp gradient flow ổn định.
+- Không bao giờ init weight bằng 0 — gradient = 0, model không học.
+
+---
 
 ## Next chapter bridge
 

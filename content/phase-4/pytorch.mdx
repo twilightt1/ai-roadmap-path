@@ -1,34 +1,87 @@
-PyTorch là công cụ chính để biến ý tưởng deep learning thành model chạy được. Nó vừa gần toán (tensor, autograd), vừa linh hoạt cho research, vừa đủ mạnh cho production. Nếu bạn muốn fine-tune HuggingFace model, viết custom loss, debug GPU memory, hoặc build mini-GPT, bạn phải nắm PyTorch.
+PyTorch là công cụ chính để biến ý tưởng deep learning thành model chạy được. Nó vừa gần toán (tensor, autograd), vừa linh hoạt cho research, vừa đủ mạnh cho production. LLM engineering không phải lúc nào cũng chỉ gọi API — bạn sẽ gặp PyTorch khi fine-tune BERT/LLaMA với HuggingFace, train reward model, implement LoRA, debug CUDA OOM, write custom Dataset/DataLoader, export model, hoặc optimize inference. Ngay cả khi bạn gọi `Trainer` của HuggingFace, phía dưới vẫn là PyTorch: tensors, modules, gradients, optimizers — hiểu PyTorch giúp bạn không bị framework che mắt. Trong vai trò giảng viên AI, tôi muốn bạn tạo và thao tác tensor CPU/GPU, hiểu `requires_grad`/computation graph/`backward()`, viết model bằng `nn.Module`, tạo Dataset/DataLoader custom, viết training loop chuẩn, dùng `model.train()`/`model.eval()`/`torch.no_grad()` đúng, và save/load `state_dict`/checkpoint.
 
-## Why this matters
+---
 
-LLM engineering không phải lúc nào cũng chỉ gọi API. Bạn sẽ gặp PyTorch khi:
+## 1. The Incident (Tình huống sự cố)
 
-- fine-tune BERT/LLaMA với HuggingFace,
-- train reward model,
-- implement LoRA,
-- debug CUDA OOM,
-- write custom Dataset/DataLoader,
-- export model,
-- optimize inference.
+<Callout type="danger" title="Báo cáo sự cố: CUDA OOM giữa epoch fine-tune BERT, mất 2 giờ training">
+**Bối cảnh:** Train fine-tune BERT-base trên dataset 50k mẫu với batch size 64, GPU 16GB. Validation loop chạy ổn, nhưng đến epoch 3 thì crash.
+
+1. Quên `torch.no_grad()` trong validation loop → graph vẫn lưu lại, memory leak.
+2. Validation batch không detach, tensor tích lũy qua các batch.
+3. `loss.backward()` trong training giữ gradient của batch trước do quên `zero_grad()` ở một vài iteration.
+4. `model.train()` không được gọi lại sau `model.eval()` → BatchNorm/Dropout dùng sai mode.
+5. GPU memory dần đầy, đến epoch 3 thì `RuntimeError: CUDA out of memory`.
+
+**Hậu quả:** Crash giữa epoch 3, mất 2 giờ training, checkpoint không kịp save. Debug mất thêm nửa ngày mới tìm ra root cause là `no_grad()`.
+</Callout>
+
+Bài học rút ra: validation loop phải bọc `torch.no_grad()` và `model.eval()`; training phải `model.train()` lại và `zero_grad()` trước mỗi batch. Một dòng code thiếu (`no_grad`) có thể gây OOM gián tiếp, không phải lỗi ngay lập tức. Luôn assert `model.training` và `torch.is_grad_enabled()` ở đầu mỗi phase để tránh silent leak.
+
+---
+
+## 2. Architecture Blueprint (PyTorch Training Pipeline)
+
+```text
+                      ┌─────────────────────────────────────────┐
+                      │             PyTorch Training Pipeline    │
+                      └─────────────────────────────────────────┘
+
+   ┌──────────┐   ┌──────────────┐   ┌──────────┐   ┌──────────┐
+   │  Raw     │──▶│  Dataset     │──▶│ DataLoader│──▶│  Batch   │
+   │  Data    │   │  (__getitem__│   │ (batch,  │   │ (xb, yb) │
+   └──────────┘   └──────────────┘   │ shuffle) │   └────┬─────┘
+                                     └──────────┘        │
+                                                         ▼
+                  ┌──────────────────────────────────────────────┐
+                  │              TRAIN LOOP (model.train())      │
+                  │  ┌────────────────────────────────────────┐  │
+                  │  │ 1. zero_grad()                          │  │
+                  │  │ 2. logits = model(xb)       ← forward   │  │
+                  │  │ 3. loss = loss_fn(logits, yb)           │  │
+                  │  │ 4. loss.backward()          ← autograd  │  │
+                  │  │ 5. clip_grad_norm_(params, 1.0)         │  │
+                  │  │ 6. optimizer.step()         ← cập nhật  │  │
+                  │  └────────────────────────────────────────┘  │
+                  └──────────────────────────────────────────────┘
+                                │
+                                ▼
+                  ┌──────────────────────────────────────────────┐
+                  │          EVAL LOOP (model.eval, no_grad)     │
+                  │  with torch.no_grad():                       │
+                  │      pred = model(xb).argmax(1)              │
+                  │      correct += (pred == yb).sum()            │
+                  └──────────────────────────────────────────────┘
+                                │
+                                ▼
+                  ┌──────────────────────────────────────────────┐
+                  │  checkpoint: {model, optimizer, epoch}      │
+                  │  scheduler.step()  ← warmup/cosine LR       │
+                  └──────────────────────────────────────────────┘
+```
+
+Key insight: pipeline là 4 layer — data → model → autograd → optimizer. Mỗi layer có state riêng (device, dtype, grad mode) và phải sync nhất quán — sai một state ở một layer, lỗi xuất hiện ở layer khác.
+
+---
+
+## 3. Core intuition: 4 khối nhỏ gọn
+
+PyTorch tổ chức deep learning thành 4 khối nhỏ gọn, mỗi khối trách nhiệm rõ ràng:
+
+- **Tensor** — mảng n-chiều, có `device`, `dtype`, `requires_grad`. Mọi dữ liệu (input, output, gradient) đều là tensor.
+- **Autograd** — tự động tính gradient theo chain rule. Khi bạn `loss.backward()`, PyTorch đi ngược lại graph đã build.
+- **nn.Module** — chứa parameters (weights) và định nghĩa `forward`. `model(x)` tự gọi `forward`.
+- **Optimizer** — cập nhật parameters dựa trên gradient. `optimizer.step()` = `param -= lr * grad`.
+
+Bốn khối này ghép lại thành training loop. Mỗi khối có thể debug, test, thay thế độc lập — đó là lý do PyTorch vừa linh hoạt cho research, vừa đủ chuẩn cho production.
 
 <Callout type="info" title="HuggingFace dùng PyTorch bên dưới">
 Ngay cả khi bạn gọi `Trainer`, phía dưới vẫn là PyTorch: tensors, modules, gradients, optimizers. Hiểu PyTorch giúp bạn không bị framework che mắt.
 </Callout>
 
-## Learning objectives
+---
 
-Sau chương này, bạn sẽ có thể:
-
-1. Tạo và thao tác tensor CPU/GPU.
-2. Hiểu `requires_grad`, computation graph và `backward()`.
-3. Viết model bằng `nn.Module`.
-4. Tạo Dataset/DataLoader custom.
-5. Viết training loop chuẩn.
-6. Dùng `model.train()`, `model.eval()`, `torch.no_grad()` đúng.
-7. Save/load `state_dict` và checkpoint.
-
-## Tensor basics
+## 4. Tensor basics
 
 ```python
 import torch
@@ -48,10 +101,12 @@ x = x.to(device)
 ```
 
 <Callout type="warning" title="Tensor cùng device">
-Operation giữa tensor CPU và GPU sẽ lỗi. Khi thấy error kiểu “Expected all tensors to be on the same device”, kiểm tra `.device` của model và data.
+Operation giữa tensor CPU và GPU sẽ lỗi. Khi thấy error kiểu "Expected all tensors to be on the same device", kiểm tra `.device` của model và data.
 </Callout>
 
-## Autograd
+---
+
+## 5. Autograd
 
 ```python
 w = torch.tensor([2.0], requires_grad=True)
@@ -64,7 +119,9 @@ print(w.grad)
 
 PyTorch xây computation graph khi operations liên quan tensor `requires_grad=True`. `backward()` tính gradient theo chain rule.
 
-## nn.Module
+---
+
+## 6. nn.Module
 
 ```python
 from torch import nn
@@ -84,7 +141,9 @@ class MLP(nn.Module):
 
 Calling `model(x)` tự gọi `forward`.
 
-## Dataset and DataLoader
+---
+
+## 7. Dataset and DataLoader
 
 ```python
 from torch.utils.data import Dataset, DataLoader
@@ -105,9 +164,99 @@ loader = DataLoader(TabularDataset(X_train, y_train), batch_size=32, shuffle=Tru
 
 DataLoader lo batching, shuffling, multiprocessing.
 
-## Training loop chuẩn
+---
+
+## 8. Worked example: shape tracking
+
+```text
+xb: (32, 20)
+Linear(20,64) → (32,64)
+ReLU → (32,64)
+Linear(64,2) → logits (32,2)
+labels: (32,)
+CrossEntropyLoss(logits, labels) → scalar
+```
+
+Nếu labels shape `(32,1)` hoặc dtype float, CrossEntropyLoss có thể lỗi. Labels cần `torch.long` shape `(batch,)` cho class indices.
+
+---
+
+## 9. Save and load
+
+Khuyến nghị lưu `state_dict`:
 
 ```python
+torch.save(model.state_dict(), "model.pt")
+
+model = MLP(20, 64, 2)
+model.load_state_dict(torch.load("model.pt", map_location="cpu"))
+model.eval()
+```
+
+Checkpoint full:
+
+```python
+torch.save({
+    "model": model.state_dict(),
+    "optimizer": optimizer.state_dict(),
+    "epoch": epoch,
+}, "checkpoint.pt")
+```
+
+---
+
+## 10. Scheduler
+
+```python
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+
+for epoch in range(10):
+    train_one_epoch()
+    scheduler.step()
+```
+
+Warmup/cosine scheduler phổ biến trong transformer training.
+
+---
+
+## 11. Common mistakes
+
+<Callout type="warning" title="Mistake 1: quên no_grad khi validation">
+Validation chậm hơn 2x-3x, memory tăng dần, có thể OOM sau vài epoch. Bọc validation loop trong `with torch.no_grad():` và `model.eval()`. Assert `not torch.is_grad_enabled()` ở đầu eval loop.
+</Callout>
+
+<Callout type="danger" title="Mistake 2: labels sai dtype">
+`CrossEntropyLoss` báo `RuntimeError: Expected input and target to have the same dtype` hoặc `Index out of range in tensor`. Đảm bảo labels là `torch.long` shape `(batch,)`, không phải one-hot float. Nếu labels là `(batch,1)` → `labels.squeeze(1)`; nếu là one-hot → `labels.argmax(1)`.
+</Callout>
+
+<Callout type="warning" title="Mistake 3: model và data khác device">
+`RuntimeError: Expected all tensors to be on the same device`. `.to(device)` cho cả model và batch tensors. Đặt `device` ở đầu script, `model.to(device)` + `xb, yb = xb.to(device), yb.to(device)`.
+</Callout>
+
+<Callout type="danger" title="Mistake 4: CUDA OOM giữa epoch">
+Giảm batch size; thêm `torch.cuda.empty_cache()`; bật `torch.amp.autocast` (mixed precision); kiểm tra `no_grad()` trong validation; dùng `del` cho tensor không cần; check `torch.cuda.max_memory_allocated()` để monitor.
+</Callout>
+
+**Checklist:**
+
+1. Model/data cùng device chưa?
+2. Label dtype/shape đúng loss chưa?
+3. Có `zero_grad()` không?
+4. Có `model.eval()` và `no_grad()` khi validation không?
+5. Loss có NaN không?
+6. Gradient norm có explode không?
+7. Save/load có cùng architecture không?
+
+---
+
+## Implementation Playbook: training loop chuẩn
+
+Đây là training loop chuẩn chạy được — bạn có thể copy, đổi `Dataset`, `MLP`, `loss_fn` và chạy ngay.
+
+```python
+import torch
+from torch import nn
+
 model = MLP(input_dim=20, hidden_dim=64, num_classes=2).to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 loss_fn = nn.CrossEntropyLoss()
@@ -136,78 +285,103 @@ for epoch in range(10):
     print(epoch, correct / total)
 ```
 
-## Worked example: shape tracking
+**Extend lab milestones:**
 
-Input batch:
+1. Thêm `torch.amp.autocast` (mixed precision) để giảm memory và tăng throughput.
+2. Thêm `torch.cuda.amp.GradScaler` cho gradient scaling với FP16.
+3. Lưu checkpoint best (val acc cao nhất) thay vì last epoch.
+4. Thêm `CosineAnnealingLR` warmup + cosine scheduler.
+5. Thêm early stopping khi val acc không cải thiện sau N epoch.
+6. Thêm tensorboard/wandb logging để track loss/grad norm.
+7. Thêm `torch.utils.data.DataLoader` với `num_workers>0` và `pin_memory=True` để speed up data loading.
+8. Thêm gradient accumulation để mô phỏng batch size lớn hơn.
 
-```text
-xb: (32, 20)
-Linear(20,64) → (32,64)
-ReLU → (32,64)
-Linear(64,2) → logits (32,2)
-labels: (32,)
-CrossEntropyLoss(logits, labels) → scalar
-```
+---
 
-Nếu labels shape `(32,1)` hoặc dtype float, CrossEntropyLoss có thể lỗi. Labels cần `torch.long` shape `(batch,)` cho class indices.
+## Empirical lab: device, batch size, mixed precision
 
-## Save and load
+**Goal:** Đo tác động của device, batch size, và mixed precision lên training time, memory, và val accuracy.
 
-Khuyến nghị lưu `state_dict`:
+**Setup:**
 
-```python
-torch.save(model.state_dict(), "model.pt")
+- Dataset: 20k mẫu tabular, 20 features, 2 classes.
+- Model: MLP(20, 64, 2).
+- 10 epoch, AdamW lr=1e-3.
+- Hardware: CPU (4 cores) vs GPU (1 card, 16GB).
+- Đo: `time.perf_counter()` per epoch, `torch.cuda.max_memory_allocated()` cho GPU.
 
-model = MLP(20, 64, 2)
-model.load_state_dict(torch.load("model.pt", map_location="cpu"))
-model.eval()
-```
+**Steps:**
 
-Checkpoint full:
+1. Chạy baseline CPU, batch 32, FP32.
+2. Chạy GPU, batch 32, FP32.
+3. Chạy GPU, batch 256, FP32.
+4. Chạy GPU, batch 256, FP16 (autocast + GradScaler).
+5. Ghi lại latency, memory peak, val accuracy.
 
-```python
-torch.save({
-    "model": model.state_dict(),
-    "optimizer": optimizer.state_dict(),
-    "epoch": epoch,
-}, "checkpoint.pt")
-```
+**Record:**
 
-## Scheduler
+| Trial | Task | Tool | Latency | Cost | Quality | Failure mode |
+|-------|------|------|---------|------|---------|--------------|
+| 1 | Train 10 epoch | CPU, bs=32, FP32 | ~120s/epoch | 0 | 0.82 val acc | Chậm, không scale |
+| 2 | Train 10 epoch | GPU, bs=32, FP32 | ~8s/epoch | 1 | 0.84 val acc | Baseline ổn |
+| 3 | Train 10 epoch | GPU, bs=256, FP32 | ~3s/epoch | 1 | 0.81 val acc | LR chưa tune lại cho batch lớn |
+| 4 | Train 10 epoch | GPU, bs=256, FP16 | ~2s/epoch | 1 | 0.83 val acc | GradScaler cần, có thể NaN |
+| 5 | Eval 10 epoch | CPU, no_grad | ~0.5s/epoch | 0 | 0.84 | Quên no_grad → 2s/epoch, leak |
 
-```python
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+**Nhận xét:** GPU + batch 32 nhanh hơn CPU ~15x. Tăng batch size lên 256 nhanh hơn 4x nhưng cần tune LR. Mixed precision (FP16) tiết kiệm ~30% time và memory, nhưng có thể sinh NaN nếu không scale gradient. Quên `no_grad()` ở validation → 2x slower và memory leak.
 
-for epoch in range(10):
-    train_one_epoch()
-    scheduler.step()
-```
+---
 
-Warmup/cosine scheduler phổ biến trong transformer training.
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
-## Common mistakes & debugging checklist
+<Callout type="warning" title="Pitfall 1: quên no_grad khi validation">
+**Triệu chứng:** Validation chậm hơn 2x-3x, memory tăng dần, có thể OOM sau vài epoch.
 
-<Callout type="warning" title="Mistake 1: quên no_grad khi validation">
-Không dùng `torch.no_grad()` làm PyTorch lưu graph, tốn memory và chậm.
+**Fix:** Bọc validation loop trong `with torch.no_grad():` và `model.eval()`. Assert `not torch.is_grad_enabled()` ở đầu eval loop.
 </Callout>
 
-<Callout type="danger" title="Mistake 2: labels sai dtype">
-`nn.CrossEntropyLoss` cần labels là class index dtype `torch.long`, không phải one-hot float.
+<Callout type="danger" title="Pitfall 2: labels sai dtype">
+**Triệu chứng:** `CrossEntropyLoss` báo `RuntimeError: Expected input and target to have the same dtype` hoặc `Index out of range in tensor`.
+
+**Fix:** Đảm bảo labels là `torch.long` shape `(batch,)`, không phải one-hot float. Nếu labels là `(batch,1)` → `labels.squeeze(1)`; nếu là one-hot → `labels.argmax(1)`; nếu là float → `labels.long()`.
 </Callout>
 
-<Callout type="warning" title="Mistake 3: model và data khác device">
-Luôn `.to(device)` cho cả model và batch tensors.
+<Callout type="warning" title="Pitfall 3: model và data khác device">
+**Triệu chứng:** `RuntimeError: Expected all tensors to be on the same device` hoặc `RuntimeError: Input and parameter tensors must be on the same device`.
+
+**Fix:** `.to(device)` cho cả model và batch tensors. Đặt `device = torch.device("cuda" if torch.cuda.is_available() else "cpu")` ở đầu, và `model.to(device)` + `xb, yb = xb.to(device), yb.to(device)`.
 </Callout>
 
-Checklist:
+<Callout type="danger" title="Pitfall 4: CUDA OOM giữa epoch">
+**Triệu chứng:** `RuntimeError: CUDA out of memory. Tried to allocate X MiB` ở epoch 3+.
 
-1. Model/data cùng device chưa?
-2. Label dtype/shape đúng loss chưa?
-3. Có `zero_grad()` không?
-4. Có `model.eval()` và `no_grad()` khi validation không?
-5. Loss có NaN không?
-6. Gradient norm có explode không?
-7. Save/load có cùng architecture không?
+**Fix:** Giảm batch size; thêm `torch.cuda.empty_cache()`; bật `torch.amp.autocast` (mixed precision); kiểm tra `no_grad()` trong validation; dùng `del` cho tensor không cần; check `torch.cuda.max_memory_allocated()` để monitor.
+</Callout>
+
+<Callout type="warning" title="Pitfall 5: loss NaN sau backward">
+**Triệu chứng:** `loss = nan` từ epoch 2, `w.grad` = `nan`.
+
+**Fix:** `clip_grad_norm_(model.parameters(), 1.0)` trước `optimizer.step()`; check `torch.isfinite(loss)` trước `backward()`; giảm LR; check `loss_fn` có thể `nan` (log(0) trong cross-entropy).
+</Callout>
+
+---
+
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|------------|---------|----------------|
+| CPU vs GPU | CPU: rẻ, không cần GPU; GPU: nhanh 10-15x | CPU: training chậm, không scale; GPU: đắt, OOM, cần CUDA |
+| Batch size 32 vs 256 | 256: throughput cao, gradient ổn định | 32: ổn định, dễ tune; 256: cần tune LR, có thể OOM |
+| FP32 vs FP16 (mixed precision) | FP16: ~30% nhanh, ~40% ít memory | FP32: ổn định, chính xác; FP16: có thể NaN, cần GradScaler |
+| `state_dict` vs full checkpoint | state_dict: nhẹ, dễ deploy | state_dict: mất optimizer; full checkpoint: nặng, version-specific |
+| `num_workers=0` vs `4` | 4: data loading song song, GPU không idle | 0: đơn giản, không race; 4: memory + overhead, cần pin_memory |
+| `clip_grad_norm_` vs không | clip: ổn định, tránh explode | không: nhanh hơn 1 chút; clip: cần tune max_norm, có thể kìm gradient |
+| `no_grad` eval vs grad eval | no_grad: nhanh, ít memory | grad eval: leak memory, chậm, có thể OOM |
+| `model.train()` vs `model.eval()` | eval: tắt dropout/batchnorm đúng mode | train: dùng sai mode ở eval → metric sai; eval: quên train lại → metric sai |
+
+**Heuristic:** Đo `torch.cuda.max_memory_allocated()` và `time.perf_counter()` trước và sau khi đổi config. Mỗi quyết định có thể giảm cost 1.5x-2x nhưng phải verify trên hardware thực tế.
+
+---
 
 ## Practice exercises
 
@@ -216,6 +390,8 @@ Checklist:
 3. Viết Dataset cho list texts đã tokenized thành IDs.
 4. Viết training loop cho binary classifier.
 5. Save checkpoint gồm model + optimizer + epoch, load lại.
+
+---
 
 ## Knowledge check
 
@@ -227,6 +403,8 @@ Checklist:
 6. `state_dict` là gì?
 7. DataLoader giúp gì?
 
+---
+
 ## Answer key
 
 1. Yêu cầu PyTorch track operations để tính gradient.
@@ -236,6 +414,8 @@ Checklist:
 5. Validation/inference để không lưu graph.
 6. Dict chứa tensor parameters/buffers của model.
 7. Batching, shuffling, multiprocessing data loading.
+
+---
 
 ## Mini-project: PyTorch training from scratch
 
@@ -256,6 +436,8 @@ Checklist:
 - Loss giảm.
 - Checkpoint load lại inference được.
 
+---
+
 ## Điểm cần nhớ
 
 - PyTorch tensor là nền của mọi model training.
@@ -265,6 +447,8 @@ Checklist:
 - Training loop chuẩn là kỹ năng bắt buộc.
 - Validation cần `eval()` + `no_grad()`.
 - Lưu `state_dict` để deploy/reload ổn định.
+
+---
 
 ## Next chapter bridge
 

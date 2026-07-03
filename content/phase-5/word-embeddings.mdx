@@ -1,49 +1,70 @@
-Word Embeddings là bước chuyển từ NLP “đếm từ” sang NLP “biểu diễn nghĩa bằng vector”. Thay vì xem mỗi từ là một ID rời rạc, ta học vector dense sao cho các từ/câu/document có nghĩa gần nhau nằm gần nhau trong không gian vector. Đây là nền của semantic search, recommendation, clustering, RAG và embedding APIs hiện đại.
+Word Embeddings là bước chuyển từ NLP "đếm từ" sang NLP "biểu diễn nghĩa bằng vector". Thay vì xem mỗi từ là một ID rời rạc, ta học vector dense sao cho các từ/câu/document có nghĩa gần nhau nằm gần nhau trong không gian vector. Đây là nền của semantic search, recommendation, clustering, RAG và embedding APIs hiện đại. Trong vai trò giảng viên AI, tôi muốn bạn hiểu embeddings không phải "magic" — nó là biểu diễn thống kê học từ data, có bias, có blind spots, và cần evaluation.
 
-## Why this matters
+---
 
-Trong RAG, user hỏi:
+## 1. The Incident (Tình huống sự cố)
 
-```text
-How can I get my money back?
-```
+<Callout type="danger" title="Báo cáo sự cố: embedding search không normalize, dot product ≠ cosine, 5,000 user nhận kết quả sai">
+**Bối cảnh:** Một team build RAG với embedding model. Họ dùng dot product thay vì cosine. Họ không normalize embeddings. Họ không có eval set. Họ tin embedding search "semantic" sẽ thắng mọi thứ.
 
-Document liên quan lại viết:
+**Sự cố:** User query "money back" — document có "refund". Embedding search không match vì dot product bị ảnh hưởng bởi vector norm. Document có "refund" dài hơn, norm lớn hơn, dot product cao hơn mặc dù không phải match tốt nhất. 5,000 user nhận kết quả sai.
 
-```text
-Refunds are available within 30 days.
-```
+1. Không normalize embeddings — dot product bị ảnh hưởng bởi norm.
+2. Không có eval set — không biết retrieval quality.
+3. Không hiểu metric — dùng dot product thay vì cosine.
+4. Không có hybrid search — chỉ vector-only.
+5. Không có reranker — không rerank top-k.
 
-Sparse keyword search có thể miss vì query dùng “money back”, document dùng “refunds”. Embedding search có thể bắt được semantic similarity.
-
-<Callout type="info" title="Embedding là cầu nối text và vector database">
-Vector databases như Pinecone, Qdrant, Weaviate, Milvus hoặc pgvector lưu embeddings. Retrieval thực chất là tìm vector gần query vector. Không hiểu embeddings thì rất khó debug RAG.
+**Hậu quả:** 5,000 user nhận kết quả sai. Họ phải tắt chatbot, normalize embeddings, và thiết kế lại retrieval. Hóa đơn incident response 2 tuần.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: embedding search cần evaluation. Nó không phải truth. Nó có thể fail với số liệu, phủ định, version, code name, error ID, policy ID. Luôn tạo query set và đo retrieval quality. Normalize embeddings trước khi dùng dot product.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Giải thích vì sao one-hot không đủ semantic.
-2. Hiểu distributional hypothesis: “nghĩa đến từ ngữ cảnh”.
-3. Phân biệt Word2Vec CBOW và Skip-gram ở mức trực giác.
-4. Hiểu GloVe dùng co-occurrence statistics.
-5. Hiểu FastText dùng subword/character n-grams để xử lý OOV.
-6. Dùng cosine similarity để so sánh embeddings.
-7. Phân biệt static, contextual và sentence/document embeddings.
-8. Xây mini semantic search bằng sentence-transformers.
-9. Nhận diện failure modes của embedding search trong RAG.
+## 2. Architecture Blueprint (Embedding Pipeline)
 
-## Prerequisites
+Pipeline embedding RAG production:
 
-Bạn nên biết:
+```text
+[ Documents ]
+        │
+        ▼
+[ Chunk ]
+        │
+        ▼
+[ Embed chunks ]
+        │
+        ▼
+[ Normalize embeddings ]
+        │
+        ▼
+[ Store vectors ]
+        │
+        ▼
+[ Query ]
+        │
+        ▼
+[ Embed query ]
+        │
+        ▼
+[ Normalize query ]
+        │
+        ▼
+[ Nearest neighbors ]
+        │
+        ▼
+[ Top-k context ]
+        │
+        ▼
+[ LLM answer ]
+```
 
-- Vector, dot product, norm, cosine similarity.
-- Bag of Words/TF-IDF từ chương trước.
-- Train/test split và evaluation cơ bản.
-- RAG/vector search ở mức khái niệm.
+Key insight: embedding search không thay thế evaluation. Nó là heuristic. Cần query set, đo recall@k, MRR, và có hybrid search/reranker.
 
-## Core intuition: meaning as geometry
+---
+
+## 3. Core intuition: meaning as geometry
 
 One-hot biểu diễn từ bằng vị trí trong vocabulary:
 
@@ -71,7 +92,9 @@ Nếu model học tốt, cosine(`cat`, `dog`) sẽ cao hơn cosine(`cat`, `bank`
 semantic similarity → vector closeness
 ```
 
-## Distributional hypothesis
+---
+
+## 4. Distributional hypothesis
 
 Ý tưởng nền của nhiều embedding models:
 
@@ -88,10 +111,12 @@ hospital, patient, medicine, treatment, clinic
 Qua rất nhiều text, model học rằng các từ này nên có vector gần nhau.
 
 <Callout type="tip" title="Embedding học từ usage, không học từ dictionary definition">
-Model không được đưa một cuốn từ điển rồi “hiểu nghĩa”. Nó học từ pattern thống kê: từ nào xuất hiện cạnh từ nào, trong ngữ cảnh nào, với objective nào.
+Model không được đưa một cuốn từ điển rồi "hiểu nghĩa". Nó học từ pattern thống kê: từ nào xuất hiện cạnh từ nào, trong ngữ cảnh nào, với objective nào.
 </Callout>
 
-## Word2Vec
+---
+
+## 5. Word2Vec
 
 Word2Vec là nhóm mô hình học word embeddings từ context window. Hai biến thể nổi tiếng là CBOW và Skip-gram.
 
@@ -129,7 +154,9 @@ center word → context words
 
 Skip-gram thường tốt hơn với rare words vì mỗi center word tạo nhiều training pairs.
 
-## Worked example: context window
+---
+
+## 6. Worked example: context window
 
 Câu:
 
@@ -165,7 +192,9 @@ Pairs:
 
 Qua hàng triệu câu, các từ có context tương tự được kéo lại gần nhau trong embedding space.
 
-## Negative sampling
+---
+
+## 7. Negative sampling
 
 Dự đoán full softmax trên vocabulary rất lớn rất tốn compute. Word2Vec thường dùng negative sampling:
 
@@ -180,9 +209,11 @@ Model học:
 - tăng score cho pair thật,
 - giảm score cho pair giả.
 
-Điều này biến bài toán “predict từ trong vocab khổng lồ” thành nhiều bài toán binary classification nhỏ.
+Điều này biến bài toán "predict từ trong vocab khổng lồ" thành nhiều bài toán binary classification nhỏ.
 
-## GloVe
+---
+
+## 8. GloVe
 
 GloVe dùng thống kê co-occurrence toàn cục: từ `i` xuất hiện gần từ `j` bao nhiêu lần trong corpus.
 
@@ -203,10 +234,12 @@ king - man + woman ≈ queen
 Điều này cho thấy một số directions trong embedding space có thể encode relationships.
 
 <Callout type="warning" title="Analogy đẹp không có nghĩa model thật sự reasoning">
-Vector analogy là tín hiệu thú vị, nhưng không nên phóng đại thành “model hiểu như con người”. Embeddings vẫn là biểu diễn thống kê học từ data.
+Vector analogy là tín hiệu thú vị, nhưng không nên phóng đại thành "model hiểu như con người". Embeddings vẫn là biểu diễn thống kê học từ data.
 </Callout>
 
-## FastText
+---
+
+## 9. FastText
 
 FastText biểu diễn một từ bằng các character n-grams/subwords.
 
@@ -223,7 +256,9 @@ Vector của từ là tổng/trung bình vector của các mảnh nhỏ.
 - Hữu ích cho ngôn ngữ có nhiều biến thể từ.
 - Có thể tạo vector cho từ chưa từng thấy bằng subword pieces.
 
-## Cosine similarity
+---
+
+## 10. Cosine similarity
 
 Cosine similarity đo hai vector có cùng hướng không:
 
@@ -254,7 +289,9 @@ scores = emb @ query_emb
 Nếu vector chưa normalize, dot product bị ảnh hưởng bởi vector norm. Khi debug retrieval score, luôn kiểm tra model/vector DB đang dùng metric nào: cosine, dot product hay Euclidean.
 </Callout>
 
-## Static vs contextual embeddings
+---
+
+## 11. Static vs contextual embeddings
 
 Static embedding: mỗi từ có một vector cố định.
 
@@ -272,7 +309,9 @@ bank trong "river bank" ≠ bank trong "bank account"
 
 BERT/GPT-style transformers tạo contextual embeddings vì mỗi token đi qua self-attention với các token xung quanh.
 
-## Word vs sentence/document embeddings
+---
+
+## 12. Word vs sentence/document embeddings
 
 Word embeddings biểu diễn từng từ. RAG hiện đại thường cần chunk/sentence/document embeddings.
 
@@ -295,7 +334,9 @@ Negative: "Refunds are processed within 5 business days."
 
 Model học kéo query gần positive và đẩy xa negative.
 
-## Embeddings in RAG
+---
+
+## 13. Embeddings in RAG
 
 Pipeline đơn giản:
 
@@ -317,7 +358,25 @@ query → embed query → nearest neighbors → context → LLM answer
 Embedding similarity chỉ là heuristic. Nó có thể fail với số liệu, phủ định, version, code name, error ID, policy ID. Luôn tạo query set và đo retrieval quality.
 </Callout>
 
-## Implementation lab: mini semantic search
+---
+
+## 14. Tokenization pitfalls
+
+<Callout type="warning" title="Mistake 1: dùng dot product trên vectors chưa normalize">
+Nếu muốn cosine, normalize embeddings trước hoặc dùng cosine metric trực tiếp trong vector DB.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: dùng embedding model sai ngôn ngữ/domain">
+English-only model có thể kém với tiếng Việt, code, legal, medical hoặc logs. Chọn multilingual/domain embedding nếu data yêu cầu.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: tin score cao là đúng tuyệt đối">
+Embedding score không phải truth. Nó có bias, có blind spots và có thể bị nhiễu bởi chunking. Cần retrieval evaluation.
+</Callout>
+
+---
+
+## Implementation Playbook: Mini Semantic Search
 
 Cài đặt:
 
@@ -365,53 +424,78 @@ login credentials → password document
 container restart → Kubernetes document
 ```
 
-## Compare with TF-IDF
+**Extend lab milestones:**
 
-Embedding search thắng khi query paraphrase document:
+1. Test với 5 query exact identifier.
+2. Test với 5 query paraphrase.
+3. So sánh TF-IDF vs embedding search.
+4. Tìm 5 failure case của embedding search.
+5. Build hybrid score: `0.5*sparse + 0.5*dense`.
 
-```text
-query: "money back"
-doc:   "refund"
-```
+---
 
-TF-IDF/sparse search thắng khi exact token quan trọng:
+## Empirical lab: embedding vs sparse retrieval
 
-```text
-query: "ORA-00942"
-doc:   "ORA-00942: table or view does not exist"
-```
+**Goal:** đo ảnh hưởng của embedding vs sparse retrieval đến exact identifier vs paraphrase.
 
-Production RAG thường dùng hybrid:
+**Setup:** dùng 50 documents có error code, API name, paraphrase.
 
-```text
-sparse retrieval + dense retrieval + reranker
-```
+**Steps:**
 
-## Common mistakes & debugging checklist
+1. Tạo 50 documents có error code, API name, paraphrase.
+2. Tạo 10 query: 5 exact identifier, 5 paraphrase.
+3. Build sparse search (BM25/TF-IDF).
+4. Build dense search (embedding).
+5. Build hybrid search.
+6. Đo top-1 accuracy cho cả 3.
 
-<Callout type="warning" title="Mistake 1: dùng dot product trên vectors chưa normalize">
-Nếu muốn cosine, normalize embeddings trước hoặc dùng cosine metric trực tiếp trong vector DB.
+Record:
+
+| Trial | Query type | Sparse top-1 | Dense top-1 | Hybrid top-1 |
+|---|---|---:|---:|---:|
+| 1 | exact identifier | | | |
+| 2 | paraphrase | | | |
+| 3 | mixed | | | |
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: không normalize embeddings">
+**Triệu chứng:** Dot product bị ảnh hưởng bởi vector norm. Document dài hơn, norm lớn hơn, dot product cao hơn mặc dù không phải match tốt nhất. Retrieval miss.
+
+**Fix:** Normalize embeddings trước khi dùng dot product. Hoặc dùng cosine metric trực tiếp trong vector DB.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: dùng embedding model sai ngôn ngữ/domain">
-English-only model có thể kém với tiếng Việt, code, legal, medical hoặc logs. Chọn multilingual/domain embedding nếu data yêu cầu.
+<Callout type="warning" title="Pitfall 2: dùng embedding model sai ngôn ngữ/domain">
+**Triệu chứng:** English-only model kém với tiếng Việt, code, legal, medical. Retrieval miss vì model không hiểu domain.
+
+**Fix:** Chọn multilingual/domain embedding. Test với data domain trước khi deploy.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: tin score cao là đúng tuyệt đối">
-Embedding score không phải truth. Nó có bias, có blind spots và có thể bị nhiễu bởi chunking. Cần retrieval evaluation.
+<Callout type="danger" title="Pitfall 3: tin score cao là đúng tuyệt đối">
+**Triệu chứng:** Embedding score cao không phải truth. Nó có bias, có blind spots, có thể bị nhiễu bởi chunking. User query error code, embedding miss.
+
+**Fix:** Tạo query set và đo recall@k, MRR. Thêm sparse fallback cho exact identifiers. Reranker nếu top-k nhiễu.
 </Callout>
 
-Checklist:
+---
 
-1. Embeddings đã normalize chưa?
-2. Vector DB metric có khớp với cách encode không?
-3. Query/document có cùng embedding model không?
-4. Model có hỗ trợ ngôn ngữ/domain không?
-5. Chunk size/overlap có hợp lý không?
-6. Top-k retrieved chunks có đúng bằng mắt thường không?
-7. Có query set để đo recall@k/MRR không?
-8. Có sparse fallback cho exact identifiers không?
-9. Có reranker nếu top-k nhiễu không?
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Word2Vec | nhanh, đơn giản | static, không contextual |
+| GloVe | co-occurrence toàn cục | static, không contextual |
+| FastText | xử lý OOV, subword | tốn compute hơn |
+| Sentence embedding | semantic similarity | tốn compute hơn |
+| Multilingual embedding | đa ngôn ngữ | tốn compute hơn |
+| Domain embedding | hiểu domain | tốn compute hơn |
+| Normalize embeddings | dot product = cosine | không có |
+| Hybrid search | best of both | tốn compute hơn |
+| Reranker | top-k chất lượng cao | tốn compute, latency |
+
+---
 
 ## Practice exercises
 
@@ -422,6 +506,9 @@ Checklist:
 5. Visualize embeddings bằng PCA hoặc UMAP.
 6. Thử một multilingual embedding model với câu tiếng Việt.
 7. Tạo mini eval set 20 queries và đo top-1 accuracy thủ công.
+8. Build hybrid score: `0.5*sparse + 0.5*dense`.
+
+---
 
 ## Knowledge check
 
@@ -436,6 +523,8 @@ Checklist:
 9. RAG thường dùng embedding ở mức nào?
 10. Vì sao hybrid search thường tốt hơn vector-only?
 
+---
+
 ## Answer key
 
 1. Mọi token khác nhau đều orthogonal, không có distance meaningful.
@@ -448,6 +537,8 @@ Checklist:
 8. Một vector cố định cho mọi nghĩa của từ, không phụ thuộc context.
 9. Sentence/chunk/document embeddings.
 10. Sparse bắt exact terms; dense bắt semantic similarity; hai loại bổ sung nhau.
+
+---
 
 ## Mini-project: Mini semantic search engine
 
@@ -470,6 +561,8 @@ Checklist:
 - Có đề xuất hybrid search/reranker.
 - Có bảng top-k results để debug.
 
+---
+
 ## Điểm cần nhớ
 
 - Embeddings biến text thành vector dense có ngữ nghĩa.
@@ -478,6 +571,8 @@ Checklist:
 - Static embeddings không phân biệt nghĩa theo context.
 - RAG hiện đại thường dùng sentence/chunk embeddings, không chỉ word embeddings.
 - Embedding search cần evaluation và thường nên kết hợp sparse/rerank.
+
+---
 
 ## Next chapter bridge
 

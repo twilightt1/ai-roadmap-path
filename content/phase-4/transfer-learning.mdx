@@ -1,39 +1,62 @@
-Transfer Learning là nguyên tắc trung tâm của AI hiện đại: **đừng học mọi thứ từ đầu nếu có thể tận dụng kiến thức đã học sẵn**. CNN pretrained ImageNet, BERT pretrained trên text, GPT/LLaMA pretrained trên web-scale corpus — tất cả đều dựa trên cùng ý tưởng: representation học từ data lớn có thể chuyển sang task nhỏ hơn.
+Transfer Learning là nguyên tắc trung tâm của AI hiện đại: đừng học mọi thứ từ đầu nếu có thể tận dụng kiến thức đã học sẵn. CNN pretrained ImageNet, BERT pretrained trên text, GPT/LLaMA pretrained trên web-scale corpus — tất cả đều dựa trên cùng ý tưởng: representation học từ data lớn có thể chuyển sang task nhỏ hơn. Bạn có 800 ảnh lỗi sản phẩm, train CNN từ đầu gần như chắc chắn overfit — nhưng ResNet pretrained ImageNet đã học cạnh, texture, shape, bạn chỉ cần học classifier head. Bạn có 2.000 câu support intent, train transformer từ đầu là bất khả thi — nhưng DistilBERT/BERT đã học ngữ pháp và semantics, bạn fine-tune task classification. Transfer learning giúp giảm data cần thiết, giảm compute, tăng performance, rút ngắn time-to-market. Trong vai trò giảng viên AI, tôi muốn bạn giải thích pretraining và downstream adaptation, phân biệt feature extraction và fine-tuning, biết khi nào freeze/unfreeze layer, hiểu catastrophic forgetting, dùng pretrained ResNet hoặc HuggingFace model, và quyết định khi nào không nên fine-tune.
 
-## Why this matters
+---
 
-Bạn có 800 ảnh lỗi sản phẩm. Train CNN từ đầu gần như chắc chắn overfit. Nhưng ResNet pretrained trên ImageNet đã học cạnh, texture, shape. Bạn chỉ cần học classifier head cho classes của bạn.
+## 1. The Incident (Tình huống sự cố)
 
-Bạn có 2,000 câu support intent. Train transformer từ đầu là bất khả thi. Nhưng DistilBERT/BERT đã học ngữ pháp và semantics; bạn fine-tune task classification.
+<Callout type="danger" title="Báo cáo sự cố: Catastrophic forgetting trên chatbot phân loại intent, val acc 94% tụt xuống 48%">
+**Bối cảnh:** Một team AI fine-tune `distilbert-base-uncased` cho bài toán phân loại intent support khách hàng (3 labels: billing, technical, refund). Dataset chỉ 2.000 câu, train/val split 80/20.
 
-Transfer learning giúp:
+1. Engineer load `distilbert-base-uncased` nhưng tokenizer dùng `bert-base-cased` (copy-paste nhầm từ snippet khác).
+2. Fine-tune toàn bộ encoder với `lr=1e-3` (quá lớn), 20 epoch không early stopping.
+3. Val accuracy ban đầu 94% (epoch 1), nhưng tụt xuống 61% ở epoch 8 và 48% ở epoch 15.
+4. Model production phân loại 30% câu "refund" thành "technical" — customer churn tăng.
 
-- giảm data cần thiết,
-- giảm compute,
-- tăng performance,
-- rút ngắn time-to-market.
+**Hậu quả:** 2 tuần rollout, ~12% ticket bị route sai, 1.5x thời gian xử lý, 3 engineer phải rollback và retrain đúng cách.
+</Callout>
 
-## Learning objectives
+Bài học rút ra: tokenizer phải khớp `model_name` (cased vs uncased, subword vocab khác nhau). LR fine-tune phải nhỏ (1e-5 cho backbone) và freeze/unfreeze từ từ. Khi val accuracy tụt sau khi tăng, đó là dấu hiệu catastrophic forgetting — dừng lại và dùng LR thấp hơn.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Giải thích pretraining và downstream adaptation.
-2. Phân biệt feature extraction và fine-tuning.
-3. Biết khi nào freeze/unfreeze layer.
-4. Hiểu catastrophic forgetting.
-5. Dùng pretrained ResNet hoặc HuggingFace model.
-6. Quyết định khi nào không nên fine-tune.
+## 2. Architecture Blueprint (Transfer Learning Pipeline)
 
-## Prerequisites
+```text
+┌──────────────────────────────────────────────────────────┐
+│              PRETRAINED MODEL (frozen)                    │
+│   ImageNet / large corpus  →  general features            │
+└──────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌──────────────────────────────────────────────────────────┐
+│  Stage 1: FEATURE EXTRACTION (head only)                  │
+│  freeze backbone  →  train head  →  validate              │
+│  lr=1e-3, 5 epochs                                        │
+└──────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌──────────────────────────────────────────────────────────┐
+│  Stage 2: PARTIAL FINE-TUNE (unfreeze last block)         │
+│  unfreeze layer4  →  train head+block  →  validate       │
+│  lr=1e-5 (backbone) / 1e-4 (head), 5 epochs               │
+└──────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌──────────────────────────────────────────────────────────┐
+│  Stage 3: OPTIONAL FULL FINE-TUNE                        │
+│  unfreeze all  →  lr=1e-6  →  early stopping             │
+│  chỉ khi data đủ lớn + domain khác rõ                     │
+└──────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+              best checkpoint → deploy
+```
 
-Bạn nên biết:
+Key insight: đi từ **ít gradient** (head-only) đến **nhiều gradient** (full fine-tune) — ngược lại là phá pretrained weights. Freeze trước, unfreeze từ từ, validate mỗi bước.
 
-- CNN/neural network cơ bản.
-- PyTorch model parameters.
-- Train/validation/test split.
-- Overfitting và learning rate.
+---
 
-## Core intuition: representation reuse
+## 3. Core intuition: representation reuse
 
 Layer đầu của vision model học feature chung:
 
@@ -53,7 +76,9 @@ Bạn reuse phần chung, chỉ học phần task-specific.
 Ngay cả khi bạn không fine-tune, embedding/hidden states từ pretrained model đã là features tốt hơn rất nhiều so với raw pixels/text.
 </Callout>
 
-## Feature extraction vs fine-tuning
+---
+
+## 4. Feature extraction vs fine-tuning
 
 | Strategy | Làm gì | Khi dùng |
 |---|---|---|
@@ -61,7 +86,9 @@ Ngay cả khi bạn không fine-tune, embedding/hidden states từ pretrained mo
 | Partial fine-tuning | Unfreeze vài layer cuối | dataset vừa, domain hơi khác |
 | Full fine-tuning | Train toàn bộ model | dataset lớn, domain khác, đủ compute |
 
-## Worked example: freeze ResNet
+---
+
+## 5. Worked example: freeze ResNet
 
 ```python
 import torchvision.models as models
@@ -85,7 +112,9 @@ total = sum(p.numel() for p in model.parameters())
 print(trainable, total)
 ```
 
-## Partial unfreeze
+---
+
+## 6. Partial unfreeze
 
 Sau khi head ổn, unfreeze block cuối:
 
@@ -109,7 +138,9 @@ Head học nhanh hơn; backbone thay đổi chậm hơn.
 Fine-tune LR quá lớn hoặc quá nhiều epoch trên dataset nhỏ có thể làm pretrained model quên representation tổng quát. Dùng LR nhỏ, early stopping, và freeze/unfreeze từ từ.
 </Callout>
 
-## Transfer learning trong NLP
+---
+
+## 7. Transfer learning trong NLP
 
 HuggingFace:
 
@@ -130,7 +161,9 @@ for p in model.base_model.parameters():
 
 Sau đó unfreeze dần.
 
-## Khi nào không fine-tune?
+---
+
+## 8. Khi nào không fine-tune?
 
 Fine-tune không phải búa vạn năng.
 
@@ -143,10 +176,42 @@ Không nên fine-tune khi:
 - Privacy/cost/infra không cho phép training.
 
 <Callout type="tip" title="AI Engineer decision tree">
-Nếu bài toán là “model không biết thông tin private” → RAG. Nếu bài toán là “model cần style/format ổn định” → prompt/fine-tune nhẹ. Nếu bài toán là “domain classifier nhỏ” → fine-tune encoder hoặc train sklearn baseline.
+Nếu bài toán là "model không biết thông tin private" → RAG. Nếu bài toán là "model cần style/format ổn định" → prompt/fine-tune nhẹ. Nếu bài toán là "domain classifier nhỏ" → fine-tune encoder hoặc train sklearn baseline.
 </Callout>
 
-## Implementation lab: transfer learning workflow
+---
+
+## 9. Common mistakes
+
+<Callout type="warning" title="Mistake 1: tokenizer/preprocessing sai pretrained model">
+Tokenizer phải khớp `model_name` (cased vs uncased, subword vocab). Vision pretrained kỳ vọng resize/normalize cụ thể. Sai preprocessing làm performance tụt mạnh.
+</Callout>
+
+<Callout type="danger" title="Mistake 2: fine-tune toàn bộ với LR lớn">
+LR 1e-3 cho backbone là nhanh nhất cách phá pretrained weights. Bắt đầu bằng LR nhỏ (1e-5 cho backbone), freeze/unfreeze từ từ. LR head (1e-4) > LR backbone (1e-5).
+</Callout>
+
+<Callout type="danger" title="Mistake 3: đánh giá trên dataset quá giống train">
+Val acc 0.98 nhưng production acc 0.65 — thường do augment/split sai, val có ảnh gần trùng train. Dùng stratified split, hold-out test set, leak test, kiểm tra overlap train/val.
+</Callout>
+
+<Callout type="warning" title="Mistake 4: không early stopping">
+Train 20 epoch không early stopping → val acc tăng epoch 1 rồi tụt dần (catastrophic forgetting). Thêm early stopping patience=3, lưu best checkpoint theo val F1.
+</Callout>
+
+**Checklist:**
+
+1. Tokenizer/preprocessing có đúng model không?
+2. Classifier head đã thay đúng output classes chưa?
+3. Parameters cần freeze có `requires_grad=False` không?
+4. LR backbone và head có khác nhau không?
+5. Có early stopping không?
+6. Dataset có đủ khác biệt giữa train/val không?
+7. Có so sánh với baseline đơn giản không?
+
+---
+
+## Implementation Playbook: 3-stage fine-tune
 
 ```python
 # Pseudocode structure
@@ -170,29 +235,83 @@ save_best_checkpoint()
 - Nếu partial fine-tune cải thiện: cần adaptation nhẹ.
 - Nếu full fine-tune overfit: data ít/noisy hoặc LR quá cao.
 
-## Common mistakes & debugging checklist
+**Extend lab milestones:**
 
-<Callout type="danger" title="Mistake 1: không dùng preprocessing đúng pretrained model">
-Vision pretrained model kỳ vọng resize/normalize cụ thể. NLP pretrained model kỳ vọng tokenizer đúng. Sai preprocessing/tokenizer làm performance tụt mạnh.
+1. Thêm logging val accuracy/loss mỗi epoch, vẽ curve so sánh head-only vs partial.
+2. Thêm early stopping với patience=3, lưu best checkpoint theo val F1.
+3. Thay LR head từ 1e-3 sang 1e-4, 1e-3, 5e-3 và so sánh val accuracy.
+4. Thử freeze backbone vs full fine-tune với cùng dataset, đo accuracy + time.
+5. Thêm confusion matrix và misclassified examples để phân tích failure mode.
+6. Thử RAG/prompting trên cùng task để so sánh với fine-tune.
+
+---
+
+## Empirical lab: freeze strategy & LR
+
+**Goal:** Đo ảnh hưởng của freeze strategy, learning rate, và số epoch lên accuracy và thời gian train.
+
+**Setup:**
+
+- Dataset: 5 classes ảnh (vision) hoặc 2.000 câu intent (NLP).
+- Model: ResNet18 pretrained (vision) hoặc DistilBERT (NLP).
+- Metric: val accuracy, val F1, train time.
+
+**Steps:**
+
+1. Chạy head-only (freeze backbone) với 5 epoch, lr=1e-3.
+2. Chạy partial fine-tune (unfreeze layer4) với 5 epoch, lr=1e-5 (backbone) / 1e-4 (head).
+3. Chạy full fine-tune với 5 epoch, lr=1e-5.
+4. Chạy full fine-tune với 10 epoch, lr=1e-3 (giống LR head) để thấy catastrophic forgetting.
+5. Ghi lại vào bảng.
+
+**Record:**
+
+| Trial | Task | Tool | Latency | Cost | Quality | Failure mode |
+|---|---|---|---|---|---|---|
+| 1 | Head-only, 5 ep, lr=1e-3 | ResNet18 | 0.8s/ep | 0.05 | 0.88 | — |
+| 2 | Partial, 5 ep, lr=1e-5/1e-4 | ResNet18 | 0.9s/ep | 0.07 | 0.91 | — |
+| 3 | Full fine-tune, 5 ep, lr=1e-5 | ResNet18 | 1.2s/ep | 0.12 | 0.90 | — |
+| 4 | Full fine-tune, 10 ep, lr=1e-3 | ResNet18 | 1.2s/ep | 0.24 | 0.62 | catastrophic forgetting |
+| 5 | Head-only, 5 ep, lr=1e-3 | DistilBERT | 2.1s/ep | 0.10 | 0.85 | — |
+| 6 | Full, 5 ep, lr=1e-3, wrong tokenizer | DistilBERT | 2.1s/ep | 0.20 | 0.48 | tokenizer mismatch + forgetting |
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="danger" title="Post-Mortem 1: không dùng preprocessing đúng pretrained model">
+**Triệu chứng:** Val accuracy tụt mạnh (0.88 → 0.50) sau khi đổi model, hoặc model không học gì dù loss giảm.
+
+**Fix:** Kiểm tra tokenizer đúng `model_name` (cased vs uncased, subword vocab), preprocessing đúng `weights` (resize/normalize stats). Vision pretrained model kỳ vọng resize/normalize cụ thể. NLP pretrained model kỳ vọng tokenizer đúng. Sai preprocessing/tokenizer làm performance tụt mạnh.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: fine-tune toàn bộ với LR lớn">
-Đây là cách nhanh nhất phá pretrained weights. Bắt đầu bằng LR nhỏ và freeze/unfreeze từ từ.
+<Callout type="danger" title="Post-Mortem 2: fine-tune toàn bộ với LR lớn">
+**Triệu chứng:** Val accuracy tăng epoch 1 rồi tụt dần; train loss giảm mạnh nhưng val loss tăng.
+
+**Fix:** Đây là cách nhanh nhất phá pretrained weights. Bắt đầu bằng LR nhỏ (1e-5 cho backbone), freeze/unfreeze từ từ. Dùng LR head (1e-4) > LR backbone (1e-5). Thêm early stopping patience=3.
 </Callout>
 
-<Callout type="warning" title="Mistake 3: đánh giá trên dataset quá giống train">
-Nếu augment/split sai, validation có ảnh gần trùng train. Transfer model có thể nhìn rất tốt nhưng fail production.
+<Callout type="danger" title="Post-Mortem 3: đánh giá trên dataset quá giống train">
+**Triệu chứng:** Val accuracy 0.98 nhưng production accuracy 0.65; model nhìn rất tốt nhưng fail production.
+
+**Fix:** Nếu augment/split sai, validation có ảnh gần trùng train. Transfer model có thể nhìn rất tốt nhưng fail production. Dùng stratified split, hold-out test set, leak test, kiểm tra overlap giữa train/val.
 </Callout>
 
-Checklist:
+---
 
-1. Tokenizer/preprocessing có đúng model không?
-2. Classifier head đã thay đúng output classes chưa?
-3. Parameters cần freeze có `requires_grad=False` không?
-4. LR backbone và head có khác nhau không?
-5. Có early stopping không?
-6. Dataset có đủ khác biệt giữa train/val không?
-7. Có so sánh với baseline đơn giản không?
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Feature extraction (freeze backbone) | Train nhanh, ít data, ít rủi ro forgetting | Domain chênh nhiều thì underfit |
+| Partial fine-tune (unfreeze last block) | Cân bằng adaptation và ổn định | Cần tune LR cho 2 nhóm |
+| Full fine-tune | Tối ưu cho domain khác | Cần data + compute, rủi ro forgetting |
+| RAG thay vì fine-tune | Knowledge mới, không cần train | Latency cao, cost inference, cần vector DB |
+| Prompt engineering | Không cần train, đổi nhanh | Khó kiểm soát, không học domain |
+| Fine-tune encoder | Học domain sâu | Cần data + compute, rủi ro overfit |
+| Sklearn baseline | Đơn giản, dễ debug | Chỉ học feature nông, không học domain |
+
+---
 
 ## Practice exercises
 
@@ -201,6 +320,8 @@ Checklist:
 3. Với HuggingFace BERT classifier, freeze `base_model`.
 4. Giải thích khi nào RAG tốt hơn fine-tuning.
 5. Tạo experiment so sánh head-only vs partial fine-tune.
+
+---
 
 ## Knowledge check
 
@@ -212,6 +333,8 @@ Checklist:
 6. Khi nào nên freeze backbone?
 7. Transfer learning giúp gì với dataset nhỏ?
 
+---
+
 ## Answer key
 
 1. Train model trên task/data lớn tổng quát trước downstream task.
@@ -221,6 +344,8 @@ Checklist:
 5. Embedding matrix gắn với token IDs của tokenizer đó.
 6. Dataset nhỏ hoặc domain gần pretrained.
 7. Giảm data/compute cần thiết và tăng generalization.
+
+---
 
 ## Mini-project: Transfer learning image classifier
 
@@ -241,6 +366,8 @@ Checklist:
 - Có early stopping.
 - Có phân tích khi nào fine-tune giúp hoặc làm overfit.
 
+---
+
 ## Điểm cần nhớ
 
 - Transfer learning reuse representation pretrained.
@@ -248,6 +375,8 @@ Checklist:
 - Fine-tuning cần LR nhỏ, early stopping và freeze strategy.
 - Tokenizer/preprocessing phải khớp pretrained model.
 - Không phải mọi bài toán cần fine-tune; RAG/prompting/baseline có thể tốt hơn.
+
+---
 
 ## Next chapter bridge
 

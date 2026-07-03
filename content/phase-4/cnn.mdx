@@ -1,36 +1,59 @@
-Convolutional Neural Networks (CNN) là kiến trúc đã tạo ra cuộc cách mạng thị giác máy tính hiện đại. Dù Vision Transformers đang rất mạnh, CNN vẫn là nền tảng để hiểu cách model học visual features: cạnh, góc, texture, object parts, rồi object. CNN cũng vẫn được dùng rộng rãi trong production vì nhanh, ổn định, dễ transfer learning.
+Convolutional Neural Networks (CNN) là kiến trúc đã tạo ra cuộc cách mạng thị giác máy tính hiện đại. Dù Vision Transformers đang rất mạnh, CNN vẫn là nền tảng để hiểu cách model học visual features: cạnh, góc, texture, object parts, rồi object. CNN cũng vẫn được dùng rộng rãi trong production vì nhanh, ổn định, dễ transfer learning. Nếu bạn build AI product có ảnh — upload hóa đơn, classify lỗi sản phẩm, kiểm tra ảnh profile, OCR document, detect object trong camera — bạn sẽ gặp CNN hoặc backbone vision. Ngay cả khi dùng API vision model, hiểu CNN giúp bạn biết vì sao ảnh cần resize/normalize, vì sao model pretrained ImageNet transfer tốt, vì sao data augmentation quan trọng, vì sao ResNet train được sâu, và khi nào CNN đủ, khi nào cần ViT/multimodal LLM. Trong vai trò giảng viên AI, tôi muốn bạn nắm convolution bằng kernel trượt, theo dõi shape qua Conv2d/padding/stride/pooling, phân biệt LeNet/AlexNet/VGG/ResNet, và dùng pretrained ResNet để transfer learning.
 
-## Why this matters
+---
 
-Nếu bạn build AI product có ảnh — upload hóa đơn, classify lỗi sản phẩm, kiểm tra ảnh profile, OCR document, detect object trong camera — bạn sẽ gặp CNN hoặc backbone vision. Ngay cả khi dùng API vision model, hiểu CNN giúp bạn biết:
+## 1. The Incident (Tình huống sự cố)
 
-- Vì sao ảnh cần resize/normalize.
-- Vì sao model pretrained ImageNet transfer tốt.
-- Vì sao data augmentation quan trọng.
-- Vì sao ResNet train được sâu.
-- Khi nào CNN đủ, khi nào cần ViT/multimodal LLM.
+<Callout type="danger" title="Báo cáo sự cố: Classifier sản phẩm 30% accuracy sau 2 tuần train">
+**Bối cảnh:** Một team startup build model classify lỗi sản phẩm trên dây chuyền (5 class: OK, xước, móp, nứt, bẩn). Dataset chỉ ~1.500 ảnh, thu thập bằng camera nhà máy. Engineer quyết định train CNN từ đầu (từ scratch) để "kiểm soát hoàn toàn kiến trúc", không dùng pretrained weights.
 
-## Learning objectives
+Train từ scratch với 1.500 ảnh. Load ảnh bằng OpenCV (`cv2.imread` trả BGR) nhưng normalize bằng ImageNet mean/std giả định RGB. Tensor shape `(H, W, C)` từ NumPy không transpose. Validation dùng cùng transform train (có random flip). Train 5 epoch đầu không kiểm tra shape, không log distribution.
 
-Sau chương này, bạn sẽ có thể:
+1. Train từ đầu với 1.500 ảnh → overfit ngay epoch 3, val accuracy stuck ~30%.
+2. Load ảnh bằng OpenCV (BGR) nhưng normalize bằng ImageNet mean/std giả định RGB → channel order sai, feature lệch.
+3. Tensor shape `(H, W, C)` từ NumPy không transpose → Conv2d nhận `in_channels=224` thay vì `3`.
+4. Validation dùng cùng transform train (có random flip) → metric không ổn định, không tin được.
+5. Train 5 epoch đầu, không kiểm tra shape, không log distribution → mất 2 tuần mới phát hiện.
 
-1. Giải thích convolution bằng kernel trượt trên ảnh.
-2. Theo dõi shape qua Conv2d, padding, stride, pooling.
-3. Hiểu pooling làm gì và vì sao giảm kích thước.
-4. Phân biệt LeNet, AlexNet, VGG, ResNet ở ý tưởng chính.
-5. Dùng pretrained ResNet để transfer learning.
-6. Thiết kế data augmentation hợp lý cho vision task.
-7. Debug lỗi shape/channel phổ biến trong CNN.
+**Hậu quả:** Model 30% accuracy (gần random cho 5 class), không deploy được. Sản xuất 2 tuần trễ, mất hợp đồng pilot với 1 khách hàng. Phải rollback về rule-based check tạm thời.
+</Callout>
 
-## Prerequisites
+Bài học rút ra: với dataset nhỏ (dưới vài nghìn ảnh), **luôn** dùng pretrained ImageNet backbone + transfer learning. Kiểm tra shape `(B,C,H,W)` và channel order RGB/BGR ngay từ cell đầu. Validation transform phải deterministic — không random augmentation. Train 1 epoch đầu, log shape + distribution, kiểm tra metric trước khi train lâu.
 
-Bạn nên biết:
+---
 
-- Tensor shape trong PyTorch.
-- MLP, activation, BatchNorm, residual.
-- Train/validation/test split.
+## 2. Architecture Blueprint (CNN Classifier Pipeline)
 
-## Core intuition: convolution là feature detector cục bộ
+```text
+  Input image (B, 3, H, W)
+        |
+        v
+  [Resize + Normalize]   <-- ImageNet mean/std, RGB order
+        |
+        v
+  Conv2d(3->32)  + BN + ReLU  + MaxPool2d(2)   ->  (B, 32, H/2, W/2)
+        |
+        v
+  Conv2d(32->64) + BN + ReLU  + MaxPool2d(2)   ->  (B, 64, H/4, W/4)
+        |
+        v
+  ... (lặp Conv block, có thể residual) ...
+        |
+        v
+  AdaptiveAvgPool2d((1,1))   ->  (B, 64, 1, 1)
+        |
+        v
+  Flatten -> Linear(64, num_classes) ->  (B, num_classes)
+        |
+        v
+  Softmax / logits  ->  Prediction
+```
+
+Key insight: mỗi Conv block giảm spatial size (qua pooling) và tăng channel (depth), đổi "địa lý" thành "ý nghĩa". `AdaptiveAvgPool2d((1,1))` giúp model linh hoạt với nhiều input size.
+
+---
+
+## 3. Core intuition: convolution là feature detector cục bộ
 
 Ảnh có cấu trúc không gian. Pixel gần nhau liên quan mạnh hơn pixel xa. Convolution tận dụng giả định này bằng kernel nhỏ, ví dụ `3x3`, trượt qua ảnh để phát hiện pattern cục bộ.
 
@@ -48,7 +71,9 @@ Một kernel có thể học phát hiện:
 CNN mạnh vì hai ý tưởng: locality (pattern ảnh là cục bộ) và weight sharing (cùng filter áp mọi vị trí). Nhờ vậy CNN ít parameter hơn MLP rất nhiều và generalize tốt hơn cho ảnh.
 </Callout>
 
-## Formal definition: Conv2d shape
+---
+
+## 4. Formal definition: Conv2d shape
 
 PyTorch image tensor thường có shape:
 
@@ -95,7 +120,9 @@ out = floor((224 + 2 - 3)/1) + 1 = 224
 
 Padding giữ size; stride > 1 giảm size.
 
-## Worked example by hand: 3x3 convolution
+---
+
+## 5. Worked example by hand: 3x3 convolution
 
 Input 4x4 một channel:
 
@@ -128,7 +155,9 @@ Dot với kernel:
 
 Kernel trượt sang phải, xuống dưới, tạo output feature map. Mỗi output pixel là dot product giữa kernel và patch input.
 
-## Pooling
+---
+
+## 6. Pooling
 
 Pooling giảm kích thước không gian, giữ tín hiệu chính.
 
@@ -145,7 +174,9 @@ MaxPool lấy giá trị lớn nhất trong vùng. AveragePool lấy trung bình
 Nếu object dịch nhẹ vài pixel, max pooling giúp representation ít thay đổi hơn. Nhưng pooling quá mạnh có thể mất thông tin vị trí.
 </Callout>
 
-## CNN architecture evolution
+---
+
+## 7. CNN architecture evolution
 
 | Model | Ý tưởng chính | Bài học |
 |---|---|---|
@@ -162,7 +193,77 @@ x → Conv → BN → ReLU → Conv → BN → +x → ReLU
 
 Residual giúp model học `F(x)` thay vì toàn bộ mapping. Nếu layer không cần thay đổi gì, nó có thể học gần zero và truyền `x` qua.
 
-## Implementation lab: simple CNN for image classification
+---
+
+## 8. Transfer learning với ResNet
+
+Dataset nhỏ? Dùng pretrained model.
+
+```python
+import torchvision.models as models
+from torch import nn
+
+model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+
+for p in model.parameters():
+    p.requires_grad = False
+
+model.fc = nn.Linear(model.fc.in_features, 5)
+```
+
+Training strategy:
+
+1. Freeze backbone, train head.
+2. Unfreeze layer cuối, fine-tune LR nhỏ.
+3. Nếu domain khác ImageNet nhiều, unfreeze nhiều hơn.
+
+---
+
+## 9. Data augmentation
+
+Vision model dễ overfit nếu data ít. Augmentation tạo biến thể hợp lý:
+
+```python
+from torchvision import transforms
+
+train_tfms = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                          std=[0.229, 0.224, 0.225]),
+])
+```
+
+<Callout type="warning" title="Augmentation phải hợp domain">
+Random horizontal flip hợp ảnh chó/mèo, nhưng có thể sai với X-ray, chữ viết, biển báo giao thông. Augmentation không hợp domain có thể tạo label sai.
+</Callout>
+
+---
+
+## 10. Common mistakes
+
+<Callout type="warning" title="Mistake 1: channel order sai (BGR vs RGB)">
+`cv2.imread` trả BGR. Nếu normalize bằng ImageNet mean/std (giả định RGB), feature lệch. Convert sang RGB bằng `cv2.cvtColor(img, cv2.COLOR_BGR2RGB)` trước khi transform.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: tensor shape (H,W,C) thay vì (B,C,H,W)">
+NumPy/OpenCV ảnh `(H, W, C)`. PyTorch cần `(B, C, H, W)`. Quên `permute(0,3,1,2)` → Conv2d nhận `in_channels=224`. In `.shape` ngay cell đầu.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: validation có random augmentation">
+Val transform phải deterministic — chỉ `Resize` + `ToTensor` + `Normalize`. Random flip/rotation ở val làm metric nhảy sốc, không tin được.
+</Callout>
+
+<Callout type="danger" title="Mistake 4: train từ scratch với dataset nhỏ">
+< 10k ảnh/class train từ scratch thường overfit. Dùng pretrained ResNet18, freeze backbone, train head. Augmentation phù hợp domain.
+</Callout>
+
+---
+
+## Implementation Playbook: simple CNN for image classification
 
 ```python
 import torch
@@ -200,65 +301,73 @@ print(logits.shape)  # (8, 5)
 
 `AdaptiveAvgPool2d((1,1))` giúp model nhận nhiều input sizes khác nhau hơn vì nó luôn đưa feature map về 1x1.
 
-## Transfer learning với ResNet
+**Extend lab milestones:**
 
-Dataset nhỏ? Dùng pretrained model.
+1. Thay `SmallCNN` từ scratch bằng `resnet18` pretrained (freeze backbone) → so sánh accuracy và thời gian train.
+2. Thêm `transforms.Normalize` ImageNet mean/std → đo accuracy trước/sau khi normalize đúng.
+3. In shape của tensor sau mỗi block (Conv, Pool, AdaptiveAvgPool) để verify pipeline.
+4. Thay MaxPool bằng `Conv2d(stride=2)` → so sánh shape và parameter count.
+5. Thêm data augmentation (flip, rotation, color jitter) → đo val accuracy trước/sau.
+6. Thêm confusion matrix + 10 misclassified images để phân tích lỗi.
 
-```python
-import torchvision.models as models
-from torch import nn
+---
 
-model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+## Empirical lab: transfer learning vs scratch
 
-for p in model.parameters():
-    p.requires_grad = False
+**Goal:** Đo tác động của transfer learning, normalization, và augmentation lên accuracy và thời gian train trên dataset nhỏ (1.500 ảnh, 5 class).
 
-model.fc = nn.Linear(model.fc.in_features, 5)
-```
+**Setup:** ResNet18, dataset 1.500 ảnh chia 80/20 train/val, 10 epoch, batch 32, GPU T4. Đo val accuracy, latency/ảnh, và chi phí.
 
-Training strategy:
+**Steps:**
 
-1. Freeze backbone, train head.
-2. Unfreeze layer cuối, fine-tune LR nhỏ.
-3. Nếu domain khác ImageNet nhiều, unfreeze nhiều hơn.
+1. Baseline: SmallCNN train từ scratch, không normalize.
+2. Thêm ImageNet normalization đúng.
+3. Thay bằng ResNet18 pretrained, freeze backbone.
+4. Thêm data augmentation (flip, rotation, color jitter).
+5. Unfreeze last block, fine-tune LR nhỏ.
 
-## Data augmentation
+**Record:**
 
-Vision model dễ overfit nếu data ít. Augmentation tạo biến thể hợp lý:
+| Trial | Task | Tool | Latency | Cost | Quality | Failure mode |
+|---|---|---|---|---|---|---|
+| 1 | SmallCNN from scratch, no normalize | PyTorch | 8ms/ảnh | thấp | 30% val acc | overfit, channel order sai |
+| 2 | SmallCNN from scratch + ImageNet normalize | PyTorch | 8ms/ảnh | thấp | 45% val acc | overfit, vẫn thiếu data |
+| 3 | ResNet18 pretrained, freeze backbone | torchvision | 12ms/ảnh | thấp | 78% val acc | head học chậm, head nhỏ |
+| 4 | ResNet18 + augmentation | torchvision | 12ms/ảnh | thấp | 85% val acc | augmentation hơi mạnh |
+| 5 | ResNet18 + unfreeze last block | torchvision | 14ms/ảnh | trung bình | 89% val acc | LR lớn → huấn spike |
+| 6 | ResNet18 + unfreeze toàn bộ | torchvision | 18ms/ảnh | cao | 90% val acc | overfit nếu train lâu |
 
-```python
-from torchvision import transforms
+**Phân tích:** Transfer learning + normalization + augmentation đúng là chênh lệch lớn nhất (30% → 85%). Unfreeze thêm block chỉ tăng 4–5% nhưng chi phí train và rủi ro tăng.
 
-train_tfms = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(10),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                          std=[0.229, 0.224, 0.225]),
-])
-```
+---
 
-<Callout type="warning" title="Augmentation phải hợp domain">
-Random horizontal flip hợp ảnh chó/mèo, nhưng có thể sai với X-ray, chữ viết, biển báo giao thông. Augmentation không hợp domain có thể tạo label sai.
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="danger" title="Post-Mortem 1: channel order sai">
+**Triệu chứng:** Conv2d báo lỗi shape, hoặc model học rất chậm/accuracy thấp dù input nhìn "bình thường". `Conv2d` nhận `in_channels=224` (chiều W) thay vì `3`.
+
+**Fix:** Kiểm tra shape ngay cell đầu: `print(x.shape)`. PyTorch dùng `(B, C, H, W)`. Nếu đến từ NumPy/OpenCV `(H, W, C)`, dùng `x = x.permute(0, 3, 1, 2)` để transpose. Đảm bảo `cv2.imread` trả BGR → chuyển sang RGB bằng `cv2.cvtColor(img, cv2.COLOR_BGR2RGB)`.
 </Callout>
 
-## Common mistakes & debugging checklist
+<Callout type="warning" title="Post-Mortem 2: normalize sai mean/std">
+**Triệu chứng:** Model pretrained ImageNet cho accuracy thấp bất thường (vd 30% thay vì 80%), loss không giảm, hoặc prediction bias về 1–2 class.
 
-<Callout type="danger" title="Mistake 1: channel order sai">
-PyTorch dùng `(batch, channel, height, width)`. Nhiều thư viện ảnh dùng `(height, width, channel)`. Nếu quên transpose, Conv2d sẽ lỗi hoặc học sai.
+**Fix:** Dùng đúng ImageNet mean/std: `mean=[0.485, 0.456, 0.406]`, `std=[0.229, 0.224, 0.225]`. Áp dụng `transforms.Normalize` **sau** `ToTensor()` (vì ToTensor đã scale [0,1]). Đảm bảo ảnh đã convert sang RGB trước khi normalize.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: normalize sai mean/std">
-Pretrained ImageNet models kỳ vọng normalization ImageNet. Nếu bạn không normalize đúng, performance giảm mạnh.
+<Callout type="warning" title="Post-Mortem 3: train từ đầu với dataset nhỏ">
+**Triệu chứng:** Val accuracy stuck thấp (random level), train loss giảm nhanh nhưng val loss tăng, model overfit ngay epoch 3.
+
+**Fix:** Đừng train từ đầu với < vài nghìn ảnh. Dùng pretrained ResNet18, freeze backbone, train chỉ head. Thêm augmentation phù hợp domain. Nếu cần train từ đầu, phải có ≥ 10k ảnh/class và regularization mạnh.
 </Callout>
 
-<Callout type="warning" title="Mistake 3: train từ đầu với dataset nhỏ">
-CNN train từ đầu cần nhiều data. Với vài trăm/vài nghìn ảnh, transfer learning thường tốt hơn rất nhiều.
+<Callout type="warning" title="Post-Mortem 4: validation metric không ổn định">
+**Triệu chứng:** Val accuracy nhảy sốc giữa 60% và 85% mỗi epoch, không tin được model.
+
+**Fix:** Validation transform phải deterministic — không random augmentation. Chỉ `Resize` + `ToTensor` + `Normalize`. Đảm bảo `model.eval()` khi validation để tắt BatchNorm/Dropout. Đặt seed để reproduce.
 </Callout>
 
-Checklist:
+**Checklist:**
 
 1. Input shape có `(B,C,H,W)` không?
 2. Số channel input có khớp Conv2d không?
@@ -268,6 +377,25 @@ Checklist:
 6. Dataset có class imbalance không?
 7. Augmentation có giữ label đúng không?
 
+---
+
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Train CNN từ scratch | Kiểm soát hoàn toàn kiến trúc, không phụ thuộc pretrained | Cần nhiều data (≥10k ảnh/class), train lâu, dễ overfit, accuracy thấp |
+| Transfer learning (ResNet18 pretrained) | Cần ít data, accuracy cao nhanh, train nhanh | Phụ thuộc ImageNet weights, domain khác nhiều cần unfreeze |
+| Dùng MaxPool | Giảm spatial size, tạo invariance, ít parameter | Mất thông tin vị trí, có thể bỏ sót detail quan trọng |
+| Thay MaxPool bằng stride=2 conv | Học được downsampling, đôi khi accuracy tốt hơn | Thêm parameter, train lâu hơn |
+| Augmentation mạnh (flip, rotation, color) | Tăng diversity, giảm overfit, cải thiện val | Có thể tạo label sai nếu domain không hợp, train lâu hơn |
+| Freeze backbone (train head) | Train nhanh, ít memory, ít overfit | Head nhỏ có thể không đủ, không học domain-specific |
+| Unfreeze toàn bộ (fine-tune) | Accuracy cao nhất, học domain-specific | Train lâu, memory cao, LR lớn → huấn spike, overfit |
+| AdaptiveAvgPool2d((1,1)) | Chấp nhận nhiều input size, ít parameter | Mất spatial detail, có thể giảm accuracy cho localization |
+| Dense CNN (VGG-style) | Đơn giản, dễ hiểu | Rất nhiều parameter, train chậm, memory cao |
+| ResNet (residual) | Train sâu, gradient ổn định | Cần BatchNorm, kiến trúc phức tạp hơn |
+
+---
+
 ## Practice exercises
 
 1. Tính output size cho Conv2d input 64, kernel 3, padding 1, stride 2.
@@ -275,6 +403,8 @@ Checklist:
 3. Thay MaxPool bằng stride=2 convolution, so sánh shape.
 4. Fine-tune ResNet18 cho 3 classes bằng cách freeze backbone.
 5. Thiết kế augmentation cho dataset ảnh hóa đơn — augmentation nào không nên dùng?
+
+---
 
 ## Knowledge check
 
@@ -285,6 +415,8 @@ Checklist:
 5. ResNet giải quyết vấn đề gì?
 6. Vì sao transfer learning hữu ích?
 7. PyTorch image tensor shape chuẩn là gì?
+
+---
 
 ## Answer key
 
@@ -302,6 +434,8 @@ Bài tập 1:
 out = floor((64 + 2*1 - 3)/2) + 1
     = floor(63/2) + 1 = 31 + 1 = 32
 ```
+
+---
 
 ## Mini-project: Custom image classifier
 
@@ -325,6 +459,8 @@ out = floor((64 + 2*1 - 3)/2) + 1
 - Có so sánh freeze vs fine-tune.
 - Có phân tích lỗi bằng ảnh thật.
 
+---
+
 ## Điểm cần nhớ
 
 - CNN tận dụng locality và weight sharing.
@@ -334,6 +470,8 @@ out = floor((64 + 2*1 - 3)/2) + 1
 - Transfer learning là default cho dataset nhỏ.
 - Data augmentation phải phù hợp domain.
 - Debug CNN bắt đầu từ shape `(B,C,H,W)` và normalization.
+
+---
 
 ## Next chapter bridge
 
