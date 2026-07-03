@@ -360,7 +360,7 @@ with torch.no_grad():
 <Callout type="warning" title="Pitfall 3: deep MLP không học gì (acc 0.50)">
 **Triệu chứng:** MLP 8+ layer train 200 epoch nhưng accuracy 0.50, loss không giảm.
 
-**Fix:** Mạng sâu không residual/normalization thường bị vanishing gradient. Thêm residual (`x + F(x)`) và LayerNorm. Đo gradient norm layer đầu — nếu < 1e-7, gradient vanish.
+**Fix:** Mạng sâu không residual/normalization thường bị vanishing gradient. Thêm residual (`x + F(x)`) và LayerNorm. Đo gradient norm layer đầu — nếu &lt; 1e-7, gradient vanish.
 </Callout>
 
 <Callout type="warning" title="Pitfall 4: dropout quá cao → underfit">

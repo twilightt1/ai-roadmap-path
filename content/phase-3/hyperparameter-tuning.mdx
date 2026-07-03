@@ -1,117 +1,125 @@
-Hyperparameter tuning là nghệ thuật và khoa học của việc chọn cấu hình model. Nếu parameter là thứ model học từ data, thì hyperparameter là thứ **bạn quyết định trước**: learning rate, max depth, regularization strength, batch size, number of trees. Chọn sai, model tốt có thể thành tệ; chọn đúng, baseline đơn giản có thể outperform model phức tạp.
+Hyperparameter tuning là nghệ thuật và khoa học chọn cấu hình model. Nếu parameter là thứ model học từ data, thì hyperparameter là thứ **bạn quyết định trước**: learning rate, max depth, regularization strength, batch size, number of trees. Chọn sai, model tốt có thể thành tệ; chọn đúng, baseline đơn giản có thể outperform model phức tạp. Tôi muốn bạn học cách tune có hệ thống: không đoán mò, không tune trên test set, biết khi nào dùng grid/random/Bayesian search, biết đọc validation curves, biết early stopping, biết log experiment, và biết dừng khi cải thiện không còn đáng cost. Nhiều team có model mạnh nhưng config suboptimal, lãng phí 30-50% compute cho performance kém hơn baseline được tune kỹ. Trong vai trò giảng viên AI, tôi muốn bạn nắm vững search-space design, log-scale cho magnitude params, early stopping vừa regularization vừa tiết kiệm, nested CV cho estimate honest, và vì sao tune trên test là bẫy phổ biến nhất của các team bị metrics "ảo" trên leaderboard nội bộ.
 
-Trong chương này, tôi muốn bạn học cách tune có hệ thống: không đoán mò, không tune trên test set, biết khi nào dùng grid/random/Bayesian search, biết đọc validation curves, biết early stopping, biết log experiment, và biết dừng khi cải thiện không còn đáng cost.
+Giả sử bạn xây churn classifier bằng RandomForest. Version A: `max_depth=None, min_samples_leaf=1` → train F1 0.99, val F1 0.62. Version B: `max_depth=8, min_samples_leaf=20` → train F1 0.78, val F1 0.75. Nhìn train score thì chọn A; hiểu tuning thì chọn B (generalize tốt hơn). Chênh lệch 13 điểm F1 trên val là khác biệt production rất lớn. Trong LLM fine-tuning, hyperparameter còn quan trọng hơn: LR quá cao → catastrophic forgetting; batch size quá nhỏ → gradient noisy, training không ổn; LoRA rank quá thấp → underfit; quá nhiều epochs → overfit trên data nhỏ; warmup sai → divergence ở bước đầu.
 
-Tuning đúng đắn là yếu tố thường bị xem nhẹ — nhiều team có model mạnh nhưng cấu hình suboptimal, lãng phí 30-50% compute cho performance kém hơn baseline được tune kỹ.
+---
 
-## Why this matters
+## 1. The Incident (Tình huống sự cố)
 
-Bạn có một churn model. Version A dùng RandomForest:
+<Callout type="danger" title="Báo cáo sự cố: Tuning trên test set 10 lần, «best» 0.84 nhưng production 0.73, mỗi run khác nhau">
+**Bối cảnh:** Một team tune XGBoost cho fraud classifier. Dataset 20k sample, 5% positive. Chia `train` / `test` 80/20 — bỏ quên `validation`. Tune bằng cách thử param вручную, mỗi lần fit rồi `score(X_test, y_test)`, giữ param có test F1 cao nhất. Không set `random_state`. Lặp 10 lần với param khác nhau, chọn best 0.84, ship.
+
+Không tách validation riêng. Tune trực tiếp trên test bằng trial-and-error (10 lần). Không set `random_state` cho split/model/XGBoost. Không log params/metric mỗi trial. Optimistic metric cuối menjadi "production benchmark".
+
+1. Mỗi lần thử param là một lần "mở" test → test 10 lần → test đã overfit bởi quá trình quyết định, metric 0.84 là metric của quá trình search, không phải model trên data mới.
+2. Không `random_state` → mỗi run thay split → metric dao động ±0.05; không biết khác biệt giữa 2 config là do hyperparam hay randomness.
+3. Production data mới (tháng sau) cho F1 0.73 → chênh 11 điểm → metric "ảo" vì selection bias.
+4. Không log mỗi trial → không thể tái lập "best config" — khi retrain trên data mới ra metric khác.
+5. Đặt trust vào 0.84 → không giữ holdout sạch → khi audit không có baseline trung thực để so.
+
+**Hậu quả:** Production underperform 11 điểm so với benchmark, leadership mất niềm tin vào ML. Mất 1 tuần trace: phải chia lại `train/val/test` (70/15/15), set seed cho mọi randomizer, log mỗi trial vào Optuna storage (SQLite), dùng nested CV cho estimate honest, mở test đúng 1 lần cuối. Best honest F1 trên val 0.79, test 0.80 — model vẫn tốt, chỉ là metric trước đó đã inflated.
+</Callout>
+
+Bài học rút ra: tuning phải có `train` để fit, `validation` để chọn hyperparam, `test` để đánh giá cuối đúng 1 lần. Mỗi lần dùng test để ra quyết định (chọn param, chọn model), test đã trở thành validation — optimistic bias. Luôn set `random_state` ở split, model và sampler để khác biệt giữa 2 config chỉ phụ thuộc hyperparam, không phụ thuộc randomness. Log mỗi trial vào Optuna/MLflow để reproducible; nếu không log, "best config" chỉ là tin đồn.
+
+---
+
+## 2. Architecture Blueprint (Tuning Pipeline)
 
 ```text
-max_depth=None, min_samples_leaf=1 → train F1 0.99, val F1 0.62
+                ┌──────────────────────────────────────────────────────────────┐
+                │              HYPERPARAMETER TUNING PIPELINE                  │
+                └──────────────────────────────────────────────────────────────┘
+
+   ┌──────────┐  ┌────────────┐  ┌──────────────┐  ┌─────────────┐  ┌──────────┐
+   │ train +  │─▶│ Search     │─▶│ k-fold CV    │─▶│ pick best   │─▶│ evaluate │
+   │ val (held│  │ space +    │  │ (train fold)│  │ params on   │  │  TEST    │
+   │  out)    │  │ strategy   │  │              │  │ mean score  │  │ (1 LẦN)  │
+   └──────────┘  └────────────┘  └──────────────┘  └─────────────┘  └──────────┘
+        │                                ▲                                  │
+        │                                │                                  ▼
+        │              ┌─────────────────┴────┐                       tài report
+        │              │ early stopping       │
+        │              │ (boosting/NN only)   │
+        │              └──────────────────────┘
+        ▼
+   ┌─────────────┐
+   │ log every   │  → Optuna storage / MLflow / W&B (params, score, seed, data hash, git commit)
+   │   trial     │
+   └─────────────┘
+
+   Rule: chỉ mở test 1 lần cuối, sau khi đã freeze params. CV trên train fold, không trên val.
 ```
 
-Version B:
+Key insight: tuning là 3 vòng l — search trên train fold, chọn trên val, mở test đúng 1 lần. Bất kỳ xâm phạm nào (tune trên test, không log, không seed) đều inflate metric và làm production fail benchmark.
 
-```text
-max_depth=8, min_samples_leaf=20 → train F1 0.78, val F1 0.75
-```
+---
 
-Nếu chỉ nhìn train score, bạn chọn A. Nếu hiểu tuning, bạn chọn B vì nó generalize tốt hơn — chênh lệch 13 điểm F1 trên val là khác biệt production rất lớn.
+## 3. Core intuition: tune có hệ thống thay vì đoán mò
 
-Trong LLM fine-tuning, hyperparameter còn quan trọng hơn:
+Tuning không phải "thử ngẫu nhiên đến khi tốt". Là quy trình:
 
-- learning rate quá cao → model quên kiến thức pretrained (catastrophic forgetting).
-- batch size quá nhỏ → gradient noisy, training không ổn.
-- LoRA rank quá thấp → underfit, không đủ capacity.
-- epochs quá nhiều → overfit trên data nhỏ, mất generalization.
-- warmup sai cách → training divergence vào bước đầu.
+1. Định nghĩa metric từ business cost (F1, recall@K, `business_loss = cost_FP * FP + cost_FN * FN`).
+2. Chọn search space hợp lý từ prior (không random trong region biết chắc tệ).
+3. Search có chiến lược (grid nhỏ, random, Bayesian — log scale cho magnitude).
+4. Early stopping cho boosting/NN.
+5. Chọn model trên validation/CV, không test.
+6. Mở test đúng 1 lần — không iterate.
 
-## Learning objectives
+<Callout type="info" title="Tuning ROI">
+Production câu hỏi không phải "model nào tốt nhất" mà "model nào tốt nhất cho compute budget". LogisticRegression tuned có thể F1 0.78 train 5s; XGBoost tuned F1 0.82 train 5 phút. Nếu SLA nghiêm và chỉ cần F1 > 0.80, LogisticRegression có thể phù hợp hơn — document trade-off.
+</Callout>
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Phân biệt parameter và hyperparameter,明白 chọn cái nào.
-2. Thiết kế search space hợp lý với prior knowledge.
-3. Dùng GridSearchCV, RandomizedSearchCV đúng cách.
-4. Hiểu Bayesian optimization/Optuna và khi nào dùng (TPE, CMA-ES).
-5. Áp dụng early stopping để tiết kiệm compute và tránh overfit.
-6. Hiểu nested CV để đánh giá tuning honest.
-7. Áp dụng validation curve, learning curve để phân tích.
-8. Tránh bẫy: tuning trên test, overfit validation, leakage trong CV.
-9. Log và so sánh experiments có hệ thống (MLflow, W&B, Optuna dashboard).
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Train/validation/test split.
-- Cross-validation (k-fold, stratified).
-- Metrics phù hợp bài toán (F1, AUC-ROC, MAE...).
-- Overfitting/underfitting, bias-variance tradeoff.
-- Scikit-learn estimator API và Pipeline.
-
-Nếu chưa vững, đọc lại chương 3.1 và 3.6 trước.
-
-## Parameter vs Hyperparameter
+## 4. Parameter vs Hyperparameter
 
 | Loại | Ví dụ | Ai học/chọn? | Cách tìm |
 |---|---|---|---|
 | Parameter | weights trong logistic regression, split thresholds trong tree, leaf values | model học từ data qua `.fit()` | gradient descent, closed form |
 | Hyperparameter | learning rate, regularization `C`, max depth, `k` clusters, batch size, n_estimators | bạn chọn trước training | grid, random, Bayesian search, heuristic |
 
-Ví dụ:
-
 ```python
 from sklearn.ensemble import RandomForestClassifier
 
-model = RandomForestClassifier(
-    n_estimators=300,      # hyperparameter
-    max_depth=8,           # hyperparameter
-    min_samples_leaf=10,   # hyperparameter
-    max_features="sqrt",   # hyperparameter
-    random_state=42,       # hyperparameter (reproducibility)
+rf = RandomForestClassifier(
+    n_estimators=300, max_depth=8, min_samples_leaf=10,
+    max_features="sqrt", random_state=42,
 )
-model.fit(X_train, y_train)
-# Sau .fit(): từng tree bên trong có split threshold/leaf values — parameters
+# n_estimators, max_depth, ... = hyperparameter
+# sau .fit(), split threshold & leaf value trong từng tree = parameters
 ```
 
-Cùng một model, hyperparameter khác = behavior khác. Cùng model với `C=0.001` vs `C=100` cho kết quả rất khác — đây là việc tuning phải giải.
+Cùng model, hyperparameter khác = behavior khác. `C=0.001` vs `C=100` cho kết quả rất khác.
 
-## Search space design
+---
 
-Trước khi chọn thuật toán search, hãy thiết kế search space tốt. **Search space tệ làm mọi phương pháp tệ** — grid exhaustive lãng phí, random waste samples, Bayesian fournir poor priors.
+## 5. Search space design
 
-Ví dụ RandomForest:
+Trước khi chọn thuật toán search, thiết kế search space tốt. Search space tệ làm mọi phương pháp tệ (grid lãng phí, random waste samples, Bayesian poor priors).
 
 ```python
-param_dist = {
+# RandomForest
+search_rf = {
     "n_estimators":      [100, 300, 500, 800],   # integer, monotonic in compute
-    "max_depth":          [None, 5, 10, 20],       # None commonly good
-    "min_samples_leaf":   [1, 5, 20],              # larger = simpler
-    "max_features":       ["sqrt", "log2", None],  # categorical
+    "max_depth":         [None, 5, 10, 20],      # None commonly good; larger = simpler
+    "min_samples_leaf":  [1, 5, 20],
+    "max_features":      ["sqrt", "log2", None],  # categorical
 }
-```
 
-Ví dụ Logistic Regression:
-
-```python
-param_dist = {
-    "C":            [0.001, 0.01, 0.1, 1, 10, 100],  # log scale!
-    "penalty":       ["l1", "l2"],
-    "solver":        ["liblinear", "saga"],
+# Logistic Regression
+search_lr = {
+    "C":        [0.001, 0.01, 0.1, 1, 10, 100],  # log scale!
+    "penalty":  ["l1", "l2"],
+    "solver":   ["liblinear", "saga"],
 }
-```
 
-Ví dụ XGBoost:
-
-```python
-param_dist = {
-    "n_estimators":      [100, 300, 500, 1000],
+# XGBoost
+search_xgb = {
+    "n_estimators":      [100, 300, 500],
     "learning_rate":     [0.01, 0.05, 0.1, 0.2],
     "max_depth":         [3, 5, 7, 9],
-    "subsample":         [0.7, 0.8, 0.9, 1.0],
+    "subsample":         [0.7, 0.8, 1.0],
     "colsample_bytree":  [0.7, 0.8, 1.0],
     "min_child_weight":  [1, 5, 10],
     "reg_lambda":        [0.01, 0.1, 1.0, 10.0],
@@ -119,21 +127,22 @@ param_dist = {
 ```
 
 <Callout type="tip" title="Dùng log scale cho tham số dạng magnitude">
-Learning rate, regularization `C`, weight decay, `reg_lambda` thường trải qua nhiều bậc độ lớn (1e-5 đến 1e2). Hãy search `[1e-4, 1e-3, 1e-2, 1e-1, 1.0]` thay vì linear `[0.1, 0.2, 0.3]` — log scale cover các vùng khác nhau về order of magnitude.
+LR, regularization `C`, weight decay, `reg_lambda` trải qua nhiều bậc độ lớn (1e-5 đến 1e2). Search `[1e-4, 1e-3, 1e-2, 1e-1, 1.0]` thay vì linear `[0.1, 0.2, 0.3]` — log scale cover các vùng khác nhau về order of magnitude.
 </Callout>
 
 ### Prior knowledge để giảm space
 
-- Tree: `max_depth > 20` thường overfit trên data nhỏ. Tránh.
-- Logistic: với NLP sparse TF-IDF, `C` từ 0.1 đến 10 thường hợp lý.
-- XGBoost: `learning_rate * n_estimators ≈` constant thường tốt. Nếu giảm lr, tăng n_est.
-- Với data nhỏ, regularization mạnh hơn; data lớn, regularization nhẹ hơn.
+- Tree: `max_depth > 20` thường overfit trên data nhỏ → tránh.
+- Logistic với NLP sparse TF-IDF: `C` 0.1..10 thường hợp lý.
+- XGBoost: `learning_rate * n_estimators ≈ constant` thường tốt; giảm lr thì tăng n_est.
+- Data nhỏ → regularization mạnh hơn; data lớn → nhẹ hơn.
+- Đừng random-search trong region biết chắc overfit.
 
-Đừng random-search trong region biết chắc overfit — bắt đầu với bao hàm định lượng hơn.
+---
 
-## Grid Search
+## 6. Grid Search
 
-Grid search thử **mọi tổ hợp** của hyperparameters.
+Grid search thử mọi tổ hợp của hyperparameters.
 
 ```python
 from sklearn.model_selection import GridSearchCV
@@ -147,192 +156,150 @@ pipe = Pipeline([
 ])
 
 param_grid = {
-    "model__C":      [0.01, 0.1, 1, 10, 100],
+    "model__C":       [0.01, 0.1, 1, 10, 100],
     "model__penalty": ["l1", "l2"],
     "model__solver":  ["liblinear"],
 }
-
-grid = GridSearchCV(
-    pipe, param_grid,
-    cv=5, scoring="f1", n_jobs=-1, refit=True,
-)
-grid.fit(X_train, y_train)
-
-print(grid.best_params_)
-print(grid.best_score_)
+gs = GridSearchCV(pipe, param_grid, cv=5, scoring="f1", n_jobs=-1, refit=True)
+gs.fit(X_train, y_train)
+print(gs.best_params_, gs.best_score_)
 ```
 
-Ưu điểm:
+Ưu điểm: đơn giản, exhaustive trong grid, dễ giải thích, deterministic (fixed seed), tốt khi search space nhỏ và mọi hyperparameter đều quan trọng. Nhược điểm: tổ hợp tăng factorial — 5×2×1 = 10 combos × CV=5 = 50 fits. Với 4 hyperparameters × 5 values = 5^4 = 625 × CV 5 = 3125 fits. Lãng phí compute nếu nhiều hyperparameter không quan trọng.
 
-- Đơn giản, exhaustive trong grid.
-- Dễ giải thích, deterministic (với fixed seed).
-- Tốt khi search space nhỏ và mỗi hyperparameter đều quan trọng.
+---
 
-Nhược điểm:
+## 7. Worked example by hand: grid size
 
-- **Tổ hợp tăng factorial / exponential**: 5 × 2 × 1 = 10 combos × CV=5 = 50 fits. Với 4 hyperparameters × 5 values mỗi cái = 5^4 = 625 × CV=5 = 3125 fits. Lãng phí compute.
-- Lãng phí nếu nhiều hyperparameter không quan trọng — grid thử mọi value trên dimension ít ảnh hưởng.
+Cho XGBoost tuning:
 
-## Worked example by hand: grid size
+- `learning_rate`: 4 values
+- `max_depth`: 5
+- `min_samples_leaf`: 3
+- `subsample`: 3
+- `reg_lambda`: 4
 
-Giả sử bạn tune XGBoost:
+Tính:
 
 ```text
-learning_rate:        4 values
-max_depth:            5 values
-min_samples_leaf:     3 values
-subsample:            3 values
-reg_lambda:           4 values
+Số tổ hợp: 4 * 5 * 3 * 3 * 4 = 720 combinations
+CV=5    : 720 * 5 = 3600 models
+30s mỗi : 3600 * 30s = 108,000s ≈ 30 giờ
+
+Tăng learning_rate lên 6, max_depth lên 7:
+6 * 7 * 3 * 3 * 4 = 1512  →  7560 fits  →  63 giờ
 ```
 
-Số tổ hợp:
+Kết luận: grid search không còn "rẻ" → random search và Bayesian xuất hiện.
 
-```text
-4 * 5 * 3 * 3 * 4 = 720 combinations
-```
+---
 
-Nếu CV=5, bạn train:
+## 8. Random Search
 
-```text
-720 * 5 = 3600 models
-```
-
-Nếu mỗi model mất 30 giây trên data vừa:
-
-```text
-3600 * 30s = 108,000s ≈ 30 giờ
-```
-
-Nếu tăng `learning_rate` lên 6 values và `max_depth` lên 7:
-
-```text
-6 * 7 * 3 * 3 * 4 = 1512 → 7560 fits → 63 giờ
-```
-
-Grid search không còn "rẻ". Đây là vì sao random search và Bayesian xuất hiện.
-
-## Random Search
-
-Random search **sample ngẫu nhiên** từ distribution. Nó thường hiệu quả hơn grid khi chỉ vài hyperparameter thật sự quan trọng — random thử nhiều giá trị khác nhau trên mỗi dimension thay vì exhaustive trên dimension ít quan trọng.
+Random search sample ngẫu nhiên từ distribution. Thường hiệu quả hơn grid khi chỉ vài hyperparameter thật sự quan trọng — random thử nhiều giá trị khác nhau trên mỗi dimension thay vì exhaustive trên dimension ít quan trọng.
 
 ```python
 from sklearn.model_selection import RandomizedSearchCV
-from scipy.stats import randint, loguniform, uniform
+from scipy.stats import loguniform, randint, uniform
 
 param_dist = {
-    "model__C":       loguniform(1e-3, 1e2),   # continuous log scale
-    "model__penalty": ["l1", "l2"],
+    "model__C":        loguniform(1e-3, 1e2),     # log-uniform cho C
+    "model__penalty":  ["l1", "l2"],
     "model__max_iter": randint(500, 3000),
 }
-
-search = RandomizedSearchCV(
-    pipe, param_dist,
-    n_iter=30, cv=5, scoring="f1",
+rs = RandomizedSearchCV(
+    pipe, param_dist, n_iter=30, cv=5, scoring="f1",
     random_state=42, n_jobs=-1, refit=True,
 )
-search.fit(X_train, y_train)
-print(search.best_params_)
-print(search.best_score_)
+rs.fit(X_train, y_train)
 ```
 
 ### Khi nào random tốt hơn grid
 
-If chỉ `C` quan trọng (1 dimension critical, 3 khác marginal), grid 5×5×5 thử mỗi `C` 5 lần — lãng phí. Random 25 iterations thử 25 giá trị `C` khác nhau, nhiều cơ hội hơn tìm ra optimum đúng.
-
-Hình dung: grid trải điểm đều trên 5 hyperparameter → chỉ 5 điểm trên mỗi axis. Random trải ngẫu nhiên → nhiều hơn 5 điểm trên mỗi axis với cùng số trials.
+Nếu chỉ `C` quan trọng (1 dim critical, 3 marginal): grid 5×5×5 thử mỗi `C` 5 lần — lãng phí. Random 25 iterations thử 25 giá trị `C` khác nhau. Grid 5 hyperparams → chỉ 5 điểm mỗi axis; random → nhiều hơn 5 điểm mỗi axis với cùng số trials.
 
 <Callout type="info" title="Random search có thể tốt hơn grid">
-Nếu chỉ learning rate quan trọng, grid search có thể lãng phí hàng trăm lần thử vào các dimension ít quan trọng. Random search thử nhiều giá trị khác nhau trên mỗi dimension. Paper kinh điển Bergstra & Bengio (2012) chứng minh random thường match grid với ít trials hơn.
+Nếu chỉ learning rate quan trọng, grid lãng phí hàng trăm trials vào dim ít quan trọng. Paper kinh điển Bergstra & Bengio (2012) chứng minh random thường match grid với ít trials hơn.
 </Callout>
 
 ### Distribution choices
 
-```python
-from scipy.stats import randint, loguniform, uniform
+- `randint(1, 100)`: integer uniform [1, 100).
+- `uniform(0, 1)`: float uniform [0, 1].
+- `loguniform(1e-4, 1)`: float log-uniform cho LR, C, weight_decay — sampling đều theo bậc độ lớn, không thiên về vùng lớn.
 
-randint(1, 100)       # integer uniform [1, 100)
-uniform(0, 1)         # float uniform [0, 1]
-loguniform(1e-4, 1)   # float log-uniform (cho LR, C, weight_decay)
-```
+---
 
-`loguniform` cho distribution donde bậc độ lớn cũ đều sampling — không thiên về vùng lớn.
+## 9. Bayesian Optimization với Optuna
 
-## Bayesian Optimization với Optuna
-
-Bayesian optimization dùng kết quả trial trước để chọn trial sau thông minh hơn — thay vì random, nó xây surrogate model (thường là Gaussian Process hoặc TPE) của objective function, rồi suggest hướng tốt hơn.
+Bayesian opt dùng kết quả trial trước để chọn trial sau thông minh hơn — xây surrogate model (Gaussian Process hoặc TPE) của objective, rồi suggest hướng tốt hơn.
 
 ```python
 import optuna
-from sklearn.model_selection import cross_val_score
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_score
 
 def objective(trial):
-    n_estimators      = trial.suggest_int("n_estimators", 100, 800)
-    max_depth         = trial.suggest_int("max_depth", 3, 20)
-    min_samples_leaf  = trial.suggest_int("min_samples_leaf", 1, 30)
-    max_features      = trial.suggest_categorical("max_features", ["sqrt", "log2", None])
-
-    model = RandomForestClassifier(
-        n_estimators=n_estimators,
-        max_depth=max_depth,
-        min_samples_leaf=min_samples_leaf,
-        max_features=max_features,
-        random_state=42, n_jobs=-1,
+    rf = RandomForestClassifier(
+        n_estimators     = trial.suggest_int("n_estimators", 100, 800),
+        max_depth        = trial.suggest_int("max_depth", 3, 20),
+        min_samples_leaf = trial.suggest_int("min_samples_leaf", 1, 30),
+        max_features     = trial.suggest_categorical("max_features", ["sqrt", "log2", None]),
+        random_state     = 42,
+        n_jobs            = -1,
     )
-    scores = cross_val_score(model, X_train, y_train, cv=3, scoring="f1")
-    return scores.mean()
+    return cross_val_score(rf, X_train, y_train, cv=3, scoring="f1").mean()
 
 study = optuna.create_study(direction="maximize")
 study.optimize(objective, n_trials=50)
-print(study.best_params)
-print(study.best_value)
+print(study.best_params, study.best_value)
 ```
 
 ### Ưu điểm Optuna
 
-- **TPE (Tree-structured Parzen Estimator)** — sampler mặc định; không cần Gaussian Process, scale tốt với dimension nhiều.
-- **Pruning**: dừng trial kém sớm (MedianPruner, HyperbandPruner). Rất hữu ích với neural network/LLM fine-tuning tốn compute — trial chạy 50% mà val metric kém thì prune.
+- **TPE (Tree-structured Parzen Estimator)** — sampler mặc định; không cần GP, scale tốt với nhiều dimension.
+- **Pruning**: dừng trial kém sớm (MedianPruner, HyperbandPruner) — hữu ích NN/LLM fine-tuning tốn compute.
 - **Dashboard** visualize Pareto front, history, parameter importance.
-- **Storage** persistent — SQLite, hàng trial log, tái dùng được.
+- **Storage** persistent — SQLite, tái dùng được.
 
-### CMA-ES, GridPruner, v.v.
+### Sampler khác
 
-Optuna hỗ trợ nhiều sampler:
-
-- **TPE** (default): tốt cho đa số trường hợp.
-- **CMA-ES**: tốt cho continuous search space, low dimension.
-- **NSGAII**: multi-objective optimization (ví dụ tune cho cả F1 và latency).
+- **TPE** (default): tốt cho đa số.
+- **CMA-ES**: continuous search space, low dimension.
+- **NSGAII**: multi-objective optimization (vd tune cả F1 và latency).
 
 ### So sánh tuning methods
 
 | Method | Số trials cần | Khi nào hợp |
 |---|---|---|
-| Grid | Cố định, lớn | Search space nhỏ, mọi dim quan trọng |
+| Grid | cố định, lớn | Search space nhỏ, mọi dim quan trọng |
 | Random | 50-200 | Baseline, ít prior |
-| Bayesian (TPE) | 50-200, thường ít hơn random | Khi objective tốn middling, có prior |
-| Bayesian + pruning | Còn ít hơn | NN/LLM, trial có thể prune sớm |
+| Bayesian (TPE) | 50-200, thường ít hơn random | Objective tốn middling, có prior |
+| Bayesian + pruning | còn ít hơn | NN/LLM, trial có thể prune sớm |
 
-## Early stopping
+---
 
-Early stopping dừng training khi validation **không cải thiện** trong `patience` rounds/epochs. Cả regularization (tránh overfit) lẫn tiết kiệm compute.
+## 10. Early stopping
+
+Dừng training khi validation không cải thiện trong `patience` rounds/epochs — vừa regularization (tránh overfit) vừa tiết kiệm compute.
+
+### Loop thủ công
 
 ```python
-best_score = -float("inf")
-patience = 5
+best_score = -np.inf
 bad_epochs = 0
+patience = 10
 
 for epoch in range(100):
     train_one_epoch()
-    val_score = evaluate()
-
-    if val_score > best_score:
-        best_score = val_score
+    score = evaluate(val)
+    if score > best_score:
+        best_score = score
         bad_epochs = 0
         save_checkpoint()
     else:
         bad_epochs += 1
         if bad_epochs >= patience:
-            print(f"Early stop at epoch {epoch}")
             break
 ```
 
@@ -342,106 +309,103 @@ for epoch in range(100):
 from xgboost import XGBClassifier
 
 xgb = XGBClassifier(
-    n_estimators=1000,           # max — early stopping sẽ cắt
-    learning_rate=0.05,
-    eval_metric="logloss",
-    early_stopping_rounds=20,
+    n_estimators=1000, learning_rate=0.05,
+    eval_metric="logloss", early_stopping_rounds=20,
 )
-xgb.fit(
-    X_train, y_train,
-    eval_set=[(X_val, y_val)],
-    verbose=False,
-)
-print("best_iteration:", xgb.best_iteration)
+xgb.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+print(xgb.best_iteration)
+# Sau khi fit, chỉ giữ best_iteration + 1 trees để deploy
 ```
 
-Tùy version XGBoost, early stopping truyền qua constructor (`early_stopping_rounds=`) hoặc callback. Sau fit, `best_iteration` cho biết vòng tối ưu — chỉ giữ `best_iteration + 1` trees để deploy.
+Tùy version XGBoost, truyền `early_stopping_rounds` qua constructor hoặc callback. Sau fit chỉ giữ `best_iteration + 1` trees để deploy.
 
 <Callout type="warning" title="Early stopping cần validation đúng">
-Nếu validation bị leakage hoặc không đại diện production, early stopping sẽ chọn sai thời điểm. Validation set phải phản ánh deployment distribution. Time-series phải có val theo thời gian, distribution shift sẽ làm early stopping chọn model kém trên production.
+Nếu validation leakage/không đại diện production, early stopping chọn sai thời điểm. Validation phải phản ánh deployment distribution. Time-series phải có val theo thời gian; distribution shift làm early stopping chọn model kém trên production.
 </Callout>
 
-## Nested cross-validation — đánh giá tuning honest
+---
 
-Nếu bạn tune hyperparameters bằng CV, rồi report CV score làm kết quả — điểm này bị **optimistic bias** vì hyperparameters đã fit val folds.
+## 11. Nested cross-validation — đánh giá tuning honest
 
-**Nested CV**: inner loop tune hyperparameters (CV trên train folds); outer loop đánh giá tuned model (CV trên held-out outer fold).
+Nếu tune hyperparameters bằng CV rồi report CV score → bị **optimistic bias** vì hyperparameters đã fit val folds.
+
+Nested CV: inner loop tune hyperparams (CV trên train folds); outer loop đánh giá tuned model (CV trên held-out outer fold).
 
 ```python
-from sklearn.model_selection import cross_val_score, GridSearchCV, KFold
+from sklearn.model_selection import KFold, GridSearchCV, cross_val_score
 
 inner_cv = KFold(n_splits=3, shuffle=True, random_state=42)
 outer_cv = KFold(n_splits=5, shuffle=True, random_state=42)
 
 grid = GridSearchCV(model, param_grid, cv=inner_cv, scoring="f1")
 nested_score = cross_val_score(grid, X, y, cv=outer_cv, scoring="f1")
-
-print("nested CV F1:", nested_score.mean(), "±", nested_score.std())
+print(nested_score.mean(), "±", nested_score.std())
 ```
 
-Nested CV cho estimate honest của performance sau tuning. Vẫn cần một test set riêng để report cho stakeholder.
+Nested CV cho estimate honest của performance sau tuning. Vẫn cần test set riêng để report cho stakeholder.
 
-## Validation curve — phân tích một hyperparameter
+---
 
-Validation curve vẽ train/val score theo giá trị của một hyperparameter — cho biết sensitivity và vùng optimum.
+## 12. Validation curve — phân tích một hyperparameter
+
+Vẽ train/val score theo giá trị của một hyperparameter — cho biết sensitivity và vùng optimum.
 
 ```python
-from sklearn.model_selection import validation_curve
 import numpy as np
+from sklearn.model_selection import validation_curve
+from sklearn.linear_model import LogisticRegression
 
 param_range = [0.001, 0.01, 0.1, 1, 10, 100]
 train_scores, val_scores = validation_curve(
-    LogisticRegression(max_iter=1000),
-    X_train, y_train,
-    param_name="C", param_range=param_range,
-    cv=5, scoring="f1",
+    LogisticRegression(max_iter=1000), X_train, y_train,
+    param_name="C", param_range=param_range, cv=5, scoring="f1",
 )
-# Plot mean ± std của train vs val theo log(C)
+# plot mean ± std của train vs val theo log(C)
 ```
 
 Diễn giải:
 
 - Val tăng rồi giảm → có sweet spot.
-- Val tăng dần rồi plateau → regularization càng yếu càng tốt (có thể data đủ lớn).
+- Val tăng dần rồi plateau → regularization càng yếu càng tốt (data đủ lớn).
 - Val giảm dần → overfit khi regularization giảm.
 
 Dùng validation curve trước random search full để thu hẹp range.
 
-## Tuning workflow giáo sư khuyên dùng
+---
 
-1. **Định nghĩa metric trước** dựa trên business cost (F1, recall@K, business_loss = cost_FP * FP + cost_FN * FN).
-2. **Tạo baseline đơn giản** — score biết trước (LogisticRegression default,ultan constant predictor).
-3. **Chọn search space nhỏ nhưng hợp lý** dựa trên prior.
-4. **Random search trước** (30-50 trials), grid refinement sau nếu thấy vùng tốt.
-5. **Log mọi trial**: params, score, seed, data version, code commit.
-6. **Kiểm tra overfit** bằng train vs val score của từng trial.
-7. **Chọn model trên validation/CV**, không trên test.
-8. **Early stopping** cho boosting/NN.
-9. **Đánh giá test một lần cuối**, không iterate.
-10. **Nếu best hyperparameter ở biên search range**: mở rộng range và chạy thêm.
+## 13. Tuning workflow giáo sư khuyên dùng
+
+1. Định nghĩa metric trước dựa trên business cost (F1, recall@K, `business_loss = cost_FP * FP + cost_FN * FN`).
+2. Tạo baseline đơn giản — score biết trước (LogisticRegression default, constant predictor).
+3. Chọn search space nhỏ nhưng hợp lý dựa trên prior.
+4. Random search trước (30-50 trials), grid refinement sau nếu vùng tốt.
+5. Log mọi trial: params, score, seed, data version, code commit.
+6. Kiểm tra overfit bằng train vs val score từng trial.
+7. Chọn model trên validation/CV, không trên test.
+8. Early stopping cho boosting/NN.
+9. Đánh giá test một lần cuối, không iterate.
+10. Nếu best hyperparameter ở biên range → mở rộng range và chạy thêm.
 
 <Callout type="danger" title="Test set không phải leaderboard nội bộ">
-Nếu team chạy test set mỗi ngày để chọn model, test set đã bị overfit bởi quá trình quyết định của team. Hãy tạo validation/leaderboard nội bộ riêng và giữ test cuối cùng thật sự sạch — chỉ mở khi đã chọn xong tất cả.
+Nếu team chạy test mỗi ngày để chọn model, test đã bị overfit bởi quá trình quyết định. Tạo validation/leaderboard nội bộ riêng, giữ test cuối thật sự sạch — chỉ mở khi đã chọn xong.
 </Callout>
 
-## Logging experiment
+---
 
-Trong production tuning, log mọi trial để reproducible và so sánh được:
+## 14. Logging experiment
+
+Trong production tuning, log mọi trial để reproducible và so sánh.
 
 ```python
-# Optuna tự log storage
+import optuna
 study = optuna.create_study(
     direction="maximize",
     storage="sqlite:///experiments.db",
     study_name="churn_xgb_v2",
 )
-```
 
-Hoặc dùng MLflow / Weights & Biases:
-
-```python
+# hoặc MLflow
 import mlflow
-
 mlflow.set_experiment("churn_tuning")
 with mlflow.start_run():
     mlflow.log_params(study.best_params)
@@ -449,29 +413,52 @@ with mlflow.start_run():
     mlflow.sklearn.log_model(best_model, "model")
 ```
 
-Quan trọng:
+Quan trọng cần log: **data version** (DVC hoặc hash dataset); **code version** (git commit); **random seed** (split, model, sampler); **hyperparameters** + metric + score train/val; **compute resource** (time, memory, GPU).
 
-- **Data version** — dùng DVC hoặc hash dataset.
-- **Code version** — git commit của experiment.
-- **Random seed** — cho split, model, sampler.
-- **Hyperparameters** + metric + score train/val.
-- **Compute resource** — time, memory, GPU.
+---
 
-## Implementation lab: RandomizedSearchCV end-to-end
+## 15. Common mistakes
+
+<Callout type="warning" title="Mistake 1: search space quá rộng">
+Phần lớn trial vô nghĩa. Bắt đầu range hợp lý từ kinh nghiệm/docs; mở rộng nếu best ở biên; nếu best ở giữa range thì refine quanh đó.
+</Callout>
+
+<Callout type="warning" title="Mistake 2: không fixed random seed">
+Kết quả dao động, không biết khác biệt do hyperparameter hay randomness. Luôn set `random_state` ở split/model/search.
+</Callout>
+
+<Callout type="danger" title="Mistake 3: optimize metric sai">
+Business cần recall fraud mà optimize accuracy → chọn model sai. Metric từ cost thực tế; FP $5, FN $100 → build score function phản ánh.
+</Callout>
+
+<Callout type="warning" title="Mistake 4: tune trên test set">
+Test trở thành validation, số cuối optimistic. Tune trên train/val/CV, test chỉ mở cuối một lần.
+</Callout>
+
+<Callout type="warning" title="Mistake 5: evaluate tuning với cùng CV không nested">
+Report CV là optimistic. Dùng nested CV hoặc hold-out test riêng.
+</Callout>
+
+<Callout type="warning" title="Mistake 6: leakage trong CV tuning">
+Preprocessing outside Pipeline fit trên toàn data → CV lệch. Pipeline trong search đảm bảo scaler/vectorizer fit chỉ trên train fold của từng fold.
+</Callout>
+
+---
+
+## Implementation Playbook: RandomizedSearchCV end-to-end
+
+Pipeline tuning đầy đủ trên imbalance tabular. Chạy được, đo được, sửa được.
 
 ```python
 from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, roc_auc_score
+from sklearn.metrics import classification_report, roc_auc_score, f1_score
 from scipy.stats import randint
 
 X, y = make_classification(
-    n_samples=5000,
-    n_features=20,
-    n_informative=8,
-    weights=[0.85, 0.15],   # 15% positive
-    random_state=42,
+    n_samples=5000, n_features=20, n_informative=8,
+    weights=[0.85, 0.15], random_state=42,
 )
 
 X_train, X_temp, y_train, y_temp = train_test_split(
@@ -487,117 +474,188 @@ param_dist = {
     "min_samples_leaf": randint(1, 30),
     "max_features":     ["sqrt", "log2"],
 }
-
-search = RandomizedSearchCV(
+rs = RandomizedSearchCV(
     RandomForestClassifier(random_state=42, n_jobs=-1),
-    param_dist,
-    n_iter=30, scoring="f1", cv=3,
+    param_dist, n_iter=30, scoring="f1", cv=3,
     random_state=42, n_jobs=-1, refit=True,
 )
-search.fit(X_train, y_train)
-print("best params:", search.best_params_)
-print("best CV   :", search.best_score_)
+rs.fit(X_train, y_train)
+print("best:", rs.best_params_, "CV F1:", rs.best_score_)
 
-# Hold-out val để double-check
-proba_val = search.best_estimator_.predict_proba(X_val)[:, 1]
-print("val F1    :", f1_score(y_val, (proba_val >= 0.5).astype(int)))
+# Double-check trên hold-out val (không dùng test)
+proba_val = rs.predict_proba(X_val)[:, 1]
+print("val F1:", f1_score(y_val, (proba_val >= 0.5).astype(int)))
 
-# Test chỉ một lần cuối với best estimator
-proba_test = search.best_estimator_.predict_proba(X_test)[:, 1]
+# Mở test đúng 1 LẦN cuối
+proba_test = rs.predict_proba(X_test)[:, 1]
 y_pred = (proba_test >= 0.5).astype(int)
 print(classification_report(y_test, y_pred))
-print("AUC-ROC  :", roc_auc_score(y_test, proba_test))
+print("AUC-ROC:", roc_auc_score(y_test, proba_test))
 ```
 
-Expected interpretation:
+Expected: `best_score_` = CV score trên train folds (không phải val/test). Val F1 nên gần ballpark CV — lệch nhiều = distribution issue. Test score một lần duy nhất — thấp hơn CV nhiều = overfit selection hoặc distribution shift.
 
-- `best_score_` là CV score trên train folds — không phải val hay test.
-- Val F1 nên gần ballpark với CV — nếu lệch nhiều, có distribution issue.
-- Test score **một lần duy nhất** — nếu thấp hơn CV rất nhiều, có overfit selection hoặc distribution shift.
+**Extend lab milestones:**
 
-## Common mistakes & debugging checklist
+1. Không set `random_state` ở `RandomizedSearchCV` — chạy 3 lần, đo std của `best_score_` để thấy randomness.
+2. Thay `cv=3` bằng `cv=10` — đo độ ổn định của `best_score_` (std giữa các fold).
+3. Thay `n_iter=30` bằng `n_iter=10` và `n_iter=100` — đo cải thiện của best F1 theo số trial.
+4. Thay Random Forest bằng `XGBClassifier` + early_stopping_rounds=20, eval_set trên val — đo `best_iteration`.
+5. Dùng Optuna TPE thay `RandomizedSearchCV` với `n_trials=50` — đo F1 cuối và thời gian.
+6. Thay scoring="f1" bằng scoring="roc_auc" — đo khác biệt hyperparam tối ưu và recall class 1 trên test.
+7. Chạy nested CV (`cross_val_score(rs, X, y, cv=5)`) — so mean ± std với non-nested; chứng minh optimistic bias.
 
-<Callout type="warning" title="Mistake 1: search space quá rộng">
-Nếu search quá rộng, phần lớn trial vô nghĩa. Bắt đầu bằng range hợp lý từ kinh nghiệm/model docs, rồi mở rộng nếu thấy best ở biên. Ngược lại, nếu best ở giữa range, range đủ — refine quanh đó.
+---
+
+## Empirical lab: grid vs random vs Bayesian, n_iter, scoring
+
+**Goal:** Lượng hóa tác động của chiến lược search, số trials, và metric chọn lên best F1 cuối và thời gian.
+
+**Setup:** `make_classification` imbalance 15% positive, 5000 sample, 20 feature. 70/15/15 split stratified. RandomForest baseline. Mỗi trial chạy 3 lần lấy trung bình.
+
+**Steps:**
+
+1. Baseline: Random search `n_iter=30`, scoring="f1", `cv=5` (run trên Playbook).
+2. Thay đổi lần lượt một biến: chiến lược search, `n_iter`, scoring, CV fold.
+3. Ghi best CV F1, val F1, test F1, thời gian (s), failure mode (selection bias / chậm / overfit).
+4. Lặp 3 lần, lấy trung bình.
+
+**Record:**
+
+| Trial | Task | Tool | Latency | Cost | Quality | Failure mode |
+|---|---|---|---|---|---|---|
+| T1 | Random search n_iter=30 + cv=5 + F1 | sklearn RS | ~30s | ~$0 | val 0.78, test 0.77 | ổn định |
+| T2 | Random search n_iter=10 + cv=5 + F1 | sklearn RS | ~10s | ~$0 | val 0.75 | thiếu trial, chưa đủ |
+| T3 | Random search n_iter=100 + cv=5 + F1 | sklearn RS | ~100s | ~$0 | val 0.79 | biên giảm dần |
+| T4 | Grid search 4^4=256 combos + cv=5 + F1 | sklearn GSearch | ~256s | ~$0 | val 0.78 | exhaustive, chậm, không hơn random |
+| T5 | Optuna TPE n_trials=30 + cv=3 + F1 | optuna | ~25s | ~$0 | val 0.79 | ít trial hơn random, đạt tương đương |
+| T6 | Optuna TPE + pruning MedianPruner | optuna | ~20s | ~$0 | val 0.78 | prune trial kém sớm |
+| T7 | Random search + cv=2 + F1 | sklearn RS | ~10s | ~$0 | val 0.74 | CV không ổn, std cao |
+| T8 | Random search + cv=5 + scoring=roc_auc | sklearn RS | ~30s | ~$0 | val ROC 0.88, val F1 0.70 | optimize khác metric → F1 giảm |
+| T9 | Random search + scoring=recall | sklearn RS | ~30s | ~$0 | val recall 0.92, F1 0.65 | recall cao nhưng precision giảm |
+| T10 | Nested CV (outer=5, inner=3) | sklearn RS | ~150s | ~$0 | honest 0.75 | non-nested optimistic 0.78 |
+
+Ghi chú: số liệu trên là ước lượng điển hình — bạn cần chạy và ghi lại con số thực tế. Pattern quan trọng: T4 (grid) cho thấy không vượt random khi chỉ vài dim quan trọng. T5-T6 (Bayesian) thường đạt tương đương random với ít trial. T8-T9 cho thấy đổi metric đổi hyperparam tối ưu. T10 cho thấy nested CV honest thấp hơn non-nested 0.03 — đây là optimistic bias.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Post-Mortem 1: CV score chênh test score nhiều">
+**Triệu chứng:** CV mean F1 0.85, test F1 0.65.
+
+**Fix:** (a) nested CV — non-nested optimistic bias vì hyperparam fit val fold; (b) kiểm leakage trong CV (GroupKFold/TimeSeries chưa dùng, preprocessing ngoài Pipeline); (c) val/test distribution lệch train (concept drift); (d) tune quá nhiều trial trên val — val cũng overfit, cần hold-out riêng.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: không fixed random seed">
-Không set seed làm kết quả dao động, khó so sánh trial — không biết sự khác là do hyperparameter hay randomness. Luôn set `random_state` ở split/model/search khi có thể.
+<Callout type="danger" title="Post-Mortem 2: metric «best» không tái lập">
+**Triệu chứng:** Best params lần này ra F1 0.84, lần chạy sau (cùng params) ra 0.71.
+
+**Fix:** Không set `random_state` ở split/model/sampler. Khác biệt là randomness, không phải hyperparam. Set seed cho `train_test_split`, model (`random_state=42`), sampler (`random_state=42`), Optuna (`sampler=TPESampler(seed=42)`).
 </Callout>
 
-<Callout type="danger" title="Mistake 3: optimize metric sai">
-Nếu business cần recall fraud cao mà bạn optimize accuracy, tuning sẽ chọn model sai. Metric phải đến từ cost thực tế — nếu FP cost $5 và FN cost $100, build score function biểu diễn được điều đó.
+<Callout type="warning" title="Post-Mortem 3: best params nằm ở biên range">
+**Triệu chứng:** Best `max_depth = 20` (biên trên), best `learning_rate = 0.001` (biên dưới).
+
+**Fix:** Best có thể còn tốt hơn ngoài biên — mở rộng range theo hướng đó và chạy thêm. Phản hồi của search đang bị truncate bởi search space không đủ rộng, không phải thuật toán dừng.
 </Callout>
 
-<Callout type="warning" title="Mistake 4: tune trên test set">
-Nếu xem test score để chọn giữa trials, test đã trở thành validation — số cuối bị optimistic. Tune trên train/val/CV, test chỉ mở cuối cùng một lần.
+<Callout type="danger" title="Post-Mortem 4: optimize metric sai, production unlike">
+**Triệu chứng:** Optimize accuracy → deploy recall fraud chỉ 30%, leadership phàn nàn.
+
+**Fix:** Metric phải từ business cost. Fraud: miss $100, FP $5 → optimize `business_loss = 100*FN + 5*FP`, hoặc tune với scoring="recall"/F2. Đừng optimize accuracy rồi mới "tune threshold" sau — tune luôn theo business cost.
 </Callout>
 
-<Callout type="warning" title="Mistake 5: evaluate tuning với cùng CV không nested">
-Tune hyperparameters bằng CV, report score CV = optimistic bias. Dùng nested CV cho estimate honest, hoặc giữ hold-out test riêng.
+<Callout type="warning" title="Post-Mortem 5: tuning cải thiện rất ít vs default">
+**Triệu chứng:** Default LogisticRegression F1 0.78, sau tuning 30h compute vẫn 0.79.
+
+**Fix:** Có thể (a) baseline đã tốt, data là bottleneck — thu thập thêm feature/data thay vì tuning; (b) search space quá hẹp/chứa vùng đã tối ưu; (c) metric không phân biệt được giữa config; (d) nên thử model khác (boosting/NN) thay vì tune thêm. Document ROI và dừng.
 </Callout>
 
-<Callout type="warning" title="Mistake 6: leakage trong CV tuning">
-Nếu preprocessing outside Pipeline và fit trên toàn data, CV score sẽ lệch. **Pipeline trong search** đảm bảo scaler/vectorizer fit chỉ trên train fold của từng fold.
-</Callout>
-
-Checklist:
+**Checklist:**
 
 1. Metric đã phù hợp business chưa?
-2. Search space có log scale cho tham số magnitude không?
-3. Best params có nằm sát biên search space không? (Mở rộng.)
-4. CV std có cao không? (Mở rộng CV hoặc stratified, hoặc data ít.)
-5. Có overfit validation do thử quá nhiều không? (Dùng nested CV.)
-6. Test set đã được giữ riêng chưa?
+2. Search space có log scale cho magnitude params không?
+3. Best params có nằm sát biên không? (Mở rộng.)
+4. CV std cao không? (Mở rộng CV / stratified / data ít.)
+5. Có overfit validation do thử quá nhiều? (Nested CV.)
+6. Test set đã giữ riêng chưa?
 7. Trial có được log để tái lập không (params, seed, data hash, code commit)?
+
+---
+
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Grid search | exhaustive, deterministic, dễ giải thích | tổ hợp tăng factorial, tốn compute không cần |
+| Random search | baseline mạnh, log-scale cho magnitude | có thể bỏ sót sweet spot nếu n_iter quá ít |
+| Bayesian (TPE) | dùng history, ít trial hơn random | cần setup Optuna/storage, vẫn hội tụ local |
+| Bayesian + pruning | dừng trial kém sớm, tiết kiệm compute (NN/LLM) | có thể prune sớm trial chậm khởi động |
+| Early stopping (boosting/NN) | regularization tự nhiên, tiết kiệm compute | cần eval_set không leakage, patience phải tuning |
+| Nested CV | estimate honest sau tuning | tốn `inner × outer` lần fit, chậm |
+| Validation curve | thu hẹp range trước search full | chỉ cho 1 hyperparam, không capture interaction |
+| Scoring F1 (vs accuracy) | hợp imbalance, cân bằng P/R | thay đổi hyperparam tối ưu |
+| Scoring recall / F2 | tối ưu cho miss-positive đắt | precision giảm, FP nhiều |
+| Log scale cho C / lr | sampling đều theo bậc độ lớn | phải biết biến nào là magnitude |
+| Set random_state | reproducible, khác biệt = hyperparam | có thể che giấu variance thật của model |
+| Optuna storage (SQLite/MLflow) | reproducible, so sánh trial, dashboard | setup ban đầu, storage phình to theo thời gian |
+| Hold-out test (vs CV score) | metric cuối trung thực, không optimistic | chỉ chạy 1 lần, không tune trên nó được |
+
+---
 
 ## Practice exercises
 
-1. Một grid có 5 giá trị LR, 4 giá trị depth, 3 giá trị dropout, CV=5. Tổng bao nhiêu model train? Nếu mỗi model 45s, hết bao nhiêu giờ?
-2. Vì sao random search thường tốt hơn grid search khi có nhiều hyperparameter nhưng chỉ vài quan trọng?
-3. Thiết kế search space cho LogisticRegression (C, penalty, solver) với log scale, giải thích vì sao.
-4. Viết Optuna objective cho `KNeighborsClassifier` tune `n_neighbors` (3-50) và `weights` (uniform/distance), dùng 5-fold CV F1.
+1. Grid có 5 giá trị LR, 4 depth, 3 dropout, CV=5. Tổng bao nhiêu model? Mỗi model 45s → bao nhiêu giờ?
+2. Vì sao random search thường tốt hơn grid khi nhiều hyperparameter nhưng chỉ vài quan trọng?
+3. Thiết kế search space cho LogisticRegression (C, penalty, solver) log scale, giải thích.
+4. Viết Optuna objective cho `KNeighborsClassifier` tune `n_neighbors` (3-50) và `weights` (uniform/distance), 5-fold CV F1.
 5. Giải thích vì sao early stopping vừa regularization vừa tiết kiệm compute.
-6. Viết code nested CV cho RandomForest tune `max_depth`, report mean ± std F1 của outer folds.
-7. Tại sao tune threshold trên test set là sai, dù chỉ là một hyperparameter đơn? Quy trình đúng?
-8. Vẽ validation curve cho `C` của LogisticRegression từ 0.001 đến 100, log scale. Diễn giải hình dáng.
+6. Viết code nested CV cho RandomForest tune `max_depth`, report mean ± std F1 outer folds.
+7. Tại sao tune threshold trên test set sai dù chỉ một hyperparam? Quy trình đúng?
+8. Vẽ validation curve cho `C` của LogisticRegression 0.001-100 log scale. Diễn giải hình dáng.
+
+---
 
 ## Knowledge check
 
 1. Hyperparameter khác parameter thế nào?
-2. Grid search có nhược điểm chính gì?
-3. Khi nào nên dùng loguniform?
-4. Bayesian optimization dùng thông tin gì để chọn trial tiếp theo?
+2. Nhược điểm chính của grid search?
+3. Khi nào dùng loguniform?
+4. Bayesian optimization dùng thông tin gì để chọn trial kế?
 5. Early stopping theo dõi metric nào? Cần gì ở validation?
 6. Vì sao không tune trên test set?
-7. Nếu best hyperparameter nằm ở biên search range, bạn nên làm gì?
-8. Nested CV giải quyết vấn đề gì? Có thay được test set không?
-9. Optuna pruning là gì và hữu ích cho loại task nào?
-10. Validation curve cho biết gì? Khác learning curve ở chỗ nào?
+7. Best hyperparam ở biên range → làm gì?
+8. Nested CV giải quyết vấn đề gì? Thay được test set không?
+9. Optuna pruning là gì, hữu ích cho task nào?
+10. Validation curve cho biết gì? Khác learning curve chỗ nào?
+
+---
 
 ## Answer key
 
-1. Parameter học từ data qua `.fit()`; hyperparameter do ta chọn trước training.
+1. Parameter học từ data qua `.fit()`; hyperparameter ta chọn trước training.
 2. Combinatorial explosion (factorial growth), tốn compute; wasteful khi nhiều dim không quan trọng.
-3. Với tham số trải qua nhiều bậc độ lớn (LR, C, weight_decay, reg_lambda) — sampling đều theo bậc tránh thiên về vùng lớn.
-4. Kết quả/score của các trial trước — TPE dựng distribution của "good" vs "bad" params, suggest điểm có probability tốt cao.
+3. Tham số trải qua nhiều bậc độ lớn (LR, C, weight_decay, reg_lambda) — sampling đều theo bậc tránh thiên về vùng lớn.
+4. Kết quả/score trial trước — TPE dựng distribution "good" vs "bad" params, suggest điểm có prob tốt cao.
 5. Validation metric/loss. Cần validation không leakage, đại diện production distribution.
-6. Vì test sẽ trở thành validation, metric cuối bị optimistic (selection bias).
-7. Mở rộng range theo hướng đó và chạy thêm search — best có thể còn tốt hơn ngoài biên.
-8. Giải quyết optimistic bias khi tune bằng CV. Không thay được test set — vẫn cần test cuối cùng cho stakeholder.
-9. Pruning dừng trial kém sớm (trước khi hết budget), dựa trên intermediate iterations. Hữu ích cho NN/LLM/training dài — tiết kiệm compute rất nhiều.
-10. Validation curve: score theo giá trị một hyperparameter — cho sweet spot/sensitivity. Learning curve: score theo train size — cho biết cần thêm data hay model phức tạp hơn.
+6. Test sẽ thành validation, metric cuối optimistic (selection bias).
+7. Mở rộng range theo hướng đó và chạy thêm — best có thể còn tốt hơn ngoài biên.
+8. Giải quyết optimistic bias khi tune bằng CV. Không thay được test set — vẫn cần test cuối cho stakeholder.
+9. Pruning dừng trial kém sớm (trước hết budget), dựa intermediate iterations. Hữu ích NN/LLM/training dài — tiết kiệm compute nhiều.
+10. Validation curve: score theo giá trị 1 hyperparameter — sweet spot/sensitivity. Learning curve: score theo train size — cho biết cần thêm data hay model phức tạp hơn.
 
-Bài tập 1:
+Bài tập 1 (worked):
 
 ```text
 5 * 4 * 3 * 5 = 300 model trainings
 300 * 45s = 13,500s ≈ 3.75 giờ
 ```
 
+---
+
 ## Mini-project: Tuning leaderboard
 
-**Task:** Tạo một mini leaderboard tuning cho classifier — so sánh model families với fair search budget.
+**Task:** Tạo mini leaderboard tuning cho classifier — so sánh model families với fair search budget.
 
 **Dataset:** `make_classification` imbalance 15% positive, hoặc dataset churn/spam public.
 
@@ -606,38 +664,42 @@ Bài tập 1:
 **Deliverables:**
 
 - Search space cho từng model (log scale cho C/learning_rate).
-- RandomizedSearchCV hoặc Optuna trials (sốTrial = 30-50 mỗi model, dùng cùng số budget).
+- RandomizedSearchCV hoặc Optuna trials (số trial 30-50 mỗi model, cùng số budget).
 - Bảng top 10 trials: model, params, CV score (mean ± std), val score, test score.
 - Validation curve cho 1 hyperparameter quan trọng của model tốt nhất.
-- Nhận xét: model nào tốt nhất? Sự khác biệt có đáng so với complexity không? Có best param ở biên không?
+- Nhận xét: model nào tốt nhất? Khác biệt có đáng so với complexity không? Best param ở biên không?
 - Final decision: chọn model nào và threshold tuning trên validation.
 
 **Success criteria:**
 
 - Test set chỉ dùng cuối, một lần.
 - Có seed cho mọi randomizer.
-- Có metric phù hợp imbalance (F1 hoặc PR-AUC, không accuracy).
-- Có phân tích overfit/underfit dựa trên train vs val gap.
-- Có decision cuối cùng dựa trên validation/CV + test một lần, không iterate.
+- Metric phù hợp imbalance (F1 hoặc PR-AUC, không accuracy).
+- Phân tích overfit/underfit dựa trên train vs val gap.
+- Decision cuối cùng dựa trên validation/CV + test một lần, không iterate.
 - (Bonus) Log vào MLflow hoặc Optuna storage.
 
 <Callout type="tip" title="Thực tế production: budget vs performance">
-Trong production, câu hỏi không phải "model nào tốt nhất" mà "model nào tốt nhất cho compute budget". LogisticRegression tuned có thể F1 0.78 train trong 5s; XGBoost tuned F1 0.82 train trong 5 phút. Nếu production chỉ cần F1 > 0.80 và SLA nghiêm ngặt, LogisticRegression có thể phù hợp hơn. Document trade-off trong leaderboard.
+Trong production câu hỏi không phải "model nào tốt nhất" mà "model nào tốt nhất cho compute budget". LogisticRegression tuned có thể F1 0.78 train 5s; XGBoost tuned F1 0.82 train 5 phút. Nếu production chỉ cần F1 > 0.80 và SLA nghiêm ngặt, LogisticRegression có thể phù hợp hơn. Document trade-off trong leaderboard.
 </Callout>
+
+---
 
 ## Điểm cần nhớ
 
-- Tuning là chọn hyperparameters có hệ thống, không đoán mò.
+- Tuning = chọn hyperparameters có hệ thống, không đoán mò.
 - Search space quan trọng hơn thuật toán search — prior knowledge giảm space đáng kể.
-- Grid search đơn giản nhưng dễ nổ tổ hợp (factorial); fit cho space nhỏ.
+- Grid search đơn giản nhưng dễ nổ tổ hợp (factorial); cho space nhỏ.
 - Random search là baseline tuning mạnh — log-scale cho magnitude params.
-- Bayesian optimization (Optuna TPE) dùng history để thử thông minh hơn; pruning tiết kiệm compute cho NN/LLM.
+- Bayesian (Optuna TPE) dùng history thử thông minh hơn; pruning tiết kiệm compute cho NN/LLM.
 - Early stopping dừng khi validation không cải thiện — vừa regularization vừa tiết kiệm.
 - Nested CV cho estimate honest sau tuning; không thay thế test set.
 - Validation curve phân tích một hyperparameter, learning curve phân tích train size.
-- Không tune trên test set; test chỉ mở một lần cuối cùng.
+- Không tune trên test set; test chỉ mở một lần cuối.
 - Log mọi experiment (params, seed, data version, code commit) để reproducible.
+
+---
 
 ## Next chapter bridge
 
-Sau khi tune model, bạn cần đưa mọi thứ vào pipeline sạch: preprocessing, training, cross-validation, persistence. Chương tiếp theo: **Scikit-Learn** — framework giúp bạn đóng gói toàn bộ workflow ML classic một cách production-friendly, tránh leakage và dễ deploy.
+Sau khi tune model, cần đưa mọi thứ vào pipeline sạch: preprocessing, training, cross-validation, persistence. Chương tiếp theo: **Scikit-Learn** — framework đóng gói toàn bộ workflow ML classic một cách production-friendly, tránh leakage, dễ deploy.

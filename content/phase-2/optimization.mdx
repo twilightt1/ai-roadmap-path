@@ -164,8 +164,8 @@ Transformer nhạy với LR lớn lúc đầu (vì init chưa ổn). Warmup tăn
 
 Mạng sâu lan truyền gradient qua nhiều tầng. Qua mỗi tầng, gradient nhân với weight:
 
-- Weight < 1 liên tục → gradient **nhỏ dần** (vanishing) → tầng đầu không học.
-- Weight > 1 liên tục → gradient **lớn dần** (exploding) → NaN.
+- Weight &lt; 1 liên tục → gradient **nhỏ dần** (vanishing) → tầng đầu không học.
+- Weight &gt; 1 liên tục → gradient **lớn dần** (exploding) → NaN.
 
 **Khắc phục**:
 - Activation ReLU/Leaky (không vanishing như sigmoid).

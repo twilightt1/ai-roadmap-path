@@ -4,14 +4,14 @@ Recurrent Neural Networks (RNN) là kiến trúc cổ điển cho dữ liệu tu
 
 ## 1. The Incident (Tình huống sự cố)
 
-<Callout type="danger" title="Báo cáo sự cố: Sentiment classifier "quên" negation trên review dài, recall negative rơi 41%">
+<Callout type="danger" title="Báo cáo sự cố: Sentiment classifier «quên» negation trên review dài, recall negative rơi 41%">
 **Bối cảnh:** Một team build hệ thống phân loại cảm xúc cho sản phẩm review của sàn thương mại điện tử. Họ dùng basic `nn.RNN` (1 layer, hidden 64) vì "đơn giản, nhẹ". Review dài khoảng 200-400 token. Train trên tập review ngắn (15-50 token) đạt accuracy 92% trên test set.
 
 Dùng basic `nn.RNN` không gate cho review dài 200+ token. Test set 80% là review ngắn, không đo theo bucket độ dài. Không gradient clipping. Không kiểm gradient norm. Đội QA phê duyệt dựa trên test set thiên lệch.
 
 1. Basic `nn.RNN` không học dependency xa vì vanishing gradient → review có "not good" ở đầu bị classify "neutral".
 2. Sau deploy, recall cho class "negative" trên review dài 200+ token tụt xuống 41%.
-3. Loss train không giảm thêm, gradient norm rất nhỏ (< 1e-5) sau vài epoch — tín hiệu vanishing gradient bị bỏ qua.
+3. Loss train không giảm thêm, gradient norm rất nhỏ (&lt; 1e-5) sau vài epoch — tín hiệu vanishing gradient bị bỏ qua.
 4. Test set có 80% review ngắn → độ QA phê duyệt dựa trên metric thiên lệch, không phát hiện.
 5. Không dùng LSTM/GRU có gate, không gradient clipping, không đo theo bucket độ dài.
 
@@ -280,7 +280,7 @@ Lưu ý: với padding, lấy `out[:, -1, :]` có thể lấy padding state. Pro
 
 1. Thay `out[:, -1, :]` bằng `pack_padded_sequence` / `pad_packed_sequence` + gather last hidden theo sequence length thật.
 2. Thêm gradient clipping trong training loop (`torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)`).
-3. Đo accuracy trên từng bucket độ dài (short < 50, medium 50-200, long > 200) và log lại.
+3. Đo accuracy trên từng bucket độ dài (short &lt; 50, medium 50-200, long &gt; 200) và log lại.
 4. Thay LSTM bằng `nn.RNN` và `nn.GRU`, so sánh accuracy và gradient norm.
 5. Thay `last = out[:, -1, :]` bằng attention pooling (mean-pooling mask hoặc attention pooling) để chống bias.
 6. Thêm `num_layers=2` và `dropout=0.3` để check overfitting trên long sequence.
@@ -295,7 +295,7 @@ Lưu ý: với padding, lấy `out[:, -1, :]` có thể lấy padding state. Pro
 
 **Steps:**
 
-1. Train LSTM classifier trên tập review và chia test thành 3 bucket (short < 50, medium 50-200, long > 200).
+1. Train LSTM classifier trên tập review và chia test thành 3 bucket (short &lt; 50, medium 50-200, long &gt; 200).
 2. Đo accuracy trên từng bucket.
 3. Đo gradient norm trung bình (mean norm) ở epoch 5.
 4. Lặp lại với `nn.RNN` và `nn.GRU` (cùng hidden, cùng 5 epoch).

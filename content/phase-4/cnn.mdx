@@ -258,7 +258,7 @@ Val transform phải deterministic — chỉ `Resize` + `ToTensor` + `Normalize`
 </Callout>
 
 <Callout type="danger" title="Mistake 4: train từ scratch với dataset nhỏ">
-< 10k ảnh/class train từ scratch thường overfit. Dùng pretrained ResNet18, freeze backbone, train head. Augmentation phù hợp domain.
+&lt; 10k ảnh/class train từ scratch thường overfit. Dùng pretrained ResNet18, freeze backbone, train head. Augmentation phù hợp domain.
 </Callout>
 
 ---
@@ -358,7 +358,7 @@ print(logits.shape)  # (8, 5)
 <Callout type="warning" title="Post-Mortem 3: train từ đầu với dataset nhỏ">
 **Triệu chứng:** Val accuracy stuck thấp (random level), train loss giảm nhanh nhưng val loss tăng, model overfit ngay epoch 3.
 
-**Fix:** Đừng train từ đầu với < vài nghìn ảnh. Dùng pretrained ResNet18, freeze backbone, train chỉ head. Thêm augmentation phù hợp domain. Nếu cần train từ đầu, phải có ≥ 10k ảnh/class và regularization mạnh.
+**Fix:** Đừng train từ đầu với &lt; vài nghìn ảnh. Dùng pretrained ResNet18, freeze backbone, train chỉ head. Thêm augmentation phù hợp domain. Nếu cần train từ đầu, phải có ≥ 10k ảnh/class và regularization mạnh.
 </Callout>
 
 <Callout type="warning" title="Post-Mortem 4: validation metric không ổn định">
