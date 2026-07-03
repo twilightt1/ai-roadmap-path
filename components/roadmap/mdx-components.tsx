@@ -11,25 +11,25 @@ const calloutConfig: Record<
 > = {
   info: {
     icon: Info,
-    box: "border-white/5 border-l-2 border-l-cyan-500 bg-zinc-950/25",
+    box: "border-border border-l-2 border-l-cyan-500 bg-card/40",
     iconColor: "text-cyan-400",
     title: "INFO",
   },
   tip: {
     icon: Lightbulb,
-    box: "border-white/5 border-l-2 border-l-emerald-500 bg-zinc-950/25",
+    box: "border-border border-l-2 border-l-emerald-500 bg-card/40",
     iconColor: "text-emerald-400",
     title: "TIP",
   },
   warning: {
     icon: TriangleAlert,
-    box: "border-white/5 border-l-2 border-l-amber-500 bg-zinc-950/25",
+    box: "border-border border-l-2 border-l-amber-500 bg-card/40",
     iconColor: "text-amber-400",
     title: "WARNING",
   },
   danger: {
     icon: Flame,
-    box: "border-white/5 border-l-2 border-l-rose-500 bg-zinc-950/25",
+    box: "border-border border-l-2 border-l-rose-500 bg-card/40",
     iconColor: "text-rose-400",
     title: "IMPORTANT",
   },
@@ -51,11 +51,11 @@ export function Callout({
     <div className={cn("my-6 rounded-r-xl border p-4 sm:p-5", cfg.box)}>
       <div className="mb-2 flex items-center gap-2">
         <Icon className={cn("h-3.5 w-3.5", cfg.iconColor)} />
-        <span className="text-[10px] font-mono font-bold tracking-wider text-zinc-300">
+        <span className="text-[10px] font-mono font-bold tracking-wider text-muted-foreground">
           {title ? title.toUpperCase() : cfg.title}
         </span>
       </div>
-      <div className="text-xs leading-relaxed text-zinc-400 [&>p]:my-0">{children}</div>
+      <div className="text-xs leading-relaxed text-muted-foreground [&>p]:my-0">{children}</div>
     </div>
   );
 }

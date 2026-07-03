@@ -8,6 +8,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { ProgressChip } from "@/components/shared/progress-chip";
 
 export function TopicList({
   topics,
@@ -33,18 +34,19 @@ export function TopicList({
         <AccordionItem
           key={topic.id}
           value={topic.id}
-          className="overflow-hidden border-white/5 last:border-b-0"
+          className="overflow-hidden border-border last:border-b-0"
         >
           <AccordionTrigger className="group hover:no-underline px-4 py-3 sm:px-5">
             <div className="flex items-center gap-3 pr-2 text-left">
               <span
-                className="flex h-6 shrink-0 items-center justify-center rounded bg-white/[0.02] border border-white/5 px-1.5 text-[10px] font-mono font-bold text-zinc-400"
+                className="flex h-6 shrink-0 items-center justify-center rounded bg-foreground/5 border border-border px-1.5 text-[10px] font-mono font-bold text-muted-foreground"
               >
                 {topic.code}
               </span>
-              <span className="text-sm font-semibold text-zinc-300 group-hover:text-foreground transition-colors">
+              <span className="text-sm font-semibold text-muted-foreground group-hover:text-foreground transition-colors">
                 {topic.title}
               </span>
+              <ProgressChip phaseSlug={phaseSlug} topicId={topic.id} className="ml-0.5" />
             </div>
           </AccordionTrigger>
           <AccordionContent className="pb-4 px-4 sm:px-5">
@@ -62,7 +64,7 @@ export function TopicList({
             <div className="mt-4 ml-9">
               <Link
                 href={`/phase/${phaseSlug}/${topic.id}`}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-white/5 bg-white/[0.01] px-3 py-1.5 text-xs font-mono font-semibold text-zinc-300 hover:bg-white/[0.04] transition-colors"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-foreground/5 px-3 py-1.5 text-xs font-mono font-semibold text-muted-foreground hover:bg-foreground/10 transition-colors"
               >
                 Đọc bài đầy đủ <ArrowRight className="h-3 w-3" />
               </Link>

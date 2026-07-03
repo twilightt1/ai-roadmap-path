@@ -14,6 +14,7 @@ import { TocSidebar } from "@/components/roadmap/toc-sidebar";
 import { Reveal } from "@/components/shared/reveal";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2 } from "lucide-react";
+import { ProgressToggle } from "@/components/shared/progress-toggle";
 
 type Props = {
   params: Promise<{ slug: string; topic: string }>;
@@ -57,16 +58,16 @@ export default async function TopicPage({ params }: Props) {
   return (
     <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-14">
       {/* Breadcrumb */}
-      <nav className="mb-6 flex flex-wrap items-center gap-1.5 text-xs font-mono text-zinc-500">
+      <nav className="mb-6 flex flex-wrap items-center gap-1.5 text-xs font-mono text-muted-foreground/70">
         <Link href="/roadmap" className="hover:text-foreground">
           Roadmap
         </Link>
         <span>/</span>
-        <Link href={`/phase/${phase.slug}`} className="hover:text-zinc-300">
+        <Link href={`/phase/${phase.slug}`} className="hover:text-muted-foreground">
           {phaseLabel}
         </Link>
         <span>/</span>
-        <span className="text-zinc-200">{t.title}</span>
+        <span className="text-foreground">{t.title}</span>
       </nav>
 
       {/* Header */}
@@ -84,14 +85,14 @@ export default async function TopicPage({ params }: Props) {
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge className={`${a.bg} border-0 text-primary-foreground font-mono font-bold text-[10px]`}>{t.code}</Badge>
-                <span className="text-xs text-zinc-500 font-mono">
+                <span className="text-xs text-muted-foreground/70 font-mono">
                   {phaseLabel} · {phase.title}
                 </span>
-                <span className="text-xs text-zinc-500 font-mono">
+                <span className="text-xs text-muted-foreground/70 font-mono">
                   · BÀI {index + 1}/{phase.topics.length}
                 </span>
               </div>
-              <h1 className="mt-2 text-2xl font-extrabold tracking-tight sm:text-3xl text-zinc-100">
+              <h1 className="mt-2 text-2xl font-extrabold tracking-tight sm:text-3xl text-foreground">
                 {t.title}
               </h1>
               {t.description && (
@@ -99,12 +100,15 @@ export default async function TopicPage({ params }: Props) {
                   {t.description}
                 </p>
               )}
+              <div className="mt-4">
+                <ProgressToggle phaseSlug={phase.slug} topicId={t.id} />
+              </div>
             </div>
           </div>
 
           {/* Learning objectives */}
-          <div className="mt-6 relative rounded-xl border border-white/5 bg-zinc-950/20 p-4">
-            <p className="mb-3 flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-400">
+          <div className="mt-6 relative rounded-xl border border-border bg-card/20 p-4">
+            <p className="mb-3 flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-muted-foreground">
               <CheckCircle2 className={`h-3.5 w-3.5 ${a.text} opacity-80`} />
               Bạn sẽ học gì
             </p>
@@ -136,11 +140,11 @@ export default async function TopicPage({ params }: Props) {
         </div>
       ) : (
         /* Coming soon fallback */
-        <div className="rounded-2xl border border-dashed border-white/5 bg-zinc-950/20 p-10 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/[0.02] border border-white/5">
-            <BookOpen className="h-6 w-6 text-zinc-500" />
+        <div className="rounded-2xl border border-dashed border-border bg-card/20 p-10 text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-foreground/5 border border-border">
+            <BookOpen className="h-6 w-6 text-muted-foreground/70" />
           </div>
-          <h2 className="text-lg font-bold text-zinc-200">Nội dung đang hoàn thiện</h2>
+          <h2 className="text-lg font-bold text-foreground">Nội dung đang hoàn thiện</h2>
           <p className="mx-auto mt-2 max-w-sm text-xs text-muted-foreground leading-relaxed">
             Chương này chưa có bài giảng đầy đủ. Trong lúc chờ, bạn có thể xem các mục
             kiến thức cần học ở phần &quot;Bạn sẽ học gì&quot; phía trên, hoặc đọc tài liệu tham khảo.
@@ -148,13 +152,13 @@ export default async function TopicPage({ params }: Props) {
           <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
             <Link
               href={`/resources`}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/5 bg-white/[0.01] px-4 py-2 text-xs font-mono font-semibold text-zinc-300 hover:bg-white/[0.03]"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-foreground/5 px-4 py-2 text-xs font-mono font-semibold text-muted-foreground hover:bg-foreground/10"
             >
               <BookOpen className="h-4 w-4" /> Tài liệu tham khảo
             </Link>
             <Link
               href={`/phase/${phase.slug}`}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/5 bg-white/[0.01] px-4 py-2 text-xs font-mono font-semibold text-zinc-300 hover:bg-white/[0.03]"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-foreground/5 px-4 py-2 text-xs font-mono font-semibold text-muted-foreground hover:bg-foreground/10"
             >
               <ArrowLeft className="h-4 w-4" /> Quay lại phase
             </Link>
@@ -163,39 +167,39 @@ export default async function TopicPage({ params }: Props) {
       )}
 
       {/* Footer nav: prev/next topic */}
-      <div className="mt-16 grid gap-4 border-t border-white/5 pt-8 sm:grid-cols-2">
+      <div className="mt-16 grid gap-4 border-t border-border pt-8 sm:grid-cols-2">
         {prevTopic ? (
           <Link
             href={`/phase/${phase.slug}/${prevTopic.id}`}
-            className="group rounded-xl border border-white/5 bg-white/[0.01] p-4 transition-all hover:border-white/10 hover:bg-white/[0.03]"
+            className="group rounded-xl border border-border bg-foreground/5 p-4 transition-all hover:border-border hover:bg-foreground/10"
           >
-            <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+            <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70">
               <ArrowLeft className="h-3 w-3" /> Bài trước
             </div>
-            <div className="mt-1 text-sm font-bold text-zinc-300 group-hover:text-primary transition-colors">
+            <div className="mt-1 text-sm font-bold text-muted-foreground group-hover:text-primary transition-colors">
               {prevTopic.code} · {prevTopic.title}
             </div>
           </Link>
         ) : (
           <Link
             href={`/phase/${phase.slug}`}
-            className="group rounded-xl border border-white/5 bg-white/[0.01] p-4 transition-all hover:border-white/10 hover:bg-white/[0.03]"
+            className="group rounded-xl border border-border bg-foreground/5 p-4 transition-all hover:border-border hover:bg-foreground/10"
           >
-            <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+            <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70">
               <ArrowLeft className="h-3 w-3" /> Quay lại phase
             </div>
-            <div className="mt-1 text-sm font-bold text-zinc-300 group-hover:text-primary transition-colors">{phaseLabel} · {phase.title}</div>
+            <div className="mt-1 text-sm font-bold text-muted-foreground group-hover:text-primary transition-colors">{phaseLabel} · {phase.title}</div>
           </Link>
         )}
         {nextTopic ? (
           <Link
             href={`/phase/${phase.slug}/${nextTopic.id}`}
-            className="group rounded-xl border border-white/5 bg-white/[0.01] p-4 text-right transition-all hover:border-white/10 hover:bg-white/[0.03]"
+            className="group rounded-xl border border-border bg-foreground/5 p-4 text-right transition-all hover:border-border hover:bg-foreground/10"
           >
-            <div className="flex items-center justify-end gap-1.5 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+            <div className="flex items-center justify-end gap-1.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70">
               Bài tiếp theo <ArrowRight className="h-3 w-3" />
             </div>
-            <div className="mt-1 text-sm font-bold text-zinc-300 group-hover:text-primary transition-colors">
+            <div className="mt-1 text-sm font-bold text-muted-foreground group-hover:text-primary transition-colors">
               {nextTopic.code} · {nextTopic.title}
             </div>
           </Link>

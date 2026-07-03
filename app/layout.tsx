@@ -5,6 +5,7 @@ import { Navbar } from "@/components/layout/navbar";
 import { Footer } from "@/components/layout/footer";
 import { SearchCommand } from "@/components/shared/search-command";
 import { ScrollProgress } from "@/components/shared/scroll-progress";
+import { ThemeProvider } from "@/components/layout/theme-provider";
 
 const geistSans = Geist({
   variable: "--font-sans",
@@ -61,15 +62,17 @@ export default function RootLayout({
   return (
     <html
       lang="vi"
-      className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
-        <ScrollProgress />
-        <Navbar />
-        <main className="flex-1">{children}</main>
-        <Footer />
-        <SearchCommand />
+        <ThemeProvider>
+          <ScrollProgress />
+          <Navbar />
+          <main className="flex-1">{children}</main>
+          <Footer />
+          <SearchCommand />
+        </ThemeProvider>
       </body>
     </html>
   );

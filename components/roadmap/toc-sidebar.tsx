@@ -35,10 +35,10 @@ export function TocSidebar({ items }: { items: TocItem[] }) {
   return (
     <aside className="hidden lg:block">
       <div className="sticky top-24">
-        <p className="mb-3 text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-500">
+        <p className="mb-3 text-[10px] font-mono font-bold uppercase tracking-wider text-muted-foreground/70">
           MỤC LỤC
         </p>
-        <nav className="space-y-1.5 border-l border-white/5">
+        <nav className="space-y-1.5 border-l border-border">
           {items.map((item) => {
             const isActive = activeSlug === item.slug;
             return (

@@ -11,7 +11,7 @@ const footerLinks = [
 
 export function Footer() {
   return (
-    <footer className="border-t border-white/5 bg-background/40">
+    <footer className="border-t border-border bg-background/40">
       <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
         <div className="grid gap-8 md:grid-cols-3">
           {/* Brand */}
@@ -73,7 +73,7 @@ export function Footer() {
           </div>
         </div>
 
-        <div className="mt-8 flex flex-col items-center justify-between gap-3 border-t border-white/5 pt-6 text-xs text-muted-foreground sm:flex-row">
+        <div className="mt-8 flex flex-col items-center justify-between gap-3 border-t border-border pt-6 text-xs text-muted-foreground sm:flex-row">
           <p>Xây dựng với Next.js · Tailwind · shadcn/ui</p>
           <p>© {new Date().getFullYear()} · Ultimate AI Engineer Roadmap 2026</p>
         </div>

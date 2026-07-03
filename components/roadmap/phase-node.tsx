@@ -8,6 +8,7 @@ import type { Phase } from "@/lib/types";
 import { accentMap } from "@/lib/theme";
 import { TopicList } from "./topic-list";
 import { ProjectCard } from "./project-card";
+import { PhaseProgressBadge } from "@/components/shared/phase-progress-badge";
 
 export function PhaseNode({ phase }: { phase: Phase }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -27,10 +28,10 @@ export function PhaseNode({ phase }: { phase: Phase }) {
       <div className="absolute left-[18px] top-1.5 sm:left-[26px] z-10">
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className={`relative flex h-9 w-9 items-center justify-center rounded-full border bg-zinc-950 text-xs font-mono font-bold ring-4 ring-background transition-all hover:scale-[1.05] cursor-pointer outline-none ${
+          className={`relative flex h-9 w-9 items-center justify-center rounded-full border bg-background text-xs font-mono font-bold ring-4 ring-background transition-all hover:scale-[1.05] cursor-pointer outline-none ${
             isOpen
               ? `${a.text} ${a.border} shadow-md`
-              : "border-white/5 text-zinc-500 hover:border-zinc-700"
+              : "border-border text-muted-foreground/70 hover:border-border"
           }`}
         >
           {phase.isCapstone ? "★" : String(phase.number).padStart(2, "0")}
@@ -41,7 +42,7 @@ export function PhaseNode({ phase }: { phase: Phase }) {
         className={`group overflow-hidden rounded-2xl border transition-all duration-200 ${
           isOpen
             ? `${a.border} bg-card/50`
-            : "border-white/5 bg-card/30 hover:border-white/10"
+            : "border-border bg-card/30 hover:border-border"
         }`}
       >
         {/* Accordion Trigger */}
@@ -56,11 +57,11 @@ export function PhaseNode({ phase }: { phase: Phase }) {
               >
                 {phaseLabel}
               </span>
-              <span className="text-[10px] text-zinc-500 font-mono">
+              <span className="text-[10px] text-muted-foreground/70 font-mono">
                 {phase.topics.length} CHỦ ĐỀ · {phase.projects.length} DỰ ÁN
               </span>
             </div>
-            <h3 className="text-base font-bold leading-tight sm:text-lg text-zinc-200 group-hover:text-foreground transition-colors">
+            <h3 className="text-base font-bold leading-tight sm:text-lg text-foreground group-hover:text-foreground transition-colors">
               {phase.title}
             </h3>
             <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
@@ -69,8 +70,11 @@ export function PhaseNode({ phase }: { phase: Phase }) {
             </p>
           </div>
           <ChevronDown
-            className={`h-4 w-4 shrink-0 text-zinc-500 transition-transform duration-300 ${isOpen ? "rotate-180 text-foreground" : ""}`}
+            className={`h-4 w-4 shrink-0 text-muted-foreground/70 transition-transform duration-300 ${isOpen ? "rotate-180 text-foreground" : ""}`}
           />
+          <div className="flex shrink-0 items-center">
+            <PhaseProgressBadge phaseSlug={phase.slug} size={36} />
+          </div>
         </button>
 
         {/* Accordion Content */}
@@ -82,7 +86,7 @@ export function PhaseNode({ phase }: { phase: Phase }) {
               exit={reduce ? { height: 0, opacity: 0 } : { height: 0, opacity: 0 }}
               transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
             >
-              <div className="border-t border-white/5 px-4 pb-5 pt-4 sm:px-5">
+              <div className="border-t border-border px-4 pb-5 pt-4 sm:px-5">
                 {phase.projects.length > 0 && (
                   <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                     {phase.projects.map((p) => (
@@ -106,7 +110,7 @@ export function PhaseNode({ phase }: { phase: Phase }) {
                   </Link>
                   <Link
                     href={`/projects?phase=${phase.number}`}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-1.5 text-xs font-medium text-zinc-400 hover:text-foreground hover:bg-white/[0.05]"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-foreground/5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-foreground/10"
                   >
                     Dự án của phase
                   </Link>

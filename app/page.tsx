@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { HeroPreview } from "@/components/roadmap/hero-preview";
 import { LogoWall } from "@/components/shared/logo-wall";
 import { Reveal } from "@/components/shared/reveal";
+import { ProgressOverview } from "@/components/shared/progress-overview";
 
 const statCards = [
   { label: "Phases", value: stats.phases, icon: GitBranch },
@@ -27,7 +28,7 @@ export default function HomePage() {
             <div className="space-y-6 text-left">
               <Link
                 href="/roadmap"
-                className="group inline-flex items-center gap-2 rounded-full border border-white/5 bg-white/[0.02] px-3.5 py-1 text-xs font-mono text-zinc-400 backdrop-blur transition-colors hover:border-white/10 hover:text-foreground"
+                className="group inline-flex items-center gap-2 rounded-full border border-border bg-foreground/5 px-3.5 py-1 text-xs font-mono text-muted-foreground backdrop-blur transition-colors hover:border-border hover:text-foreground"
               >
                 <Sparkles className="h-3 w-3 text-emerald-400" />
                 Ultimate AI Engineer Roadmap 2026
@@ -42,7 +43,7 @@ export default function HomePage() {
                 <span className="text-gradient">AI Systems</span>
               </h1>
 
-              <p className="max-w-xl text-sm leading-relaxed text-zinc-400 sm:text-base">
+              <p className="max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base">
                 Lộ trình AI Engineer 2026 gồm 17 phases, 51 dự án thực hành từ nền tảng đến production-grade systems.
               </p>
 
@@ -56,7 +57,7 @@ export default function HomePage() {
                 <Button
                   variant="outline"
                   render={<Link href="/projects" />}
-                  className="h-10 gap-2 rounded-lg border-white/5 bg-white/[0.02] px-5 text-xs font-semibold text-zinc-300 hover:bg-white/[0.05]"
+                  className="h-10 gap-2 rounded-lg border-border bg-foreground/5 px-5 text-xs font-semibold text-muted-foreground hover:bg-foreground/10"
                 >
                   <Rocket className="h-4 w-4" /> Xem dự án
                 </Button>
@@ -73,16 +74,31 @@ export default function HomePage() {
 
       {/* Stats */}
       <Reveal className="mx-auto max-w-6xl px-4 sm:px-6">
-        <div className="grid grid-cols-2 gap-px border border-white/5 bg-white/[0.01] p-1 rounded-2xl sm:grid-cols-4 backdrop-blur-sm">
+        <div className="grid grid-cols-2 gap-px border border-border bg-foreground/5 p-1 rounded-2xl sm:grid-cols-4 backdrop-blur-sm">
           {statCards.map((s) => (
-            <div key={s.label} className="bg-zinc-950/40 p-6 text-center">
+            <div key={s.label} className="bg-card/40 p-6 text-center">
               <s.icon className="mx-auto mb-2 h-4 w-4 text-emerald-400" />
-              <div className="text-3xl font-bold tracking-tight tabular-nums text-zinc-100">{s.value}</div>
-              <div className="mt-1 text-xs font-mono uppercase tracking-wider text-zinc-500">{s.label}</div>
+              <div className="text-3xl font-bold tracking-tight tabular-nums text-foreground">{s.value}</div>
+              <div className="mt-1 text-xs font-mono uppercase tracking-wider text-muted-foreground/70">{s.label}</div>
             </div>
           ))}
         </div>
       </Reveal>
+
+      {/* Your progress */}
+      <section className="mx-auto max-w-6xl px-4 sm:px-6">
+        <div className="mb-6 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">
+              Tiến độ của bạn
+            </h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Theo dõi từng bài đã học — tiến độ được lưu trong trình duyệt của bạn.
+            </p>
+          </div>
+        </div>
+        <ProgressOverview />
+      </section>
 
       {/* Phase Grid */}
       <section className="mx-auto max-w-6xl px-4 sm:px-6">
@@ -127,11 +143,11 @@ export default function HomePage() {
                         <span className={`text-[10px] font-mono uppercase tracking-wider ${a.text}`}>
                           {phase.isCapstone ? "Capstone" : `Phase ${phase.number}`}
                         </span>
-                        <span className="text-[10px] text-zinc-500">
+                        <span className="text-[10px] text-muted-foreground/70">
                           · {phase.topics.length} chủ đề
                         </span>
                       </div>
-                      <h3 className="mt-1 font-bold text-base leading-snug text-zinc-200 group-hover:text-foreground transition-colors">
+                      <h3 className="mt-1 font-bold text-base leading-snug text-foreground group-hover:text-foreground transition-colors">
                         {phase.title}
                       </h3>
                       <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground leading-relaxed">
@@ -157,7 +173,7 @@ export default function HomePage() {
           </p>
         </div>
 
-        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 lg:divide-x divide-white/5">
+        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 lg:divide-x divide-border">
           {learningPaths.map((path, idx) => {
             const a = accentMap[path.accent];
             return (
@@ -172,7 +188,7 @@ export default function HomePage() {
                     {path.timeline}
                   </span>
                 </div>
-                <h3 className="mt-3 text-base font-bold text-zinc-200 group-hover:text-primary transition-colors">
+                <h3 className="mt-3 text-base font-bold text-foreground group-hover:text-primary transition-colors">
                   {path.name}
                 </h3>
                 <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
@@ -196,7 +212,7 @@ export default function HomePage() {
 
       {/* CTA Section */}
       <section className="mx-auto max-w-6xl px-4 sm:px-6">
-        <div className="relative overflow-hidden rounded-2xl border border-white/5 bg-zinc-950/30 p-8 text-center sm:p-12">
+        <div className="relative overflow-hidden rounded-2xl border border-border bg-card/30 p-8 text-center sm:p-12">
           <div className="absolute inset-0 bg-gradient-to-b from-emerald-500/[0.02] to-transparent pointer-events-none" />
           <BookOpen className="mx-auto mb-4 h-6 w-6 text-primary" />
           <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">

@@ -30,7 +30,7 @@ export function CodeBlock({ children }: { children?: ReactNode }) {
         aria-label="Sao chép code"
         whileHover={{ scale: 1.05 }}
         whileTap={{ scale: 0.95 }}
-        className="absolute right-3 top-3 z-20 hidden h-6 w-6 items-center justify-center rounded border border-white/5 bg-zinc-900/80 text-zinc-400 opacity-0 backdrop-blur-sm transition-all hover:border-white/10 hover:text-zinc-200 group-hover:opacity-100 sm:flex"
+        className="absolute right-3 top-3 z-20 hidden h-6 w-6 items-center justify-center rounded border border-border bg-card/80 text-muted-foreground opacity-0 backdrop-blur-sm transition-all hover:border-border hover:text-foreground group-hover:opacity-100 sm:flex"
       >
         {copied ? (
           <Check className="h-3 w-3 text-emerald-400" />

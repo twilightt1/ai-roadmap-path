@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Timeline } from "@/components/roadmap/timeline";
 import { Reveal } from "@/components/shared/reveal";
+import { RoadmapProgressSummary } from "@/components/shared/roadmap-progress-summary";
 
 export const metadata: Metadata = {
   title: "Roadmap · Lộ trình AI Engineer 2026",
@@ -20,6 +21,8 @@ export default function RoadmapPage() {
           Hoặc nhấp vào &quot;Chi tiết phase&quot; để xem trang riêng biệt.
         </p>
       </div>
+
+      <RoadmapProgressSummary />
       <Reveal>
         <Timeline />
       </Reveal>

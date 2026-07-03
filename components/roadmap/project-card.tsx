@@ -31,12 +31,12 @@ export function ProjectCard({ project }: { project: Project }) {
             <span className="h-1.5 w-1.5 rounded-full bg-current" />
             {d.label}
           </Badge>
-          <span className="text-[9px] font-mono uppercase tracking-wider text-zinc-500">
+          <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground/70">
             Phase {project.phase}
           </span>
         </div>
         <div>
-          <h4 className="text-sm font-bold leading-snug text-zinc-200 group-hover:text-foreground transition-colors">
+          <h4 className="text-sm font-bold leading-snug text-foreground group-hover:text-foreground transition-colors">
             {project.title}
           </h4>
           <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
@@ -49,7 +49,7 @@ export function ProjectCard({ project }: { project: Project }) {
             {project.features.map((f) => (
               <li
                 key={f}
-                className="flex items-start gap-1.5 text-[11px] text-zinc-400"
+                className="flex items-start gap-1.5 text-[11px] text-muted-foreground"
               >
                 <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-emerald-500/60" />
                 {f}
@@ -59,12 +59,12 @@ export function ProjectCard({ project }: { project: Project }) {
         )}
       </div>
 
-      <div className="mt-4 pt-3 border-t border-white/5 space-y-3">
+      <div className="mt-4 pt-3 border-t border-border space-y-3">
         <div className="flex flex-wrap items-center gap-1">
           {project.stack.map((s) => (
             <span
               key={s}
-              className="rounded bg-white/[0.02] border border-white/5 px-1.5 py-0.5 text-[9px] font-mono text-zinc-500"
+              className="rounded bg-foreground/5 border border-border px-1.5 py-0.5 text-[9px] font-mono text-muted-foreground/70"
             >
               {s}
             </span>
