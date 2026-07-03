@@ -1,0 +1,166 @@
+Biết thị trường cần gì — để biết **đâu** bỏ công sức. Bài này là 9 kỹ năng mà công ty đang tuyển gấp 2026, kèm **mức độ** (core, hot, niche) và **phase** bạn học nó. Đây là **map** để bạn chọn tập trung.
+
+## Chín kỹ năng — 2026
+
+| # | Kỹ năng | Mức | Phase | Tại sao |
+|---|---|---|---|---|
+| 1 | Multi-LLM orchestration | Core | 6, 7 | Mỗi model có điểm mạnh, cost |
+| 2 | RAG & vector DB | Core | 8 | Cho LLM truy cập dữ liệu private |
+| 3 | AI Agents & agentic systems | Hot | 9 | LLM tự quyết, gọi tool |
+| 4 | LLMOps & production monitoring | Core | 12 | Ship AI, phát hiện lỗi |
+| 5 | Prompt engineering at scale | Core | 6 | Version, A/B, prompt injection |
+| 6 | Fine-tuning & PEFT (LoRA, QLoRA) | Niche | 10 | Domain, giảm cost, format |
+| 7 | MCP (Model Context Protocol) | Hot | 7 | Chuẩn kết nối AI ↔ tool |
+| 8 | Multimodal AI | Hot | 11 | Image, audio, video |
+| 9 | Cost optimization & inference efficiency | Core | 12, 15 | AI đắt, cần tối ưu |
+
+<Callout type="tip" title="Cách đọc bảng">
+**Core** — bắt buộc, có ở mọi job. **Hot** — lên nhanh, ít người, lương cao. **Niche** — chuyên sâu, ít job nhưng lương cao. **Tập trung vào 5 core** trước, 2 hot khi có thời gian, 1-2 niche khi cần.
+</Callout>
+
+## 1. Multi-LLM orchestration (Core)
+
+Không model nào tốt cho mọi task. Routing, fallback, cost, caching — **đây là cốt lõi** của AI Engineer.
+
+```text
+User query → classify → route
+  ├── simple → GPT-4o-mini (rẻ, nhanh)
+  ├── reasoning → Claude Opus
+  ├── code → GPT-4o
+  ├── multimodal → Gemini
+  └── fallback → GPT-4o → Claude 3.5 → GPT-3.5 → cache
+```
+
+Công ty tuyển **gấp** vì mỗi model có điểm mạnh, cost, rate limit khác — và **bạn** phải biết khi nào dùng cái nào.
+
+**Phase 6, 7** — đây là domain cốt lõi.
+
+## 2. RAG & vector DB (Core)
+
+LLM có **knowledge cutoff** — không biết dữ liệu private. RAG = Embedding search + LLM. Đây là **cách phổ biến nhất** để LLM truy cập kiến thức riêng.
+
+```text
+Document → Chunk → Embed → Store (vector DB)
+Query → Embed → Retrieve top-k → LLM → Answer
+```
+
+**Phase 8** — RAG, vector DB, chunking, hybrid search, reranking.
+
+## 3. AI Agents & agentic systems (Hot)
+
+Agent = LLM + Tools + Memory + Planning. LLM **tự quyết định** gọi tool nào, bao nhiêu bước, và khi nào dừng. Đây là **lĩnh vực lên nhanh nhất** 2026.
+
+```text
+User: "Tìm tin tức AI 2026 và viết tóm tắt"
+Agent → tool: web_search("AI 2026")
+Agent → tool: read_top_3()
+Agent → tool: write_summary()
+Agent → "Tóm tắt: ..."
+```
+
+**Phase 9** — ReAct, tool use, memory, multi-agent, LangGraph.
+
+## 4. LLMOps & production monitoring (Core)
+
+LLM không **deterministic** — cùng input, output khác nhau, và **hallucinate**. Bạn cần **monitor** token, latency, error rate, hallucination, drift.
+
+```python
+# Tracking token, latency, error, cost
+log = {
+    "user": "user_123",
+    "model": "gpt-4o-mini",
+    "prompt_tokens": 150,
+    "completion_tokens": 80,
+    "latency_ms": 1200,
+    "cost": 0.0001,
+    "error": None,
+}
+```
+
+**Phase 12** — LangSmith, Langfuse, Helicone, Grafana, Prometheus.
+
+## 5. Prompt engineering at scale (Core)
+
+Prompt không chỉ là "nói cho LLM". Production cần:
+- **Versioning** — prompt nào, hiệu quả nào, rollback.
+- **A/B testing** — prompt A vs B, đo conversion.
+- **Prompt injection** — bảo vệ user input.
+- **Prompt compression** — giảm token, giảm cost.
+
+```python
+# Version prompt
+PROMPT_V1 = "Tóm tắt: {text}"
+PROMPT_V2 = "Tóm tắt cho trẻ 10 tuổi: {text}"  # A/B
+```
+
+**Phase 6** — prompt engineering, CoT, ReAct, structured output.
+
+## 6. Fine-tuning & PEFT (Niche)
+
+Khi RAG không đủ, bạn **fine-tune** — đặc biệt cho domain, format nhất quán, giảm cost. **LoRA** (PEFT) cho fine-tune 70B trên consumer GPU.
+
+```text
+Base model (LLaMA 3) → LoRA fine-tune → Domain model
+```
+
+**Phase 10** — LoRA, QLoRA, DPO, RLHF, dataset.
+
+## 7. MCP (Model Context Protocol) (Hot)
+
+MCP là **chuẩn mở** của Anthropic — kết nối AI với tool (DB, file, API, agent). Đây là **mới** 2025, nhưng **lên nhanh**.
+
+```text
+LLM ← MCP Client → MCP Server → DB / API / file
+```
+
+**Phase 7** — MCP server, client, tool.
+
+## 8. Multimodal AI (Hot)
+
+Image, audio, video — không chỉ text. GPT-4o, Claude 3 Vision, Gemini 2.5 **hỗ trợ**.
+
+```text
+User: "Mô tả ảnh này" → LLM → "Đây là ảnh ..."
+```
+
+**Phase 11** — diffusion, VAE, GAN, multimodal, voice, video.
+
+## 9. Cost optimization & inference efficiency (Core)
+
+AI **đắt**. Một chatbot 1 triệu request/th = 1.000-5.000 USD. Bạn cần **tối ưu**:
+- **Model routing** — model rẻ cho 90% request.
+- **Caching** — trùng câu hỏi, lấy từ Redis.
+- **Quantization** — 4-bit, 8-bit, giảm cost.
+- **vLLM** — PagedAttention, 24x throughput.
+
+```python
+# Cache trùng query
+key = hash(query)
+if redis.exists(key):
+    return redis.get(key)
+```
+
+**Phase 12, 15** — quantization, vLLM, distillation, SLM.
+
+## Cách chọn tập trung
+
+<Callout type="info" title="Lộ trình 3 tháng">
+1. **Tháng 1** — Python, async, API (Phase 1, 6).
+2. **Tháng 2** — RAG, agent, multi-LLM (Phase 7, 8, 9).
+3. **Tháng 3** — LLMOps, deployment, cost (Phase 12, 15).
+</Callout>
+
+<Callout type="warning" title="Đừng cố gắng hết">
+9 kỹ năng là **nhiều**. 5 core + 2 hot + 1 niche = **đủ** để apply. Niche thứ 9 (cost, fine-tune) học khi **đã có** 5 core. Đừng cố gắng hết cùng lúc.
+</Callout>
+
+## Điểm cần nhớ
+
+- **9 kỹ năng** — 5 core, 2 hot, 2 niche.
+- **Tập trung 5 core** trước: orchestration, RAG, LLMOps, prompt, cost.
+- **2 hot** — AI agent, MCP — lên nhanh, ít người.
+- **2 niche** — fine-tune, multimodal — lương cao, chuyên sâu.
+- **Lộ trình 3 tháng** — đủ để ship 1 feature, apply 1 job.
+- **Đừng cố gắng hết** — 5 core + 2 hot + 1 niche = đủ.
+
+Bài tiếp theo — bạn đã **định vị**. Bắt đầu **Phase 1** — Programming Foundation, viết Python sạch, chất lượng production.

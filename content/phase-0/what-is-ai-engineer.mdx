@@ -1,0 +1,120 @@
+Năm 2026, "AI Engineer" là một role **khác biệt** — không phải data scientist, không phải ML researcher. Bạn là cầu nối giữa model và sản phẩm. Bạn không train model từ đầu, mà **lắp ráp** các model có sẵn (qua API hoặc self-host) thành hệ thống chạy được, rẻ, và đáng tin. Bài này định vị đúng vai trò để bạn không học sai hướng trong 17 phase còn lại.
+
+## Vai trò — bạn là cầu nối
+
+ML researcher tập trung vào **tạo model** (đào tạo, viết paper, tối ưu kiến trúc). AI Engineer tập trung vào **dùng model** — biến model thành sản phẩm người dùng thực sự chạm vào.
+
+```text
+ML Researcher           AI Engineer
+─────────────           ───────────
+Tạo model mới           Dùng model có sẵn
+Paper, SOTA             Production, cost
+Math, code training      API, prompt, RAG, agent
+Năm tính 1 model         Tuần ship 1 feature
+```
+
+Công việc hàng ngày của bạn là: **lắp ráp** — gọi API, thiết kế pipeline, fallback, cache,监控, deploy. Không phải đạo hàm gradient.
+
+## Bốn công việc cốt lõi
+
+### 1. Integrate & orchestrate
+
+Gọi một LLM API thì dễ. Nhưng khi 10 request/giây, 5 provider, mỗi model có context window, rate limit, pricing khác nhau — bạn cần **orchestration**.
+
+```python
+# Đơn giản nhất — gọi 1 API
+import openai
+resp = openai.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Tóm tắt bài này"}],
+)
+```
+
+Thực tế production phức tạp hơn nhiều — bạn phải:
+
+- **Routing**: query đơn giản → GPT-4o-mini, reasoning → Claude Opus, code → GPT-4o, multimodal → Gemini.
+- **Fallback**: GPT-4o sập → Claude 3.5 → GPT-3.5 → cache → default.
+- **Caching**: trùng câu hỏi → lấy từ Redis, không cần gọi lại.
+- **Rate limiting**: Redis token bucket, không vượt quota provider.
+- **Cost tracking**: mỗi request ghi log token, tiền, model.
+
+### 2. Build RAG systems
+
+LLM có **knowledge cutoff** — không biết dữ liệu private của bạn. RAG (Retrieval-Augmented Generation) là cách phổ biến nhất để LLM truy cập kiến thức riêng.
+
+```text
+Document → Chunk → Embed → Store (vector DB)
+Query → Embed → Retrieve top-k → LLM với context → Answer
+```
+
+Bạn là người **xây pipeline này** — chọn chunking, embedding model, vector DB, retrieval strategy, reranking. Đây là Phase 8.
+
+### 3. Build AI agents
+
+Agent = LLM + Tools + Memory + Planning. Thay vì trả lời 1 câu, agent **tự quyết định** gọi tool nào (search web, query DB, code), bao nhiêu bước, và khi nào dừng.
+
+```text
+User: "Tìm tin tức mới nhất về AI 2026 và viết tóm tắt"
+Agent → tool: web_search("AI 2026")
+Agent → tool: read_top_3_results()
+Agent → tool: write_summary()
+Agent → "Đây là tóm tắt: ..."
+```
+
+Đây là Phase 9 — và là lĩnh vực **đang tuyển gấp nhất**.
+
+### 4. Multi-LLM — biết khi nào dùng model nào
+
+Không có model nào tốt cho mọi task. Bài này là **bảng tham chiếu** — bạn sẽ học sâu ở Phase 6 và 7.
+
+| Model | Giỏi | Đắt | Chọn khi |
+|---|---|---|---|
+| GPT-4o | Reasoning, code, multimodal | Cao | Cần chất lượng, doanh thu |
+| Claude Opus 4 | Long context, reasoning, code | Cao | Cần 200K context, phân tích |
+| GPT-4o-mini | Nhanh, rẻ | Thấp | Autocomplete, phân loại, routing |
+| Gemini 2.5 | Multimodal, real-time search | Vừa | Cần search, hình ảnh, video |
+| Mistral 7B | Self-host, rẻ | Miễn phí | Cần privacy, on-prem |
+| LLaMA 3 | Open-weight, fine-tune | Self-host | Cần fine-tune, kiểm soát |
+
+<Callout type="tip" title="Nguyên tắc routing">
+Bắt đầu với **model rẻ nhất** làm được job. Chỉ nâng lên model đắt khi cần. GPT-4o-mini cho 90% request, GPT-4o chỉ khi cần reasoning — đây là cách giảm chi phí 50-70%.
+</Callout>
+
+## Tại sao role này "nổi" 2026
+
+Trước 2023, AI chủ yếu là **ML Engineer** — train model từ đầu, tốn mấy tháng, cần data lớn. 2024-2026, **pretrained models** quá mạnh (GPT-4, Claude, Gemini) nên công việc **xoay** sang việc dùng chúng. Cửa hàng bán model đã có sẵn, người cần xây là **lắp ráp**.
+
+Vì thế:
+
+- **Vòng lặp ship nhanh**: 1-2 tuần thay vì 1-2 tháng.
+- **Chi phí thấp**: không cần GPU cluster, không cần team 10 người.
+- **Yêu cầu** kiến thức rộng hơn: API, prompt, RAG, agent, deployment, cost, monitoring — không phải sâu 1 mảng.
+
+## Cần gì, không cần gì
+
+<Callout type="info" title="Bạn cần">
+- **Programming** vững (Python, async) — không thương lượng.
+- **Hiểu đủ** LLM để biết tại sao nó fail, không phải chứng minh.
+- **API + orchestration** — gọi nhiều provider, fallback, cache, cost.
+- **System design** — RAG, agent, multi-LLM, monitoring.
+- **Product sense** — biết khi nào dùng AI, khi nào không.
+</Callout>
+
+<Callout type="warning" title="Bạn không cần">
+- **Train model từ đầu** — trừ khi fine-tune chuyên sâu (Phase 10).
+- **Phát triển kiến trúc transformer** — hiểu hoạt động là đủ.
+- **Toán chứng minh** — hiểu gradient, backprop một cách trực giác, không phải chứng minh.
+- **Nghiên cứu** — đây là research, không phải engineering.
+</Callout>
+
+Đây là **sự khác biệt** giữa 17 phase còn lại của roadmap và một học vị AI. Bạn không cần học toàn bộ, chỉ cần **đúng**.
+
+## Điểm cần nhớ
+
+- AI Engineer là **cầu nối** model ↔ product — không phải người tạo model.
+- Bốn công việc cốt lõi: **orchestration, RAG, agent, multi-LLM**.
+- **Không model nào tốt cho mọi task** — routing là kỹ năng sống còn.
+- **Bắt đầu với model rẻ nhất** làm được, nâng khi cần.
+- **Không cần** train model từ đầu, không cần chứng minh toán — cần hiểu **đủ** để dùng.
+
+Bài tiếp theo chúng ta sẽ **kỹ hơn** về AI Engineer vs ML Engineer — để bạn biết chính xác mình học gì, bỏ gì, và tại sao đường này nhanh hơn.

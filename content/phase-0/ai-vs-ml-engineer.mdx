@@ -1,0 +1,118 @@
+Hai role này thường bị nhầm lẫn, và **học sai** là phí 1-2 năm. Bạn chọn role này, nhưng nên biết chính xác **điểm khác** — để biết mình học gì, bỏ gì, và tại sao đường này nhanh hơn. Bài này so sánh cụ thể, không sáo rỗng.
+
+## So sánh tổng quan
+
+| | AI Engineer | ML Engineer |
+|---|---|---|
+| **Model** | Dùng pretrained qua API | Train từ đầu (scratch) |
+| **Mục tiêu** | Ship sản phẩm | Nâng model performance |
+| **Kỹ năng** | API, prompt, RAG, agent, deployment | Data pipeline, model training, math sâu |
+| **Vòng lặp** | 1-2 tuần | 1-3 tháng |
+| **Chi phí** | API call, không cần GPU | Cần GPU cluster |
+| **Math** | Hiểu trực giác, không chứng minh | Phát triển, chứng minh |
+| **Team** | 1-2 người ship feature | 5-10 người |
+| **2026** | Lên nhanh | Ổn định |
+
+## Tại sao khác biệt
+
+Sự khác biệt sinh ra từ **một câu hỏi**: "Tôi tạo model, hay dùng model?"
+
+**ML Engineer** trả lời "tạo" — cần:
+- Làm sạch data (tháng).
+- Thiết kế kiến trúc, train, tune.
+- Đánh giá trên benchmark, SOA.
+- Math sâu (gradient, optimization, statistics).
+
+**AI Engineer** trả lời "dùng" — cần:
+- Biết API, gọi LLM, xử lý response.
+- RAG, agent, prompt, orchestration.
+- Cost, monitoring, deployment.
+- Math **đủ** để debug, không phải chứng minh.
+
+<Callout type="info" title="Sự dịch chuyển">
+2023-2026, pretrained models (GPT-4, Claude, Gemini) quá mạnh nên công việc **dịch chuyển** từ "tạo model" sang "dùng model". Cửa hàng bán model đã có sẵn, người cần xây là **lắp ráp**. Đây là **đường** của AI Engineer — nhanh hơn, rẻ hơn.
+</Callout>
+
+## Vòng lặp — khác biệt lớn nhất
+
+### AI Engineer (1-2 tuần)
+
+```text
+User feedback → idea → prompt/RAG → test → deploy → measure
+                                                        ↑
+                                                        └── lặp lại
+```
+
+Một feature RAG: chunk → embed → query → LLM → trả lời. **1 tuần** build, 1 tuần deploy.
+
+### ML Engineer (1-3 tháng)
+
+```text
+Problem → collect data → clean → train → eval → tune → deploy
+                                              ↑
+                                              └── iterate nhiều lần
+```
+
+Một model classification: 1 tháng thu thập data, 1 tháng train, 1 tháng eval & tune. **3 tháng**.
+
+## Khi nào dùng AI Engineer
+
+| Use case | AI Engineer | Tại sao |
+|---|---|---|
+| Chatbot | ✅ | API call + RAG |
+| Q&A trên tài liệu | ✅ | RAG + vector DB |
+| Tóm tắt | ✅ | Prompt + LLM |
+| Code review | ✅ | Agent + tool use |
+| Search (semantic) | ✅ | Embedding + vector DB |
+| Tự động hóa văn phòng | ✅ | Agent + tool use |
+| **Phân tích** tabular | ✅ | RAG + LLM |
+| **Gợi ý** thời gian thực | ✅ | RAG + LLM |
+
+<Callout type="tip" title="Heuristic: 80% use case">
+80% use case 2026 có thể giải bằng **AI Engineer** (RAG, agent, API). 20% còn lại (đặc biệt: tabular, tabular, time-series, cảnh báo) cần **ML Engineer**. Bắt đầu với AI Engineer, nâng khi cần.
+</Callout>
+
+## Khi nào dùng ML Engineer
+
+| Use case | ML Engineer | Tại sao |
+|---|---|---|
+| Phát hiện **fraud** (real-time) | ✅ | XGBoost, fast, chuyên sâu |
+| **Gợi ý** 1 triệu user | ✅ | Matrix factorization |
+| **Time-series** (cổ phiếu, demand) | ✅ | ARIMA, Prophet, deep learning |
+| **Computer vision** (đặc biệt) | ✅ | CNN, custom training |
+| **Anomaly detection** | ✅ | Isolation forest, autoencoder |
+| **Speech** (đặc biệt) | ✅ | Custom model |
+| **Tabular** (cần chính xác) | ✅ | Gradient boosting |
+
+<Callout type="warning" title="Đừng dùng LLM khi">
+- Dữ liệu **tabular** (CSV, SQL) — XGBoost nhanh hơn, rẻ hơn, chính xác hơn.
+- Cần **latency** < 50ms — model nhỏ, không phải LLM.
+- Cần **chính xác** — LLM hallucinate, không phải tool.
+- Dữ liệu **nhạy cảm** — không muốn gửi ra API.
+</Callout>
+
+## Lương — thị trường 2026
+
+| | AI Engineer | ML Engineer |
+|---|---|---|
+| **Junior** | 1.500-3.000 USD/th | 1.500-3.000 USD/th |
+| **Mid** | 3.500-6.000 USD/th | 3.500-6.000 USD/th |
+| **Senior** | 7.000-15.000 USD/th | 7.000-15.000 USD/th |
+| **Staff** | 15.000-25.000 USD/th | 15.000-25.000 USD/th |
+| **Hiring** | Nhanh | Cân nhắc |
+| **Vị trí** | 1-2 người | 1 trong team |
+
+<Callout type="info" title="Lưu ý">
+Lương phụ thuộc **vùng** (US, EU, VN) và **công ty**. AI Engineer thường **lên nhanh** vì ít người, ML Engineer **lên bền** vì depth. Bạn chọn **đường này** — AI Engineer — nhưng phải biết depth **đủ** để không bị "trick" khi phỏng vấn.
+</Callout>
+
+## Điểm cần nhớ
+
+- **AI Engineer** dùng pretrained; **ML Engineer** train từ đầu.
+- **Vòng lặp** 1-2 tuần vs 1-3 tháng — AI Engineer nhanh hơn.
+- **80% use case** giải bằng AI Engineer (RAG, agent, API). 20% cần ML.
+- **Đừng dùng LLM** cho tabular, real-time, cần chính xác, hoặc nhạy cảm.
+- **Lương** tương đương, nhưng AI Engineer **lên nhanh** vì ít người.
+- **Học depth** — bạn chọn AI Engineer, nhưng phải biết ML để **đủ** debug.
+
+Bài tiếp theo chúng ta sẽ xem **thị trường** đang cần gì — 9 kỹ năng mà công ty đang tuyển gấp 2026, để biết tập trung vào đâu.

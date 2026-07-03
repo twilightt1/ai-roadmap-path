@@ -23,6 +23,39 @@ Các loss phổ biến:
 
 <Callout type="warning" title="Deep learning không đảm bảo optimum">
 Loss của mạng sâu non-convex → không có thuật toán chắc chắn tìm minimum toàn cục. Trong thực tế, **local minimum đủ tốt** cũng cho kết quả tốt — và với mạng quá tham số (over-parameterized), đa số local minimum đều chất lượng tương đương.
+
+**Local minima** (đáy thung lũng) vs **global minima** (đáy sâu nhất) vs **saddle points** (yên ngựa) — 3 loại điểm dừng.
+</Callout>
+
+### Local vs global minima
+
+- **Local minimum**: điểm nhỏ hơn trong vùng lân cận.
+- **Global minimum**: điểm nhỏ nhất toàn cục.
+- **Saddle point**: gradient = 0 nhưng không phải cực tiểu (yên ngựa).
+
+<Callout type="info" title="Trong không gian nhiều chiều">
+- Saddle points **phổ biến hơn** local minima (mỗi chiều có 50% xác suất "lên" hoặc "xuống" → saddle).
+- Local minima thường **chất lượng tương đương** (over-parameterized networks).
+- Gradient descent thường **dừng** ở saddle → cần momentum/Adam.
+</Callout>
+
+## Constrained vs unconstrained optimization
+
+- **Unconstrained**: tìm `θ` tối thiểu `L(θ)` không giới hạn. (Mạng neural.)
+- **Constrained**: tìm `θ` tối thiểu `L(θ)` với `θ` thỏa ràng buộc (vd: `‖w‖ ≤ 1`).
+
+```python
+# Unconstrained: tự do weight
+# Constrained: weight decay (L2) = constraint ‖w‖² ≤ λ
+# - L2 regularization: L(θ) + λ‖w‖²
+# - Tương đương: tối thiểu L(θ) với ‖w‖² ≤ λ
+```
+
+<Callout type="info" title="Constrained ở đâu trong AI">
+- **Regularization** = constraint (L2, L1).
+- **Weight clipping** = constraint (vd: gradient clipping).
+- **SVM** = constraint (margin max).
+- **Lagrangian** (duality) — biến constraint thành unconstrained.
 </Callout>
 
 ## Gradient Descent
@@ -35,6 +68,8 @@ Loss của mạng sâu non-convex → không có thuật toán chắc chắn tì
 
 - `α` = **learning rate** (bước nhảy).
 - `∇L(θ)` = gradient tại θ.
+
+**Trực giác**: quả bóng lăn xuống đồi — gradient là độ dốc, learning rate là "độ lăn".
 
 ```python
 import numpy as np
@@ -65,6 +100,11 @@ print(w)   # ~[3, -1] ✓
 
 <Callout type="danger" title="LR sai = training hỏng">
 Learning rate là hyperparameter **quan trọng nhất**. Trực giác: bắt đầu lớn để tiến nhanh, giảm dần khi gần optimum. Công cụ: learning rate finder (bắt đầu nhỏ, tăng tới khi loss tăng → chọn giá trị trước đó).
+
+**Tính chất**:
+- LR quá lớn → gradient nhảy qua optimum → phân kỳ.
+- LR quá nhỏ → gradient "kẹt" → chậm.
+- **Mẹo**: bắt đầu 0.1, tăng/giảm theo hành vi loss.
 </Callout>
 
 ## Batch GD vs SGD vs Mini-batch
@@ -88,6 +128,11 @@ for epoch in range(num_epochs):
 
 <Callout type="info" title="Vì sao mini-batch là chuẩn">
 Mini-batch tận dụng vectorization GPU (xử lý cả batch song song), ổn định hơn SGD (noise ít hơn), lại nhanh hơn batch GD. Batch size ảnh hưởng memory và generalization — batch nhỏ thường generalization tốt hơn nhờ noise.
+
+**Tính chất**:
+- **Batch nhỏ**: gradient noise (giúp thoát local min, generalization tốt).
+- **Batch lớn**: gradient ổn định (tốc độ nhanh, nhưng kém generalization).
+- **Chuẩn**: 32-256 (trade-off giữa tốc độ và generalization).
 </Callout>
 
 ## Optimizers
@@ -103,6 +148,8 @@ v = β·v + (1-β)·∇L
 
 Giúp thoát saddle, vượt qua "thung lũng" hẹp. `β` thường 0.9.
 
+**Trực giác**: quả bóng nặng có "đà" — không bị dừng lại bởi small bump.
+
 ### RMSProp
 
 Chia LR cho **bình phương gradient trung bình** → giảm LR ở hướng dao động mạnh, tăng ở hướng ổn định:
@@ -111,6 +158,8 @@ Chia LR cho **bình phương gradient trung bình** → giảm LR ở hướng d
 s = β·s + (1-β)·(∇L)²
 θ = θ - α · ∇L / (√s + ε)
 ```
+
+**Tính chất**: adaptive LR — mỗi chiều có LR riêng.
 
 ### Adam — phổ biến nhất
 
@@ -129,10 +178,16 @@ v̂ = v / (1-β₂ᵗ)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 ```
 
+**Tính chất**:
+- **Bias correction**: `m̂ = m/(1-β₁ᵗ)` — sửa bias khi khởi tạo 0.
+- **Default**: `β₁=0.9, β₂=0.999, ε=1e-8`.
+- **AdamW**: Adam + weight decay tách rời (chuẩn cho transformer).
+
 <Callout type="tip" title="Khi nào dùng gì">
 - **Adam** mặc định an toàn, ít cần tune LR → dùng cho prototype/fine-tune LLM.
 - **SGD + momentum** + LR schedule thường cho kết quả tốt hơn cuối cùng (generalize tốt) cho computer vision training lớn.
-- AdamW (Adam + weight decay tách rời) là chuẩn cho transformer.
+- **AdamW** (Adam + weight decay tách rời) là chuẩn cho transformer.
+- **RMSProp** đã ít dùng (Adam thường hơn).
 </Callout>
 
 ## Learning rate schedule
@@ -158,9 +213,18 @@ scheduler = LambdaLR(optimizer, lr_lambda)
 
 <Callout type="warning" title="Warmup cho transformer">
 Transformer nhạy với LR lớn lúc đầu (vì init chưa ổn). Warmup tăng dần giúp tránh phân kỳ sớm. Đây là lý do mọi LLM training dùng warmup + cosine.
+
+**Các schedule**:
+- **Step decay**: LR × 0.1 mỗi N epoch.
+- **Cosine**: LR giảm theo cosine từ LR_max → LR_min.
+- **Warmup**: LR tăng dần từ 0 → LR_max trong vài nghìn bước.
+- **Linear decay**: LR giảm tuyến tính.
+- **One-cycle**: LR tăng rồi giảm (1 cycle).
 </Callout>
 
-## Vanishing & exploding gradients
+## Key Challenges
+
+### Vanishing & exploding gradients
 
 Mạng sâu lan truyền gradient qua nhiều tầng. Qua mỗi tầng, gradient nhân với weight:
 
@@ -177,6 +241,32 @@ Mạng sâu lan truyền gradient qua nhiều tầng. Qua mỗi tầng, gradient
 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 ```
 
+### Saddle points
+
+Tại saddle, gradient = 0 nhưng không phải cực tiểu. Trong không gian nhiều chiều, saddle phổ biến.
+
+**Khắc phục**:
+- **Momentum**: tích lũy gradient qua saddle.
+- **Adam**: adaptive LR + momentum.
+- **Noise**: mini-batch noise giúp thoát.
+
+### Plateau regions
+
+Tại plateau, gradient = 0 (họa hẹp) → loss không giảm.
+
+**Khắc phục**:
+- **LR tăng**: tạm thời tăng LR để thoát.
+- **Momentum**: "đà" giúp vượt plateau.
+- **Cyclic LR**: tăng giảm LR theo chu kỳ.
+
+<Callout type="warning" title="Plateau ≠ saddle">
+- **Saddle**: gradient = 0 nhưng có hướng xuống (hướng lên).
+- **Plateau**: gradient = 0 (họa hẹp), không có hướng xuống.
+- **Local min**: gradient = 0, không có hướng xuống nào.
+
+Plateau thường khó thoát hơn — cần tăng LR.
+</Callout>
+
 ## Regularization — chống overfit
 
 | Phương pháp | Cách | Hiệu ứng |
@@ -185,6 +275,8 @@ torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 | **L1** | Thêm `λ‖w‖₁` | Thưa (sparsity) |
 | **Dropout** | Tắt ngẫu nhiên neuron khi train | Chống đồng bộ hóa |
 | **Early stopping** | Dừng khi val loss tăng | Tránh train quá lâu |
+| **Data augmentation** | Tăng data bằng biến đổi | Tăng data |
+| **BatchNorm** | Chuẩn hóa mỗi batch | O ổn định |
 
 ```python
 # PyTorch L2
@@ -192,20 +284,49 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
 
 # Dropout trong model
 self.dropout = torch.nn.Dropout(0.1)
+
+# Early stopping
+if val_loss < best_val_loss:
+    best_val_loss = val_loss
+    patience = 0
+else:
+    patience += 1
+    if patience > patience_max:
+        break
 ```
 
 <Callout type="info" title="MAP = MLE + regularization">
 Như đã học ở chương trước: prior Gaussian trên weight ≡ L2 regularization; prior Laplace ≡ L1. Regularization không phải "mẹo" mà là **MAP estimation** — thêm niềm tin rằng weight nên nhỏ.
+
+**L1 vs L2**:
+- **L1** (sparsity): weight = 0 (thưa, dễ diễn giải).
+- **L2** (mượt): weight nhỏ (không = 0).
+- **Elastic net**: L1 + L2 (kết hợp).
+</Callout>
+
+## Tổng kết: Optimization trong AI
+
+<Callout type="info" title="Optimization = cách model học">
+- **Gradient descent**: `θ = θ - α∇L` — lăn quả bóng xuống đồi.
+- **Mini-batch**: cân bằng giữa tốc độ và ổn định.
+- **Adam**: momentum + adaptive LR (mặc định an toàn).
+- **LR schedule**: cosine + warmup (chuẩn transformer).
+- **Regularization**: L2 (weight decay), dropout, early stopping.
+
+Mỗi model AI = một bài toán tối ưu hóa. Hiểu optimization = hiểu "model học như thế nào".
 </Callout>
 
 ## Điểm cần nhớ
 
 - Tối ưu = tìm `θ` nhỏ loss; **convex** (1 minimum) vs **non-convex** (nhiều — mạng sâu).
+- **Local minima** vs **global minima** vs **saddle points** — saddle phổ biến ở nhiều chiều.
+- **Constrained** (regularization) vs **unconstrained** (tự do).
 - **Gradient descent**: `θ = θ - α·∇L`; learning rate là hyperparameter quan trọng nhất.
 - **Mini-batch** là chuẩn: nhanh (GPU), ổn định, tốt cho generalization.
 - **Adam** = momentum + adaptive LR (mặc định an toàn); AdamW chuẩn cho transformer.
 - **LR schedule**: cosine + warmup cho transformer; warmup tránh phân kỳ sớm.
 - **Vanishing/exploding** khắc phục bằng ReLU, residual, LayerNorm, gradient clipping.
-- **Regularization** = MAP estimation: L2 (Gaussian prior), L1 (Laplace prior), dropout, early stopping.
+- **Plateau** (gradient = 0, họa hẹp) — cần LR tăng; **Saddle** (gradient = 0, có hướng xuống) — cần momentum.
+- **Regularization** = MAP estimation: L2 (Gaussian prior), L1 (Laplace prior, sparsity), dropout, early stopping, augmentation.
 
 Bài cuối Phase 2: **Information theory** — entropy, cross-entropy, KL — gộp lại vì sao cross-entropy là loss tự nhiên cho classification và language modeling.

@@ -1,159 +1,228 @@
-Information theory là toán của **thông tin** — đo "bất ngờ", "không chắc chắn", và "khoảng cách" giữa các phân phối. Nghe trừu tượng, nhưng nó giải thích trực tiếp vì sao **cross-entropy là loss cho classification** và **perplexity đánh giá LLM**. Bài này gộp các khái niệm lại với ứng dụng AI rõ ràng.
+Information theory là toán của **thông tin**. Tại sao **cross-entropy** là loss tự nhiên cho classification? Tại sao **KL divergence** dùng trong RLHF, VAE, knowledge distillation? Bài cuối Phase 2 gộp lại vì sao các loss hoạt động.
 
-## Entropy — đo độ không chắc chắn
+## Entropy — đo "không chắc chắn"
 
-Entropy đo mức "khó đoán" của một phân phối. Phân phối đều (mọi kết quả như nhau) → khó đoán nhất → entropy max. Phân phối tập trung 1 kết quả → dễ đoán → entropy thấp.
-
-```
-H(X) = -Σ p(x) · log₂ p(x)      (bits)
-```
+Entropy `H(X) = -Σ p(x) log p(x)` đo **độ không chắc chắn** của phân phối. Phân phối **uniform** (đều) → entropy max; phân phối **chắc chắn** (1 outcome) → entropy = 0.
 
 ```python
 import numpy as np
 
 def entropy(p):
     p = np.array(p)
-    p = p[p > 0]            # bỏ 0 (log(0) vô nghĩa)
     return -np.sum(p * np.log2(p))
 
-entropy([0.5, 0.5])         # 1.0 bit — đồng xu, tối đa bất ngờ
-entropy([0.99, 0.01])       # ~0.08 bit — gần chắc chắn, ít bất ngờ
-entropy([1.0])              # 0 — hoàn toàn chắc chắn
+# Phân phối uniform (4 outcomes) → entropy max
+print(entropy([0.25, 0.25, 0.25, 0.25]))  # 2.0 bits
+
+# Phân phối chắc chắn (1 outcome) → entropy 0
+print(entropy([1, 0, 0, 0]))  # 0.0 bits
+
+# Phân phối lệch (1 outcome phổ biến) → entropy thấp
+print(entropy([0.7, 0.1, 0.1, 0.1]))  # 1.36 bits
 ```
 
-<Callout type="info" title="Bits vs nats">
-Dùng `log₂` → đơn vị **bit** (thông tin). Dùng `ln` (log tự nhiên) → đơn vị **nat**. AI thường dùng nat (vì đạo hàm `ln` gọn). Hai cách chỉ khác hệ số log.
+**Ý nghĩa**:
+- Entropy = **số bit trung bình** để mã hóa thông tin.
+- Phân phối đều → khó đoán → cần nhiều bit → entropy cao.
+- Phân phối lệch → dễ đoán → cần ít bit → entropy thấp.
+
+<Callout type="info" title="Entropy ở đâu trong AI">
+- **Decision tree**: chọn feature có **information gain** cao (entropy giảm nhiều).
+- **Information bottleneck**: layer học biểu diễn "đủ" thông tin (entropy).
+- **Active learning**: chọn sample có entropy cao (model không chắc) để gắn nhãn.
+- **Reinforcement learning**: entropy regularization khuyến khích exploration.
 </Callout>
 
-<Callout type="tip" title="Entropy giải thích perplexity">
-Perplexity (đánh giá LLM) = `2^H` — "số lựa chọn trung bình mà model phân vân". Perplexity thấp = model tự tin (ít lựa chọn) = tốt. Perplexity 1 = hoàn toàn chắc chắn (entropy 0).
+## Bits vs nats — đơn vị của entropy
+
+Tùy cơ số log:
+
+| Log | Đơn vị | Đặc điểm |
+|---|---|---|
+| **log₂** | bits | Phổ biến (information theory) |
+| **ln** (log_e) | nats | Phổ biến trong ML (đạo hàm tự nhiên) |
+
+```python
+import numpy as np
+
+# 1 bit = ln(2) nats
+p = [0.5, 0.5]
+print(entropy(p))  # 1.0 (log₂)
+
+# 1 nat = log₂(e) bits
+print(entropy(p, base=np.e))  # 0.693 (ln)
+```
+
+**Tính chất**:
+- **bits**: 1 bit = 1 câu hỏi yes/no (binary).
+- **nats**: 1 nat = 1 đơn vị thông tin (natural log).
+- **Chuyển đổi**: 1 bit = ln(2) ≈ 0.693 nats.
+
+<Callout type="info" title="ML thường dùng nats">
+Machine learning thường dùng **ln** (nats) vì đạo hàm tự nhiên, dễ tính. PyTorch/NumPy `log` mặc định là `ln`. Code thực tế ít cần chuyển đổi — chỉ cần biết đơn vị.
+
+**Cross-entropy loss** trong PyTorch: `F.cross_entropy` dùng nats (log tự nhiên).
 </Callout>
 
 ## Cross-entropy — loss tự nhiên cho classification
 
-Cross-entropy đo **chi phí** khi dùng phân phối `q` (prediction) để mã hóa sự kiện thực sự đến từ `p` (truth):
-
-```
-H(p, q) = -Σ p(x) · log q(x)
-```
-
-Khi `p` là true label (one-hot, chỉ 1 vị trí = 1), công thức rút gọn:
-
-```
-H(p, q) = -log q(correct class)
-```
-
-Đó chính là **cross-entropy loss** bạn dùng hàng ngày:
+Cross-entropy `H(p, q) = -Σ p(x) log q(x)` đo **chi phí** khi dùng q mã hóa p. Khi p = true label, q = prediction → cross-entropy là **loss tự nhiên**.
 
 ```python
-import torch
-import torch.nn.functional as F
+import numpy as np
 
-logits = torch.tensor([[2.0, 1.0, 0.1]])     # raw output model
-target = torch.tensor([0])                    # class đúng là 0
+# True label (one-hot)
+p = [0, 1, 0, 0]  # class 1
 
-loss = F.cross_entropy(logits, target)
-# = -log(softmax(logits)[0])
+# Predictions (softmax)
+q_bad = [0.1, 0.2, 0.3, 0.4]  # confident wrong
+q_good = [0.05, 0.9, 0.03, 0.02]  # confident right
+
+def cross_entropy(p, q):
+    return -np.sum(p * np.log(q))
+
+print(cross_entropy(p, q_bad))   # 1.609 (lớn — sai)
+print(cross_entropy(p, q_good))   # 0.105 (nhỏ — đúng)
 ```
 
-<Callout type="warning" title="Dùng logit, không dùng probability">
-`F.cross_entropy` nhận **logit** (raw output), bên trong nó tự `log_softmax` để ổn định số. Đừng truyền probability đã softmax rồi — sẽ mất ổn định (log của số rất nhỏ → NaN). Dùng `F.nll_loss` nếu đã có log-prob.
+**Tại sao cross-entropy**:
+- **MLE** (tối đa likelihood) cho categorical → tương đương **tối thiểu cross-entropy**.
+- **Gradient** (đã học ở chương Calculus): `∂L/∂z = softmax - target` (gọn, không vanishing).
+- **Độ đo** trực giác: `q(x) → 0` khi `p(x) → 1` → log → -∞ (phạt nặng).
+
+<Callout type="tip" title="Cross-entropy = entropy + KL">
+Vì `H(p, q) = H(p) + KL(p||q)`, và H(p) cố định (true label không đổi), tối thiểu cross-entropy ≡ tối thiểu KL ≡ đưa prediction gần true. Đây là **lý do cross-entropy là loss tự nhiên** cho classification.
+
+**Tính chất**:
+- `H(p, q) ≥ H(p)` (mã hóa tệ hơn entropy).
+- `H(p, p) = H(p)` (chỉ khi q = p).
+- `H(p, q) = H(p) + KL(p||q)` (phân tách).
 </Callout>
 
-### Vì sao cross-entropy chứ không phải MSE?
-
-Cho classification, MSE có gradient `∂L/∂z ∝ σ·(1-σ)` qua sigmoid → **vanishing** khi output gần 0/1. Cross-entropy (với softmax) có gradient gọn `predicted - target` — **không vanishing**. Đây là lý do toản học đứng sau việc dùng cross-entropy cho classification.
-
-## KL Divergence — khoảng cách (không đối xứng)
-
-KL divergence đo "khoảng cách" từ phân phối `p` (truth) sang `q` (prediction):
-
-```
-KL(p || q) = Σ p(x) · log(p(x) / q(x))
-```
+### Đừng dùng MSE cho classification
 
 ```python
-def kl_divergence(p, q):
-    p = np.array(p); q = np.array(q)
-    mask = p > 0
-    return np.sum(p[mask] * np.log(p[mask] / q[mask]))
+# MSE qua sigmoid → gradient vanishing
+# Sigmoid: σ(x) → 0 hoặc 1 khi |x| lớn → σ'(x) → 0
+# MSE gradient: 2(ŷ - y) · σ'(x) → 0 → không học
+```
 
-kl_divergence([1, 0], [0.5, 0.5])   # 1.0 — sai hoàn toàn
-kl_divergence([1, 0], [0.9, 0.1])   # ~0.15 — gần đúng
+<Callout type="danger" title="MSE qua sigmoid vanishing">
+MSE qua sigmoid → gradient = `2(ŷ - y) · σ'(x)`. Khi `|x|` lớn, `σ'(x) ≈ 0` → gradient ≈ 0 → không học. Đây là lý do **không dùng MSE cho classification** (cần sigmoid) → cross-entropy ổn định hơn.
+
+**Tính chất**:
+- Cross-entropy qua sigmoid → gradient `predicted - target` (gọn, không vanishing).
+- Cross-entropy qua softmax → gradient `softmax - target` (gọn, không vanishing).
+</Callout>
+
+## KL Divergence — "khoảng cách" từ p đến q
+
+KL `KL(p||q) = Σ p(x) log(p(x)/q(x))` đo "khoảng cách" từ p đến q. **Không đối xứng** (KL(p||q) ≠ KL(q||p)).
+
+```python
+import numpy as np
+
+def kl(p, q):
+    p = np.array(p)
+    q = np.array(q)
+    return np.sum(p * np.log(p / q))
+
+# KL(p, q) ≈ 0 → 0.0 (p = q)
+print(kl([0.5, 0.5], [0.5, 0.5]))  # 0.0
+
+# KL(p, q) ≠ 0 → p ≠ q
+print(kl([0.5, 0.5], [0.9, 0.1]))  # 0.510 (lớn)
 ```
 
 **Tính chất**:
-- `KL ≥ 0`, và `= 0` khi `p = q`.
-- **Không đối xứng**: `KL(p||q) ≠ KL(q||p)` — nên gọi "divergence" chứ không "distance".
+- `KL(p||q) ≥ 0` (luôn).
+- `KL(p||q) = 0` khi `p = q`.
+- **Không đối xứng** — không phải metric.
+- **Forward** `KL(p||q)` (q phải cover p) vs **reverse** `KL(q||p)` (q phải zero khi p zero).
 
-<Callout type="danger" title="KL không đối xứng — cẩn thắc">
-Vì `KL(p||q) ≠ KL(q||p)`, chọn chiều quan trọng:
-- **Forward KL** `KL(p||q)`: q phải "che" mọi chỗ p có mass → q tránh bị 0 nơi `p > 0` (**mode-covering**).
-- **Reverse KL** `KL(q||p)`: q chỉ cần khớp 1 mode của p → q tránh bị dàn trải (**mode-seeking**).
-VAE dùng forward KL; GAN dùng reverse KL — đây là lý do chúng sinh ra kết quả khác nhau.
+### Ứng dụng trong AI
+
+| Ứng dụng | Cách KL |
+|---|---|
+| **VAE** | `KL(q(z|x) || p(z))` — ép posterior gần prior |
+| **RLHF** | `KL(policy || ref_policy)` — tránh policy lệch xa base |
+| **Knowledge distillation** | `KL(student || teacher)` — học từ teacher |
+| **Variational inference** | `KL(q || p)` — xấp xỉ posterior |
+| **Model compression** | `KL(q || p)` — xấp xỉ model |
+
+<Callout type="info" title="KL trong RLHF">
+Trong RLHF, KL divergence `KL(policy_θ || policy_ref)` giữ policy mới **không lệch quá xa** base model. Đây là lý do fine-tune LLM không bị "hỏng" (catastrophic forgetting) — KL giữ structure.
+
+**Tính chất**:
+- **Forward KL**: `q` phải cover `p` (q phải "đủ" — không bỏ sót mode).
+- **Reverse KL**: `q` phải zero khi `p` zero (q phải "tinh" — không sinh mode mới).
+- **VAE** dùng forward KL (q phải cover p).
+- **RLHF** dùng reverse KL (q phải "tinh" — không lệch quá).
 </Callout>
 
-### Liên hệ với cross-entropy
+## Mutual Information
 
-```
-H(p, q) = H(p) + KL(p || q)
-```
-
-Vì `H(p)` (entropy của truth) cố định, **tối thiểu cross-entropy ≡ tối thiểu KL** ≡ đưa prediction `q` gần truth `p`. Đây là lý do cốt lõi cross-entropy là loss cho classification.
-
-## Ứng dụng KL trong AI
-
-| Bài toán | Cách dùng KL |
-|---|---|
-| **Knowledge distillation** | Ép học sinh khớp logits giáo viên (soft labels) |
-| **VAE** | `KL(q(z|x) || p(z))` ép posterior gần prior |
-| **RLHF / PPO** | Thêm `KL(policy_new || policy_old)` tránh thay đổi quá nhiều |
-| **Model compression** | Giảm tham số giữ phân phối output |
+Mutual Information `I(X; Y) = KL(p(x,y) || p(x)p(y))` đo **lượng thông tin** mà X, Y chia sẻ. `I(X;Y) = 0` khi X, Y độc lập.
 
 ```python
-# Distillation: KL giữa soft label (giáo viên) và học sinh
-kl = F.kl_div(
-    F.log_softmax(student_logits / T, dim=-1),
-    F.softmax(teacher_logits / T, dim=-1),
-    reduction="batchmean"
-)
+import numpy as np
+
+# Mutual information đo sự phụ thuộc giữa X và Y
+def mutual_info(X, Y):
+    # X, Y là mảng
+    # Tính p(x,y), p(x), p(y)
+    # I = Σ p(x,y) log(p(x,y) / (p(x)·p(y)))
+    # Độc lập: p(x,y) = p(x)·p(y) → I = 0
+    pass
 ```
 
-<Callout type="info" title="KL penalty trong RLHF">
-Khi fine-tune LLM bằng RL (PPO), ta không cho policy tự do thay đổi — thêm penalty `KL(new || base)` để policy mới không lệch quá xa base model (tránh reward hacking, giữ khả năng ngôn ngữ). Đây là cơ chế chính của RLHF.
+**Tính chất**:
+- `I(X;Y) = H(X) + H(Y) - H(X,Y)`.
+- `I(X;Y) = 0` khi X, Y độc lập.
+- `I(X;Y) = H(X) - H(X|Y)` — entropy giảm khi biết Y.
+- **Đối xứng**: `I(X;Y) = I(Y;X)` (khác KL).
+
+<Callout type="info" title="Mutual Information ở đâu trong AI">
+- **Feature selection**: chọn feature có MI cao với target (đo phụ thuộc, không chỉ tuyến tính).
+- **Representation learning**: InfoNCE loss (contrastive learning) tối đa MI giữa embedding và target.
+- **Disentanglement**: tối đa MI giữa các factor.
+- **Information bottleneck**: layer học biểu diễn "đủ" thông tin (MI) về target.
+- **Active learning**: chọn sample có MI cao (giảm entropy nhiều nhất).
 </Callout>
 
-## Mutual information
+### Mutual Information vs Correlation
 
-Mutual information `I(X;Y)` đo **lượng thông tin chung** giữa 2 biến:
+- **Correlation**: chỉ đo **phụ thuộc tuyến tính** (miss non-linear).
+- **Mutual Information**: đo **mọi phụ thuộc** (cả non-linear).
 
+```python
+# X = [-1, 0, 1], Y = X²
+# Correlation = 0 (non-linear), nhưng MI > 0
+# MI đo "mọi" phụ thuộc, không chỉ tuyến tính
 ```
-I(X;Y) = KL(P(X,Y) || P(X)·P(Y))
-```
 
-- `I = 0` khi X, Y độc lập.
-- `I` lớn khi biết Y cho nhiều thông tin về X.
+## Tổng kết: Information theory trong AI
 
-Dùng trong: feature selection (chọn feature nhiều thông tin với label), representation learning (maximize MI giữa input và representation), clustering evaluation.
+<Callout type="info" title="Information theory = lý do các loss hoạt động">
+- **Entropy** = độ không chắc chắn.
+- **Cross-entropy** = entropy + KL = loss tự nhiên cho classification.
+- **KL** = "khoảng cách" phân phối (dùng trong VAE, distillation, RLHF).
+- **Mutual Information** = lượng thông tin chia sẻ (feature selection, contrastive learning).
+
+Mỗi loss trong AI = một khái niệm information theory. Hiểu = hiểu "model học cái gì".
+</Callout>
 
 ## Điểm cần nhớ
 
-- **Entropy** `H = -Σ p log p` đo độ khó đoán; phân phối đều → max, tập trung → thấp. Bits (log₂) vs nats (ln).
-- **Perplexity = 2^H** — số lựa chọn trung bình model phân vân; thấp = tốt.
-- **Cross-entropy** `H(p,q) = -Σ p log q`; với one-hot truth → `-log q(correct)` — loss tự nhiên cho classification.
-- Dùng **logit** cho `F.cross_entropy` (tự softmax+log ổn định), đừng truyền probability.
-- Cross-entropy thắng MSE cho classification vì gradient `predicted - target` không vanishing.
-- **KL divergence** `KL(p||q)` ≥ 0, không đối xứng; forward (mode-covering) vs reverse (mode-seeking).
-- `H(p,q) = H(p) + KL(p||q)` → tối thiểu cross-entropy ≡ tối thiểu KL.
-- KL dùng trong distillation, VAE, **RLHF penalty**, model compression.
+- **Entropy** `H(X) = -Σ p log p` — đo độ không chắc chắn; uniform → max, chắc chắn → 0.
+- **Bits** (log₂) vs **nats** (ln) — ML thường dùng nats (đạo hàm tự nhiên).
+- **Cross-entropy** `H(p, q) = -Σ p log q` — loss tự nhiên cho classification; gradient `predicted - target`.
+- **MSE qua sigmoid** → gradient vanishing → **đừng dùng MSE cho classification**.
+- **KL** `KL(p||q) = Σ p log(p/q)` — "khoảng cách" (không đối xứng), dùng trong VAE, RLHF, distillation.
+- **Forward KL** (q phải cover p) vs **Reverse KL** (q phải zero khi p zero) — VAE dùng forward, RLHF dùng reverse.
+- **Mutual Information** `I(X;Y) = KL(p(x,y) || p(x)p(y))` — đo phụ thuộc (cả non-linear), dùng feature selection, contrastive.
+- **MI vs correlation**: MI đo mọi phụ thuộc, correlation chỉ tuyến tính.
 
-## Tổng kết Phase 2
+---
 
-Phase 2 đã trang bị **toán nền** cho mọi thứ sau:
-- **Linear algebra** (vector, cosine similarity, matmul, SVD) → hiểu embedding, attention, PCA.
-- **Calculus** (gradient, chain rule) → hiểu backpropagation.
-- **Probability** (Bayes, MLE, phân phối) → hiểu model học phân phối thế nào.
-- **Optimization** (GD, Adam, LR schedule) → hiểu training thực tế.
-- **Information theory** (entropy, cross-entropy, KL) → hiểu loss và RLHF.
-
-Bạn không cần chứng minh định lý, nhưng giờ khi đọc "softmax(QKᵀ/√d_k)" hay "minimize cross-entropy + KL penalty", bạn biết chính xác nó nghĩa là gì. Tiếp theo: **Phase 3 — Machine Learning Fundamentals** — áp dụng toán này vào các thuật toán ML cổ điển (regression, trees, clustering).
+**Phase 2 hoàn thành!** Bạn đã học toán đằng sau model AI. Bài tiếp theo: **Phase 3 — Machine Learning Fundamentals** — chuyển từ toán sang thuật toán ML thực tế (supervised/unsupervised, scikit-learn, evaluation).
