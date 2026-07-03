@@ -1,6 +1,8 @@
 Machine Learning Fundamentals là nơi bạn học cách **suy nghĩ như một người xây model**, không chỉ như người gọi API. Nếu Phase 1 dạy bạn viết Python, Phase 2 dạy bạn toán nền, thì Phase 3 dạy bạn cách biến dữ liệu thành hệ thống dự đoán có thể đo lường, debug và cải thiện.
 
-Trong sản phẩm AI thực tế, bạn sẽ gặp rất nhiều bài toán không cần LLM lớn: phân loại ticket support, phát hiện churn, ranking lead sales, dự đoán user có convert không, phân nhóm user, hoặc đánh giá chất lượng response. Nếu bạn không hiểu train/validation/test, leakage, overfitting, metrics, bạn có thể build một model có demo rất đẹp nhưng fail hoàn toàn khi deploy.
+Trong sản phẩm AI thực tế, bạn sẽ gặp rất nhiều bài toán không cần LLM lớn: phân loại ticket support, phát hiện churn, ranking lead sales, dự đoán user có convert không, phân nhóm user, hoặc đánh giá chất lượng response. Nếu bạn không hiểu train/validation/test, leakage, overfitting, metrics, calibration, bạn có thể build một model có demo rất đẹp nhưng fail hoàn toàn khi deploy.
+
+Chương này là **mô hình tư duy** — mọi chương sau (linear, tree, ensemble, unsupervised, tuning, sklearn) đều đứng trên khái niệm ở đây. Đọc kỹ, làm bài tập bằng tay, và bạn sẽ tránh được 80% lỗi mà người mới mắc phải trong production.
 
 ## Why this matters
 
@@ -22,7 +24,8 @@ Nếu bạn không hiểu ML fundamentals, bạn không biết:
 - Nếu model bỏ sót refund request thì hậu quả gì?
 - Data train có leakage từ test không?
 - Model overfit vào vài phrase trong training không?
-- Metric nào phù hợp: accuracy, recall, precision, F1?
+- Metric nào phù hợp: accuracy, recall, precision, F1, AUC-ROC?
+- Xác suất model trả về có đáng tin (calibrated) để dùng làm threshold không?
 
 <Callout type="danger" title="Demo tốt không bằng model tốt">
 Một model có thể hoạt động tuyệt vời trên 20 ví dụ demo nhưng thất bại trên production vì data distribution khác, leakage, class imbalance hoặc metric sai. ML fundamentals giúp bạn phát hiện những vấn đề này trước khi người dùng phát hiện.
@@ -32,47 +35,44 @@ Một model có thể hoạt động tuyệt vời trên 20 ví dụ demo nhưng
 
 Sau chương này, bạn sẽ có thể:
 
-1. Phân biệt supervised, unsupervised và reinforcement learning bằng ví dụ AI product.
-2. Thiết kế train/validation/test split đúng, tránh data leakage.
+1. Phân biệt supervised, unsupervised, semi-supervised và reinforcement learning bằng ví dụ AI product.
+2. Thiết kế train/validation/test split đúng cho nhiều dạng data (random, stratified, group, time-based), tránh data leakage.
 3. Giải thích overfitting, underfitting và bias-variance tradeoff bằng learning curves.
-4. Chọn metric phù hợp cho classification/regression, đặc biệt khi class imbalance.
-5. Dùng cross-validation để estimate performance ổn định hơn.
-6. Xây một evaluation workflow cơ bản cho model ML production.
+4. Chọn metric phù hợp cho classification/regression, đặc biệt khi class imbalance — bao gồm accuracy, precision, recall, F-beta, AUC-ROC, PR-AUC.
+5. Đọc confusion matrix, ROC curve và precision-recall curve để ra quyết định threshold.
+6. Dùng cross-validation (k-fold, stratified, group, time-series) để estimate performance ổn định hơn.
+7. Hiểu calibration probability và cost-sensitive learning — yếu tố quyết định trong production.
+8. Xây một evaluation workflow cơ bản cho model ML production.
 
 ## Prerequisites
 
 Bạn nên nắm:
 
 - Python functions, lists, dicts, Pandas cơ bản.
-- Linear algebra: vector, dot product.
-- Probability basics: conditional probability.
+- Linear algebra: vector, dot product, matrix shape.
+- Probability basics: conditional probability, Bayes.
 - Optimization: loss, gradient descent.
+- Statistics: mean, variance, distribution.
 
 Nếu chưa chắc, quay lại Phase 1 và Phase 2 trước khi học chương này.
 
-## Supervised, unsupervised, reinforcement learning
+## Ba pardigm học của ML
 
 ### Supervised learning
 
-Supervised learning là học từ cặp `(input, label)`.
+Supervised learning là học từ cặp `(input, label)`. Bạn có cả `X` (features) và `y` (target), và model học mapping `f(x) → y` sao cho loss trên training data nhỏ, đồng thời generalize được lên data mới.
 
 ```text
-x = email text
- y = spam / not spam
+training data: (x_1, y_1), (x_2, y_2), ..., (x_n, y_n)
+model learns: f(x) ≈ y
 ```
 
-Model học mapping:
+Có hai nhóm lớn, phụ thuộc vào dạng của `y`:
 
-```text
-f(x) → y
-```
-
-Có hai nhóm lớn:
-
-| Bài toán | Target | Ví dụ |
+| Bài toán | Target `y` | Ví dụ AI product |
 |---|---|---|
-| Classification | Nhãn rời rạc | spam/not spam, intent, sentiment |
-| Regression | Giá trị liên tục | giá nhà, latency, monthly spend |
+| Classification | Nhãn rời rạc | spam/not spam, intent, sentiment, churn yes/no |
+| Regression | Giá trị liên tục | giá nhà, latency model, monthly spend,ixture lượng token |
 
 Ví dụ classification:
 
@@ -88,13 +88,17 @@ y = [1, 0, 0]  # 1=spam, 0=not spam
 Ví dụ regression:
 
 ```python
-X = [[100], [500], [1000]]  # number of tokens
-y = [0.001, 0.005, 0.010]  # API cost in dollars
+X = [[100], [500], [1000]]   # number of input tokens
+y = [0.001, 0.005, 0.010]   # API cost in dollars
 ```
+
+<Callout type="info" title="Classification đôi khi là ranking">
+Nhiều bài toán “classification” trong product thực ra là ranking: chọn top-K document cho RAG, xếp user theo risk score, ưu tiên ticket. Dù model output class, downstream dùng score/probability để xếp. Bạn cần tư duy cả hai: class hard decision và score mềm.
+</Callout>
 
 ### Unsupervised learning
 
-Unsupervised learning không có label. Model tìm cấu trúc:
+Unsupervised learning không có label. Model tìm cấu trúc ẩn trong `X`:
 
 ```text
 x only, no y
@@ -102,10 +106,24 @@ x only, no y
 
 Ví dụ:
 
-- Cluster user theo behavior.
-- Cluster support tickets theo topic.
-- Giảm chiều embeddings để visualize.
-- Phát hiện anomaly trong traffic.
+- Cluster user theo behavior (cohort, persona).
+- Cluster support tickets theo topic để tối ưu routing.
+- Giảm chiều embeddings để visualize, debug RAG.
+- Phát hiện anomaly trong traffic/logs.
+- Học representation (embedding) cho text, ảnh, graph.
+
+Trong AI product hiện đại, unsupervised xuất hiện khắp nơi: embedding model là unsupervised (hoặc self-supervised), clustering để khám phá data, anomaly detection để alert.
+
+### Semi-supervised learning
+
+Giữa supervised và unsupervised: bạn có một ít label (đắt) và rất nhiều unlabeled data (rẻ).
+
+```text
+(x_1, y_1), ..., (x_l, y_l)   ← labeled, ít
+x_{l+1}, ..., x_{l+u}          ← unlabeled, nhiều
+```
+
+Kỹ thuật phổ biến: self-training (model dự đoán label cho unlabeled, chọn confident), co-training, label propagation, contrastive pretraining. Đây là nền của pretraining trong LLM: học representation từ corpus khổng lồ không label, sau đó fine-tune với ít label.
 
 ### Reinforcement learning
 
@@ -113,31 +131,37 @@ Reinforcement learning có agent, environment, action, reward.
 
 ```text
 agent takes action → environment responds → reward
+                    ↑                      ↓
+                    └── new state ──────────┘
 ```
 
 Trong LLM:
 
-- Model sinh response.
-- Reward model hoặc human preference đánh giá.
-- Policy được cập nhật để response tốt hơn.
+- Model sinh response (action).
+- Reward model hoặc human preference đánh giá (reward).
+- Policy được cập nhật (PPO/DPO/GRPO) để response tốt hơn.
 
-Đây là nền của RLHF/PPO/DPO ở các phase sau.
+Đây là nền của RLHF/PPO/DPO ở các phase sau. Bạn không cần tự train robot, nhưng phải hiểu tư duy: model = policy, output = action, metric = reward. Khi kết hợp RL với supervised pretraining, ta có các LLM “aligned” như ngày nay.
 
-<Callout type="info" title="AI Engineer cần hiểu cả ba mức">
-Bạn không cần tự train robot RL, nhưng phải biết: supervised cho classifier/reranker, unsupervised cho clustering/embedding analysis, reinforcement learning cho RLHF và agent training. Ba tư duy này xuất hiện liên tục trong AI systems.
+<Callout type="info" title="AI Engineer cần hiểu cả bốn mức">
+Supervised cho classifier/reranker, unsupervised cho clustering/embedding analysis, semi-supervised cho pretraining với ít label, reinforcement learning cho RLHF và agent training. Bốn tư duy này xuất hiện liên tục trong AI systems hiện đại.
 </Callout>
 
 ## Dataset split: train, validation, test
 
-Một lỗi rất phổ biến của người mới là train model rồi đánh giá lại trên chính data train. Điều này giống như cho học sinh học đúng đề thi rồi bảo điểm cao chứng minh học sinh giỏi.
+Một lỗi rất phổ biến của người mới là train model rồi đánh giá lại trên chính data train. Điều này giống như cho học sinh học đúng đề thi rồi bảo điểm cao chứng minh học sinh giỏi — điểm không nói gì về khả năng giải bài mới.
 
-Ta cần chia dữ liệu:
+Ta cần chia dữ liệu thành nhiều phần có vai trò khác nhau:
 
-| Split | Vai trò | Được dùng để cập nhật model? |
+| Split | Vai trò chính | Model nhìn được? |
 |---|---|---|
-| Train | Học parameters | Có |
-| Validation | Chọn hyperparameters, threshold, early stopping | Không trực tiếp |
-| Test | Đánh giá cuối cùng | Không |
+| Train | Học parameters (weights, thresholds) | Có, dùng để update weights |
+| Validation | Chọn hyperparameters, threshold, early stopping, model selection | Không trực tiếp học weights |
+| Test | Đánh giá cuối cùng, báo cáo cho stakeholder | Không, chỉ mở một lần |
+
+Lý do phải có 3 phần: mỗi lần bạn dùng một tập để ra quyết định (chọn model, chọn threshold), tập đó một phần đã trở thành “thông tin” model. Dùng test nhiều lần = test đã trở thành validation, metric cuối bị optimistic.
+
+### Holdout split đơn giản
 
 ```python
 from sklearn.model_selection import train_test_split
@@ -159,13 +183,73 @@ X_val, X_test, y_val, y_test = train_test_split(
 )
 ```
 
-`stratify=y` giữ tỷ lệ class tương tự giữa các split. Nếu spam chỉ chiếm 5%, không stratify có thể làm validation/test gần như không có spam.
+Tỷ lệ phổ biến: 70/15/15 hoặc 80/10/10 với data lớn; 60/20/20 với data ít. Với data rất lớn (hàng triệu sample), bạn có thể dùng 98/1/1 vì val/test chỉ cần đủ mẫu để estimate metric ổn.
+
+### `stratify=y` là gì và khi nào bắt buộc
+
+`stratify=y` giữ tỷ lệ class trong mỗi split tương tự như toàn dataset. Nếu spam chỉ chiếm 5%, không stratify có thể làm validation/test gần như không có spam (hoặc ngược nhiên, tập trung hết spam vào một split) → metric cực kỳ variance.
+
+```text
+Original: 5% spam
+Naive split có thể cho:
+  train: 7% spam
+  val:   1% spam  ← valomentum metric lệch
+stratify:
+  train: 5% spam
+  val:   5% spam
+  test:  5% spam
+```
+
+**Bắt buộc stratify khi**:
+
+- Class imbalance (tỷ lệ minority < 10-20%).
+- Số sample nhỏ (< 1000).
+- Dataset nhiều class và một số class hiếm.
+
+### Group-aware split
+
+Nếu cùng user/session/document xuất hiện ở nhiều row, random split theo row làm leakage: cùng user ở cả train và test. Dùng `GroupKFold` hoặc `split` theo group:
+
+```python
+from sklearn.model_selection import GroupShuffleSplit
+
+splitter = GroupShuffleSplit(test_size=0.2, random_state=42)
+train_idx, test_idx = next(splitter.split(X, y, groups=user_ids))
+```
+
+Nguyên tắc: **test phải mô phỏng data mà model chưa từng thấy ở granularity mà nó cần generalize**. Nếu Production suy luận trên user mới → group theo user. Nếu suy luận cho ngày mới → group theo ngày.
+
+### Time-series split
+
+Cho data có thứ tự thời gian, random split phá hết tính đại diện vì model “nhìn thấy tương lai” trong train. Luôn split theo thời gian:
+
+```python
+cutoff = pd.to_datetime("2025-01-01")
+train = df[df["date"] < cutoff]
+test  = df[df["date"] >= cutoff]
+```
+
+Validation cũng phải trước test về thời gian:
+
+```text
+train        val         test
+─────────  ────────  ────────
+t0          t1         t2          t_now
+```
+
+Nếu chọn threshold trên val rồi evaluate trên test, val phải giải thích được decision — không được dùng test để tune.
+
+<Callout type="warning" title="Không phải data nào cũng split random được">
+Time-series phải split theo thời gian. User/session data nên split theo group. Nếu cùng user xuất hiện trong train và test, model có thể học đặc điểm user thay vì học pattern tổng quát — metric sẽ “ảo” và production fail.
+</Callout>
 
 ## Data leakage
 
-Data leakage là khi thông tin từ validation/test lọt vào training. Đây là một trong những lỗi nguy hiểm nhất vì nó làm metric đẹp giả tạo.
+Data leakage là khi thông tin từ validation/test (hoặc tương lai) lọt vào training. Đây là một trong những lỗi nguy hiểm nhất vì nó làm metric đẹp giả tạo — nhưng khi deploy, model kém hơn nhiều so với benchmark.
 
-### Ví dụ leakage đơn giản
+Có nhiều dạng leakage, từ hiển nhiên đến tinh vi:
+
+### Leakage 1: Preprocessing fit trên toàn bộ data
 
 Sai:
 
@@ -185,55 +269,127 @@ X_train, X_test, y_train, y_test = train_test_split(X_scaled, y)
 X_train, X_test, y_train, y_test = train_test_split(X, y)
 
 scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+X_train_scaled = scaler.fit_transform(X_train)  # fit chỉ trên train
+X_test_scaled = scaler.transform(X_test)        # transform áp lên test
 ```
 
-Tại sao? Vì mean/std của test data đã bị dùng để fit scaler nếu bạn scale trước khi split. Model vô tình được biết distribution test.
+Tại sao sai? Vì mean/std của test data đã bị dùng để fit scaler, nên train đã “biết” distribution của test. Model không thật sự unseen trên test.
+
+Cách tránh triệt để: **đặt preprocessing vào Pipeline**, để trong CV nó tự fit trên train fold.
+
+### Leakage 2: Feature chứa tương lai
+
+Feature `days_until_cancel` để dự đoán churn — nhưng feature này chỉ biết sau khi user đã cancel. Hoặc `total_refund_amount` cho bài toán fraud trước khi giao dịch hoàn tất. Đây là leakage tinh vi: feature là “kết quả” của target, không phải nguyên nhân.
+
+Kiểm tra: **nếu ở thời điểm inference, bạn có giá trị feature này không?** Nếu câu trả lời là “chưa” → loại bỏ.
+
+### Leakage 3: Duplicate/cross-set theo entity
+
+Cùng user có nhiều row ở cả train và test → model học “user A thường spam” rồi gặp lại user A ở test. Hoặc cùng document được chia thành nhiều chunk lọt vào cả train và test cho bài toán search.
+
+### Leakage 4: Temporal leakage
+
+Dùng feature như “average session length của tháng” để dự đoán churn đầu tháng, nhưng average đó chứa cả session sau thời điểm prediction. Hoặc dùng giá đóng cửa hôm nay để dự đoán biến động hôm nay.
 
 <Callout type="danger" title="Leakage trong AI product rất tinh vi">
 Leakage không chỉ là scaler. Ví dụ: dùng feature `days_until_cancel` để dự đoán churn — nhưng feature này chỉ biết sau khi user đã cancel. Hoặc split random theo row trong khi cùng user có nhiều row ở cả train và test. Production fail vì test không còn độc lập.
 </Callout>
 
+### Checklist phát hiện leakage
+
+Trước khi trust một metric, hỏi:
+
+1. Preprocessing đã fit chỉ trên train chưa?
+2. Có feature nào chỉ biết sau khi target xảy ra không?
+3. Cùng entity có ở cả train và test không?
+4. Time-series data có split theo thời gian không?
+5. Test có được dùng nhiều lần để chọn model không?
+6. CV có dùng `GroupKFold` khi data có cấu trúc group không?
+
 ## Overfitting và underfitting
 
-### Underfitting
+### Underfitting (high bias)
 
-Model quá đơn giản, không học được pattern.
+Model quá đơn giản so với complexity của data, không học được pattern.
 
 ```text
 train performance: poor
-val performance: poor
+val performance:   poor
+gap:               nhỏ
 ```
 
-Ví dụ: dùng linear model cho quan hệ cực phi tuyến mà không có feature engineering.
+Ví dụ: dùng linear model cho quan hệ cực phi tuyến, hoặc dùng cây depth=1 cho bài toán có nhiều interaction. Model chỉ chưa đủ sức biểu diễn pattern thật.
 
-### Overfitting
+### Overfitting (high variance)
 
-Model học thuộc training data, không generalize.
+Model học thuộc training data gồm cả noise, không generalize.
 
 ```text
 train performance: excellent
-val performance: poor
+val performance:   poor
+gap:               lớn
 ```
 
-Ví dụ: decision tree không giới hạn depth, học thuộc từng sample.
+Ví dụ: decision tree không giới hạn depth trên data nhỏ, học rule như “nếu `user_id_hash <= 12345 thì positive`”. Train F1 0.99, val F1 0.55.
 
 ### Good fit
 
 ```text
 train performance: good
-val performance: good
+val performance:   good
+gap:               nhỏ và chấp nhận được
 ```
 
-Không cần train score hoàn hảo. Production model tốt là model generalize.
+Không cần train score hoàn hảo. Production model tốt là model generalize — tức performance trên data mới ổn định.
+
+### Learning curves — đọc overfit/underfit
+
+Learning curve vẽ performance theo kích thước train data, tách train và val:
+
+```python
+from sklearn.model_selection import learning_curve
+import matplotlib.pyplot as plt
+import numpy as np
+
+train_sizes, train_scores, val_scores = learning_curve(
+    estimator=model,
+    X=X, y=y,
+    train_sizes=np.linspace(0.1, 1.0, 10),
+    cv=5,
+    scoring="f1",
+)
+
+plt.plot(train_sizes, train_scores.mean(axis=1), label="train")
+plt.plot(train_sizes, val_scores.mean(axis=1), label="val")
+plt.legend()
+plt.show()
+```
+
+Diễn giải:
+
+| Hình dáng | Diễn giải | Hành động |
+|---|---|---|
+| Train cao, val thấp, gap lớn | Overfit | Regularization, thêm data, giảm model complexity, early stopping |
+| Cả train và val thấp, gap nhỏ | Underfit | Model phức tạp hơn, thêm feature, train lâu hơn |
+| Val vẫn tăng dần, gap nhỏ | Cần thêm data | Thu thập thêm data, tăng train size |
+| Val đã plateau, train giảm dần | Đã đủ data | Không cần thêm data, cải thiện model/feature |
+
+Validation curve tương tự nhưng thay vì đổi train size, ta đổi giá trị một hyperparameter để xem giá trị nào tối ưu.
 
 ## Bias-variance tradeoff
 
 Hãy tưởng tượng bạn bắn tên vào bia:
 
-- Bias cao: mũi tên lệch xa tâm theo một hướng. Model sai có hệ thống.
-- Variance cao: mũi tên rải lung tung. Model quá nhạy với data.
+- **Bias cao**: mũi tên lệch xa tâm theo một hướng có hệ thống. Model sai có xu hướng — model đơn giản quá, không capture pattern thật.
+- **Variance cao**: mũi tên rải lung tung, tâm đúng nhưng phân tán. Model quá nhạy với training data, đổi data chút đổi prediction nhiều.
+
+Phân rã error kỳ vọng thành 3 phần:
+
+```text
+Expected_Error = Bias^2 + Variance + Irreducible_Noise
+```
+
+`Irreducible_Noise` là nhiễu nền của bài toán — không model nào giảm được.
 
 | Trạng thái | Train error | Validation error | Diễn giải |
 |---|---:|---:|---|
@@ -243,14 +399,22 @@ Hãy tưởng tượng bạn bắn tên vào bia:
 
 Cách xử lý:
 
-| Vấn đề | Cách xử lý |
+| Vấn đề | Cách giảm |
 |---|---|
-| High bias | model phức tạp hơn, thêm feature, train lâu hơn |
-| High variance | regularization, thêm data, augmentation, early stopping |
+| High bias | Model phức tạp hơn, thêm feature (interaction, polynomial), giảm regularization, train lâu hơn |
+| High variance | Regularization, thêm data, augmentation, early stopping, averaging (ensemble) |
+
+<Callout type="tip" title="Ensemble là công cụ giảm variance">
+Random forest giảm variance bằng cách average nhiều cây variance cao. Boosting ngoài giảm variance còn giảm bias dần theo iteration. Đây là lý do ensemble mạnh: chúng attack trực tiếp bias hoặc variance.
+</Callout>
 
 ## Cross-validation
 
-K-fold cross-validation chia data thành `k` fold. Mỗi lần dùng `k-1` fold train, 1 fold validation.
+Holdout (một split train/val) để estimate performance có thể variance cao với data ít — kết quả phụ thuộc vào cách chia. **Cross-validation**chia thành nhiều fold, luân phiên dùng từng fold làm validation.
+
+### K-fold cross-validation
+
+Chia data thành `k` fold. Mỗi lần dùng `k-1` fold train, 1 fold validation. Lặp `k` lần, mỗi fold đúng 1 lần làm validation.
 
 ```python
 from sklearn.model_selection import cross_val_score
@@ -259,40 +423,77 @@ from sklearn.linear_model import LogisticRegression
 model = LogisticRegression(max_iter=1000)
 scores = cross_val_score(model, X, y, cv=5, scoring="f1")
 
-print(scores)
+print("scores:", scores)
 print("mean:", scores.mean())
 print("std:", scores.std())
 ```
 
-Nếu std cao, model performance không ổn định — có thể data ít, split nhạy, hoặc class imbalance.
+`mean` ước performance kỳ vọng, `std` đo độ ổn định. Nếu std cao (ví dụ 0.05-0.1 trên F1), model performance không ổn định — có thể data ít, split nhạy, hoặc class imbalance. Mở `cv=10` cho data ít hơn, `cv=3-5` khi data nhiều.
 
-<Callout type="warning" title="Không phải data nào cũng split random được">
-Time-series phải split theo thời gian. User/session data nên split theo group. Nếu cùng user xuất hiện trong train và test, model có thể học đặc điểm user thay vì học pattern tổng quát.
+### Stratified k-fold
+
+`StratifiedKFold` giữ class distribution trong mỗi fold, bắt buộc khi imbalance:
+
+```python
+from sklearn.model_selection import StratifiedKFold
+
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+scores = cross_val_score(model, X, y, cv=cv, scoring="f1")
+```
+
+### Group k-fold
+
+Khi data có entity, dùng `GroupKFold` để đảm bảo cùng entity không xuất hiện ở cả train và val fold:
+
+```python
+from sklearn.model_selection import GroupKFold
+
+cv = GroupKFold(n_splits=5)
+scores = cross_val_score(model, X, y, cv=cv, groups=user_ids, scoring="f1")
+```
+
+### Time-series CV
+
+`TimeSeriesSplit` chia theo thứ tự thời gian, train luôn trước val:
+
+```python
+from sklearn.model_selection import TimeSeriesSplit
+
+cv = TimeSeriesSplit(n_splits=5)
+scores = cross_val_score(model, X, y, cv=cv, scoring="f1")
+```
+
+<Callout type="warning" title="CV không thay được test set">
+CV cho estimate performance trên train data. Vẫn cần một test set sạch để đánh giá cuối cùng — không dùng CV score làm số report cho stakeholder, vì bạn đã tune hyperparameters dựa trên CV nên score này có bias_ALLOCATED.
 </Callout>
 
-## Evaluation metrics
+## Evaluation metrics cho classification
 
 ### Confusion matrix
 
-Với binary classification:
+Với binary classification, confusion matrix là bảng 2×2:
 
 | | Pred positive | Pred negative |
 |---|---:|---:|
-| Actual positive | TP | FN |
-| Actual negative | FP | TN |
+| Actual positive | TP (true positive) | FN (false negative) |
+| Actual negative | FP (false positive) | TN (true negative) |
 
 - TP: spam đúng là spam.
-- FP: email bình thường bị đánh spam.
-- FN: spam bị bỏ sót.
+- FP: email bình thường bị đánh spam (false alarm).
+- FN: spam bị bỏ sót (miss).
 - TN: email bình thường đúng.
 
 ### Accuracy
 
 ```text
-Accuracy = (TP + TN) / total
+Accuracy = (TP + TN) / (TP + TN + FP + FN)
 ```
 
-Accuracy tốt khi class cân bằng và cost FP/FN tương tự.
+Accuracy trả lời: *trong tất cả prediction, bao nhiêu phần trăm đúng?* Tốt khi class cân bằng và cost FP, FN tương tự nhau.
+
+<Callout type="danger" title="Accuracy lừa với imbalance">
+Spam 5%, model luôn trả “not spam” đạt accuracy 95% — nhưng vô dụng. Đừng chọn accuracy khi class imbalance hoặc cost FP/FN khác nhau.
+</Callout>
 
 ### Precision
 
@@ -300,29 +501,41 @@ Accuracy tốt khi class cân bằng và cost FP/FN tương tự.
 Precision = TP / (TP + FP)
 ```
 
-Trong những prediction positive, bao nhiêu là đúng?
+Precision trả lời: *trong những prediction positive, bao nhiêu là đúng?* Quan trọng khi **false positive đắt**. Ví dụ: tự động ban user (ban nhầm user trung thành), tự động reject loan, email gửi vàoimportant inbox.
 
-Quan trọng khi false positive đắt. Ví dụ: tự động ban user, tự động reject loan.
-
-### Recall
+### Recall (Sensitivity, True Positive Rate)
 
 ```text
 Recall = TP / (TP + FN)
 ```
 
-Trong tất cả actual positive, model bắt được bao nhiêu?
+Recall trả lời: *trong tất cả actual positive, model bắt được bao nhiêu?* Quan trọng khi **false negative đắt**. Ví dụ: fraud detection (bỏ sót fraud mất tiền), bệnh nguy hiểm (bỏ sót bệnh nhân), urgent support ticket.
 
-Quan trọng khi false negative đắt. Ví dụ: fraud detection, bệnh nguy hiểm, urgent support ticket.
-
-### F1
+### F1 và F-beta
 
 ```text
-F1 = 2 * precision * recall / (precision + recall)
+F1 = 2 * Precision * Recall / (Precision + Recall)
 ```
 
-F1 cân bằng precision và recall. Dùng khi class imbalance và muốn 1 số tóm tắt.
+F1 là harmonic mean của precision và recall — cân bằng hai đại lượng. Dùng khi class imbalance và muốn một số tóm tắt, không muốn ưu tiên precision hay recall rõ ràng.
 
-## Worked example by hand
+Khi cần ưu tiên một phía, dùng **F-beta**:
+
+```text
+F_beta = (1 + beta^2) * Precision * Recall / (beta^2 * Precision + Recall)
+```
+
+`beta > 1` ưu tiên recall (F2), `beta < 1` ưu tiên precision (F0.5). Trong fraud detection thường dùng F2 vì miss đắt hơn false alarm.
+
+### Specificity (True Negative Rate)
+
+```text
+Specificity = TN / (TN + FP)
+```
+
+Bổ sung recall (TPR) — đo tỉ lệ negative bị bắt đúng. Trong medical test, cả sensitivity (recall) và specificity đều quan trọng.
+
+### Worked example by hand
 
 Giả sử model spam classifier trên 100 email:
 
@@ -334,47 +547,195 @@ Giả sử model spam classifier trên 100 email:
 Tính:
 
 ```text
-Accuracy = (18 + 73) / 100 = 0.91
-Precision = 18 / (18 + 2) = 0.90
-Recall = 18 / (18 + 7) = 0.72
-F1 = 2 * 0.90 * 0.72 / (0.90 + 0.72) = 0.80
+Accuracy  = (18 + 73) / 100        = 0.91
+Precision = 18 / (18 + 2)           = 0.90
+Recall    = 18 / (18 + 7)           = 0.72
+F1        = 2 * 0.90 * 0.72 / (0.90 + 0.72) = 0.80
+Specificity = 73 / (73 + 2)         = 0.973
 ```
 
-Nhìn accuracy 91% có vẻ tốt, nhưng recall 72% nghĩa là 28% spam vẫn lọt. Nếu spam lọt gây hại lớn, bạn cần tune threshold để tăng recall.
+Nhìn accuracy 91% có vẻ tốt, nhưng recall 72% nghĩa là 28% spam vẫn lọt. Nếu spam lọt gây hại lớn, bạn cần tune threshold để tăng recall — chấp nhận precision giảm.
+
+### AUC-ROC
+
+ROC curve vẽ TPR (recall) theo FPR = `FP / (FP + TN)` với mọi threshold. **AUC-ROC** (diện tích dưới curve) tóm tắt độ tách biệt của model trên mọi threshold:
+
+- AUC = 1.0: model hoàn hảo.
+- AUC = 0.5: random guess.
+- AUC < 0.5: predict ngược lại sẽ tốt hơn.
+
+```python
+from sklearn.metrics import roc_auc_score
+
+proba = model.predict_proba(X_test)[:, 1]
+auc = roc_auc_score(y_test, proba)
+```
+
+AUC-ROC hữu ích vì:
+
+- Không phụ thuộc threshold — đo capacity phân biệt của model.
+- Cho biết model có rank đúng không (positive có score cao hơn negative).
+
+<Callout type="info" title="AUC-ROC và imbalance">
+AUC-ROC có thể “đẹp” ngay cả với imbalance rất nặng, vì FPR tính trên negative (nhiều) và TPR trên positive (ít). Khi imbalance cực nghiêm trọng (positive << 1%), dùng PR-AUC nhạy hơn tới performance trên minority class.
+</Callout>
+
+### Precision-Recall curve và PR-AUC
+
+Precision-recall curve vẽ precision theo recall với mọi threshold. PR-AUC (diện tích) nhạy hơn với imbalance:
+
+- AUC-ROC đánh giá trên cả positive và negative.
+- PR-AUC chiefly nhìn vào positive class — phù hợp khi positive hiếm và là đối tượng quan tâm.
+
+```python
+from sklearn.metrics import average_precision_score
+
+pr_auc = average_precision_score(y_test, proba)
+```
+
+### Multi-class metrics
+
+Với K class, có ba cách average:
+
+| Loại | Công thức | Khi nào dùng |
+|---|---|---|
+| Macro | Trung bình metric trên từng class, không trọng số | Quan trọng mỗi class như nhau, bất kể imbalance |
+| Weighted | Trung bình có trọng số theo class support | Quan trọng class lớn, nhưng vẫn nhìn minority |
+| Micro | Tổng全部 TP, FP, FN rồi tính | Đã gateway classification, imbalance nghiêm trọng |
+
+```python
+from sklearn.metrics import classification_report
+
+print(classification_report(y_test, y_pred))  # in cả ba
+```
+
+## Threshold tuning và decision
+
+Mặc định `predict()` dùng threshold 0.5 cho binary. Trong production, threshold nên set theo **business cost**, không phải 0.5.
+
+### Quy trình threshold tuning
+
+1. Lấy `predict_proba()` trên **validation**.
+2. Tính precision, recall tại nhiều threshold.
+3. Chọn threshold optima cost function бизнес.
+4. Freeze threshold, deploy thống nhất với model.
+5. Đánh giá trên **test** với threshold đã freeze.
+
+```python
+import numpy as np
+from sklearn.metrics import precision_recall_curve
+
+proba = model.predict_proba(X_val)[:, 1]
+precisions, recalls, thresholds = precision_recall_curve(y_val, proba)
+
+# Ví dụ: cần recall >= 0.90, tìm threshold
+mask = recalls[:-1] >= 0.90
+best_threshold = thresholds[mask].max()  # threshold cao nhất vẫn đạt recall
+```
+
+<Callout type="danger" title="Tune threshold trên test = tự lừa">
+Tune threshold trên test set biến test thành validation. Test phải dùng với threshold đã freeze để metric cuối nữa phản ánh production thực.
+</Callout>
+
+### Calibration probability
+
+Trong nhiều product, không chỉ cần class prediction mà cần **xác suất đáng tin**: priority rank, risk score, alert threshold, cost-based decision. Model có thể rank đúng nhưng probability lệch — ví dụ 0.9 thực ra đúng chỉ 70%.
+
+Calibration đo **prediction probability có khớp observed frequency không**:
+
+| Predicted p | Observed frequency | Calibration |
+|---|---|---|
+| 0.9 | 90% | Calibrated |
+| 0.9 | 70% | Overconfident |
+| 0.9 | 99% | Underconfident |
+
+```python
+from sklearn.calibration import CalibratedClassifierCV
+
+calibrated = CalibratedClassifierCV(model, cv=3, method="isotonic")
+calibrated.fit(X_train, y_train)
+```
+
+Reliability diagram và Brier score dùng để đo calibration. Trong product rủi ro cao (y tế, tài chính), calibration还是很 critical.
+
+## Cost-sensitive learning
+
+Khi FP và FN có cost khác nhau (và thường đắt chẳng đều nhau), bạn có thể]:
+
+1. **Tune threshold** sau khi train (đơn giản nhất).
+2. **Class weight** trong training để phạt miss class nặng hơn.
+
+```python
+from sklearn.linear_model import LogisticRegression
+
+model = LogisticRegression(
+    max_iter=1000,
+    class_weight="balanced",  # tự weight theo inverse frequency
+)
+```
+
+Hoặc manual:
+
+```python
+weights = {0: 1, 1: 10}  # miss positive đắt gấp 10 lần
+model = LogisticRegression(class_weight=weights)
+```
+
+Ví dụ fraud detection: cost miss fraud $100/tai nạn, cost check manual $5/safe. `class_weight={0:1, 1:20}` tương đối hợp lý. Phối hợp với threshold tuning sẽ keyword.
 
 ## Implementation lab
 
-Trong lab này, ta tạo dataset classification giả lập, train logistic regression, và đọc metrics.
+Trong lab này, ta tạo dataset classification giả lập có imbalance, train logistic regression, và đọc metrics đầy đủ.
 
 ```python
 from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import (
+    classification_report,
+    confusion_matrix,
+    roc_auc_score,
+    average_precision_score,
+    precision_recall_curve,
+)
+import numpy as np
 
 X, y = make_classification(
-    n_samples=2000,
+    n_samples=5000,
     n_features=20,
     n_informative=5,
     n_redundant=5,
-    weights=[0.9, 0.1],
+    weights=[0.9, 0.1],   # 10% positive
     random_state=42,
 )
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X,
-    y,
-    test_size=0.2,
-    stratify=y,
-    random_state=42,
+X_train, X_temp, y_train, y_temp = train_test_split(
+    X, y, test_size=0.30, stratify=y, random_state=42,
+)
+X_val, X_test, y_val, y_test = train_test_split(
+    X_temp, y_temp, test_size=0.50, stratify=y_temp, random_state=42,
 )
 
-model = LogisticRegression(max_iter=1000)
+model = LogisticRegression(max_iter=1000, class_weight="balanced")
 model.fit(X_train, y_train)
 
-y_pred = model.predict(X_test)
+proba_val = model.predict_proba(X_val)[:, 1]
+proba_test = model.predict_proba(X_test)[:, 1]
+
+# Metric trên val để chọn threshold
+precisions, recalls, thresholds = precision_recall_curve(y_val, proba_val)
+required_recall = 0.85
+mask = recalls[:-1] >= required_recall
+chosen_threshold = thresholds[mask].max() if mask.any() else 0.5
+
+# Evaluate trên test với threshold đã freeze
+y_pred = (proba_test >= chosen_threshold).astype(int)
+
+print("threshold:", chosen_threshold)
 print(confusion_matrix(y_test, y_pred))
 print(classification_report(y_test, y_pred))
+print("AUC-ROC:", roc_auc_score(y_test, proba_test))
+print("PR-AUC :", average_precision_score(y_test, proba_test))
 ```
 
 ### Expected interpretation
@@ -384,12 +745,13 @@ Vì class positive chỉ 10%, accuracy có thể cao ngay cả khi recall positi
 - `precision` của class 1.
 - `recall` của class 1.
 - `f1-score` của class 1.
-- Macro average nếu muốn công bằng giữa class.
+- AUC-ROC và PR-AUC.
+- Confusion matrix — báo cáo cả absolute counts để hiểu business impact.
 
 ## Common mistakes & debugging checklist
 
 <Callout type="warning" title="Mistake 1: chỉ nhìn accuracy">
-Với class imbalance, accuracy có thể lừa. Luôn xem confusion matrix, precision, recall, F1 cho từng class.
+Với class imbalance, accuracy có thể lừa. Luôn xem confusion matrix, precision, recall, F1 cho từng class và cả AUC-ROC / PR-AUC.
 </Callout>
 
 <Callout type="warning" title="Mistake 2: tune trên test set">
@@ -397,88 +759,146 @@ Nếu bạn thử nhiều model và chọn cái tốt nhất trên test set, tes
 </Callout>
 
 <Callout type="danger" title="Mistake 3: leakage theo user/time">
-Nếu dữ liệu là event theo user, split random theo row có thể làm cùng user xuất hiện ở train và test. Model học user-specific pattern, metric ảo. Dùng GroupKFold hoặc split theo user.
+Nếu dữ liệu là event theo user, split random theo row có thể làm cùng user xuất hiện ở train và test. Model học user-specific pattern, metric ảo. Dùng GroupKFold hoặc split theo user. Time-series phải split theo thời gian.
+</Callout>
+
+<Callout type="warning" title="Mistake 4: optimization metric ≠ business metric">
+Optimize accuracy khi business cần recall sẽ chọn model sai. Metric phải đến từ business cost — FP và FN phải được quantify trước khi tuning.
+</Callout>
+
+<Callout type="warning" title="Mistake 5: không calibration khi cần probability">
+Priority ranking, risk score, alert threshold thường cần probability. Nếu model overconfident/underconfident, downstream decision sai. Check reliability diagram, dùng `CalibratedClassifierCV` nếu cần.
 </Callout>
 
 Checklist debug nhanh:
 
-1. Class distribution trong train/val/test có giống nhau không?
+1. Class distribution trong train/val/test có giống nhau không (stratify)?
 2. Có feature nào chỉ biết sau khi target xảy ra không?
 3. Preprocessing có fit trên toàn data không?
 4. Train score và validation score có gap lớn không?
 5. Metric có phản ánh business cost không?
 6. Test set có bị dùng nhiều lần để chọn model không?
+7. Cần probability calibrated không? Đã check chưa?
+8. Threshold có được tune trên validation trước khi đánh giá test không?
 
 ## Practice exercises
 
-1. Với confusion matrix: TP=40, FP=10, FN=20, TN=130. Tính accuracy, precision, recall, F1.
-2. Cho bài toán fraud detection, false negative đắt hơn false positive. Bạn ưu tiên precision hay recall? Vì sao?
-3. Nêu 3 ví dụ data leakage trong một hệ thống AI support ticket.
-4. Viết code dùng `train_test_split` với `stratify=y` cho dataset imbalance.
-5. Vẽ learning curve giả định cho high bias và high variance; giải thích cách xử lý.
+1. Với confusion matrix: TP=40, FP=10, FN=20, TN=130. Tính accuracy, precision, recall, F1, specificity.
+2. Cho bài toán fraud detection, false negative đắt gấp 20 lần false positive. Bạn sẽ chọn optimize precision, recall, hay F-beta nào? Viết F-beta score công thức cho lựa chọn của bạn.
+3. Nêu 3 ví dụ data leakage trong một hệ thống AI support ticket (cả hiển nhiên và tinh vi).
+4. Viết code dùng `train_test_split` với `stratify=y` cho dataset có 5% positive class, train/val/test = 70/15/15.
+5. Vẽ learning curve giả định cho high bias và high variance; giải thích cách xử lý từng trường hợp.
+6. So sánh AUC-ROC và PR-AUC: với dataset positive 1%, metric nào phản ánh performance trên minority tốt hơn? Vì sao?
+7. Viết code tune threshold trên validation để đạt recall ≥ 0.90, sau đó evaluate test với threshold đã chọn.
+8. Giải thích vì sao `class_weight="balanced"` không phải lúc nào cũng tốt — khi nào nó dịch model quá xa?
 
 ## Knowledge check
 
-1. Train set dùng để làm gì?
-2. Validation set khác test set ở điểm nào?
-3. Vì sao accuracy không đủ khi class imbalance?
-4. Precision trả lời câu hỏi gì?
-5. Recall trả lời câu hỏi gì?
-6. Data leakage là gì?
-7. Khi train score cao nhưng validation score thấp, model đang bị gì?
-8. Cross-validation hữu ích khi nào?
+1. Train set dùng để làm gì? Validation và test khác nhau ở điểm nào?
+2. Vì sao accuracy không đủ khi class imbalance?
+3. Precision trả lời câu hỏi gì? Recall trả lời câu hỏi gì?
+4. F1 và F2 khác nhau thế nào? Khi nào chọn F2?
+5. Data leakage là gì? Nêu 3 dạng leakage khác nhau.
+6. Khi train score cao nhưng validation score thấp, model đang bị gì? Cách xử lý?
+7. Cross-validation có 4 loại: k-fold, stratified, group, time-series — dùng cho loại data nào?
+8. AUC-ROC bằng 0.5 nghĩa là gì? Bằng 0.3 nghĩa là gì?
+9. PR-AUC thường hợp hơn AUC-ROC trong trường hợp nào?
+10. Calibration probability là gì và tại sao quan trọng trong production?
+11. Vì sao tune threshold trên test set là sai ?
 
 ## Answer key
 
-1. Train set dùng để học parameters của model.
-2. Validation dùng để chọn model/hyperparameters; test dùng đánh giá cuối cùng, không dùng trong quá trình chọn.
-3. Vì majority-class baseline có thể accuracy cao nhưng bỏ sót minority class.
-4. Trong các prediction positive, bao nhiêu là positive thật.
-5. Trong các positive thật, model bắt được bao nhiêu.
-6. Leakage là thông tin từ validation/test hoặc tương lai lọt vào training/features.
-7. Overfitting/high variance.
-8. Khi data ít hoặc muốn estimate performance ổn định hơn nhiều split.
+1. Train set dùng để học parameters của model. Validation dùng để chọn model/hyperparameters/threshold. Test dùng đánh giá cuối cùng, không dùng trong quá trình lựa chọn.
+2. Vì majority-class baseline có thể accuracy cao nhưng bỏ sót minority class. Spam 5%, luôn trả “not spam” → accuracy 95% vô dụng.
+3. Precision: trong các prediction positive, bao nhiêu là positive thật. Recall: trong các positive thật, model bắt được bao nhiêu.
+4. F1 cân bằng precision và recall. F2 cho recall trọng số gấp 4 lần precision — ưu tiên bắt positive. Dùng F2 khi miss positive đắt hơn false alarm (ví dụ bệnh nặng).
+5. Leakage: (a) preprocessing fit trên toàn data, (b) feature chứa tương lai, (c) cùng entity ở cả train và test.
+6. Overfitting / high variance. Xử lý: regularization, thêm data, giảm model complexity, early stopping, ensemble.
+7. k-fold cho data iid. Stratified cho imbalance. Group cho data có entity (user/session). Time-series cho data có thứ tự thời gian.
+8. AUC=0.5: random guess. AUC=0.3: model ngược — đảo prediction sẽ cho AUC = 0.7.
+9. Khi positive class cực hiếm (< 1%) — PR-AUC nhạy hơn tới minority class, AUC-ROC có thể “đẹp” dù model bắt hầu hết positive rất kém.
+10. Calibration là xác suất model trả có khớp frequency thực. Production cần probability cho priority ranking, threshold cost-based, risk scoring — nếu lệch, downstream decision sai.
+11. Vì test trở thành validation, metric cuối bị optimistic — threshold đã được chọn để fit test đó.
 
 Bài tập 1:
 
 ```text
-Accuracy = (40+130)/200 = 0.85
-Precision = 40/(40+10) = 0.80
-Recall = 40/(40+20) = 0.667
-F1 ≈ 0.727
+Accuracy    = (40 + 130) / 200            = 0.85
+Precision   = 40 / (40 + 10)               = 0.80
+Recall      = 40 / (40 + 20)               = 0.667
+F1          = 2 * 0.80 * 0.667 / (0.80 + 0.667) ≈ 0.727
+Specificity = 130 / (130 + 10)             = 0.929
+```
+
+Bài tập 2: Tune // precision và recall. Cost miss lớn → tối ưu recall, chấp nhận precision giảm. F2 = `5 * P * R / (4 * P + R)` (beta=2 → beta^2 = 4).
+
+Bài tập 4:
+
+```python
+from sklearn.model_selection import train_test_split
+
+X_train, X_temp, y_train, y_temp = train_test_split(
+    X, y, test_size=0.30, stratify=y, random_state=42,
+)
+X_val, X_test, y_val, y_test = train_test_split(
+    X_temp, y_temp, test_size=0.50, stratify=y_temp, random_state=42,
+)
+# Tỷ lệ thực: train 70%, val 15%, test 15%
+```
+
+Bài tập 7:
+
+```python
+from sklearn.metrics import precision_recall_curve
+import numpy as np
+
+precisions, recalls, thresholds = precision_recall_curve(y_val, proba_val)
+mask = recalls[:-1] >= 0.90
+chosen = thresholds[mask].max()
+y_pred = (proba_test >= chosen).astype(int)
 ```
 
 ## Mini-project: Intent classifier evaluation
 
-**Task:** Build một intent classifier nhỏ cho support messages.
+**Task:** Build một intent classifier nhỏ cho support messages và đánh giá đầy đủ.
 
-**Dataset gợi ý:** Tạo 200 câu synthetic cho 4 intent: `billing`, `technical_issue`, `refund`, `general_question`. Hoặc dùng dataset public như banking77 subset.
+**Dataset gợi ý:** Tạo 200-500 câu synthetic cho 4 intent: `billing`, `technical_issue`, `refund`, `general_question`. Hoặc dùng dataset public như banking77 subset, CLINC150.
 
 **Deliverables:**
 
-- Train/validation/test split.
-- Model baseline: TF-IDF + Logistic Regression.
-- Confusion matrix.
-- Classification report.
-- Nhận xét 5 lỗi model dự đoán sai.
+- Train/validation/test split với `stratify=y`.
+- Model baseline: TF-IDF + Logistic Regression (sklearn Pipeline).
+- Confusion matrix, classification report đầy đủ.
+- AUC-ROC và PR-AUC (one-vs-rest cho multi-class).
+- Threshold tuning trên validation (cho 1 intent ưu tiên, ví dụ `refund`).
+- Nhận xét 5 lỗi model dự đoán sai và đề giải pháp.
 
 **Success criteria:**
 
-- Không có leakage.
-- Có `classification_report` đầy đủ.
-- Giải thích được intent nào khó phân biệt nhất.
-- Đề xuất 2 cách cải thiện model.
+- Không có leakage (preprocessing trong Pipeline, threshold tune trên val).
+- Có `classification_report` đầy đủ, cả macro và weighted average.
+- Đánh giá cả AUC-ROC và PR-AUC, giải thích khi nào trọng số nào quan trọng hơn.
+- Giải thích được intent nào khó phân biệt nhất (confusion matrix).
+- Đề xuất 2 cách cải thiện model (feature engineering, balancing, calibration, threshold).
+
+<Callout type="tip" title="Mở rộng capstone">
+Kết quả mini-project này sẽ là baseline cho phase sau khi bạn học calibration, model monitoring và A/B test trong production ML. Lưu artifact (pipeline + threshold + metrics) bằng joblib để tái sử dụng.
+</Callout>
 
 ## Điểm cần nhớ
 
 - ML không chỉ là train model; phần quan trọng là **đánh giá đúng**.
-- Supervised học từ `(x,y)`, unsupervised tìm cấu trúc, RL học qua reward.
-- Train/validation/test có vai trò khác nhau; test chỉ dùng cuối cùng.
-- Data leakage làm metric đẹp giả và là lỗi production nghiêm trọng.
-- Overfitting = train tốt, validation tệ; underfitting = cả hai tệ.
-- Bias-variance giúp chọn hướng cải thiện model.
-- Precision/recall/F1 quan trọng hơn accuracy khi class imbalance.
+- Supervised học từ `(x,y)`, unsupervised tìm cấu trúc, semi-supervised kết hợp ít label + nhiều unlabeled, RL học qua reward.
+- Train/validation/test có vai trò khác nhau; test chỉ dùng cuối cùng, một lần duy nhất.
+- Data leakage làm metric đẹp giả và là lỗi production nghiêm trọng — checklist 6 câu hỏi để phát hiện.
+- Overfitting = train tốt, validation tệ; underfitting = cả hai tệ; learning curve cho biết cần thêm data hay model phức tạp hơn.
+- Bias-variance phân rã error, giúp chọn hướng cải thiện model.
+- Cross-validation cho estimate ổn hơn khi data ít — có Stratified, Group, TimeSeries với loại data khác nhau.
+- Accuracy lừa với imbalance; dùng precision, recall, F-beta, AUC-ROC, PR-AUC.
+- Threshold tune trên validation, không trên test; cân nhắc business cost FP/FN.
+- Calibration probability quan trọng khi downstream cần score đáng tin; dùng `CalibratedClassifierCV` nếu cần.
+- Cost-sensitive learning: threshold tuning + `class_weight` mới giúp xử lý imbalance đầy đủ.
 
 ## Next chapter bridge
 
-Bây giờ bạn đã biết cách nghĩ về model và metrics. Chương tiếp theo đi vào hai model supervised nền tảng nhất: **Linear Regression** và **Logistic Regression**. Đây là nơi bạn thấy rõ loss function, gradient, decision boundary và regularization hoạt động như thế nào trong một model thật.
+Bây giờ bạn đã biết cách tư duy về model và metrics. Chương tiếp theo đi vào hai model supervised nền tảng nhất: **Linear Regression** và **Logistic Regression**. Đây là nơi bạn thấy rõ loss function, gradient, decision boundary và regularization hoạt động như thế nào trong một model thật — từ đó hiểu vì sao baseline đơn giản vẫn đôi khi thắng model phức tạp trong production.

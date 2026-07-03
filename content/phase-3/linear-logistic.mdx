@@ -1,6 +1,8 @@
-Linear Regression và Logistic Regression là hai mô hình supervised nền tảng nhất. Tôi muốn bạn xem chúng không chỉ là “model cũ”, mà là **phòng thí nghiệm nhỏ** để hiểu toàn bộ ML: loss function, gradient, decision boundary, probability, regularization, metrics và calibration.
+Linear Regression và Logistic Regression là hai mô hình supervised nền tảng nhất. Tôi muốn bạn xem chúng không chỉ là "model cũ", mà là **phòng thí nghiệm nhỏ** để hiểu toàn bộ ML: loss function, gradient, decision boundary, probability, regularization, metrics và calibration.
 
 Trong thực tế, nhiều hệ thống AI production vẫn bắt đầu bằng baseline rất đơn giản: **TF-IDF + Logistic Regression** cho spam/intent/sentiment, hoặc **Linear/Ridge Regression** cho cost/latency/usage forecasting. Nếu baseline đơn giản đã đủ tốt, bạn tiết kiệm được rất nhiều tiền và complexity so với fine-tune transformer.
+
+Nếu bạn hiểu linear/logistic sâu, bạn sẽ hiểu neural network nhanh hơn — vì linear layer + sigmoid chính là một neuron. Deep learning chỉ là xếp nhiều neuron như vậy lại và train bằng gradient descent. Nền tảng ở đây là chìa khóa.
 
 ## Why this matters
 
@@ -10,7 +12,7 @@ Giả sử bạn xây một hệ thống multi-LLM router. Bạn muốn dự đo
 cost ≈ w1 * input_tokens + w2 * output_tokens + b
 ```
 
-Bạn cũng muốn dự đoán request có phải “complex reasoning” không để route sang GPT-4/Claude thay vì model rẻ. Đây là classification:
+Bạn cũng muốn dự đoán request có phải "complex reasoning" không để route sang GPT-4/Claude thay vì model rẻ. Đây là classification:
 
 ```text
 P(complex | request_features)
@@ -18,14 +20,14 @@ P(complex | request_features)
 
 Linear/logistic regression là baseline tuyệt vời vì:
 
-- Dễ hiểu và giải thích được.
-- Train rất nhanh.
-- Ít overfit hơn model lớn.
-- Cho biết feature nào quan trọng.
+- Dễ hiểu và giải thích được — coefficients cho biết feature nào quan trọng và theo hướng nào.
+- Train rất nhanh — fit trên hàng triệu sample vài giây.
+- Ít overfit hơn model lớn khi data vừa phải.
+- Cho biết feature nào quan trọng, dễ debug.
 - Là điểm kiểm tra trước khi dùng model phức tạp hơn.
 
 <Callout type="tip" title="Baseline trước, transformer sau">
-Trong NLP classification, trước khi fine-tune BERT, hãy chạy TF-IDF + Logistic Regression. Nếu baseline đạt F1 92% và BERT đạt 93% nhưng tốn gấp 20 lần compute, production có thể chọn baseline.
+Trong NLP classification, trước khi fine-tune BERT, hãy chạy TF-IDF + Logistic Regression. Nếu baseline đạt F1 92% và BERT đạt 93% nhưng tốn gấp 20 lần compute, production có thể chọn baseline. Baseline đơn giản cũng là thước đo: nếu transformer không thắng baseline, có lẽ vấn đề ở data chứ không phải model.
 </Callout>
 
 ## Learning objectives
@@ -33,23 +35,27 @@ Trong NLP classification, trước khi fine-tune BERT, hãy chạy TF-IDF + Logi
 Sau chương này, bạn sẽ có thể:
 
 1. Giải thích linear regression dưới dạng đường/siêu phẳng fit dữ liệu.
-2. Tính MSE bằng tay và hiểu vì sao nó phạt lỗi lớn mạnh.
-3. Giải thích logistic regression như một linear model + sigmoid.
-4. Tính Binary Cross-Entropy cho một prediction.
-5. Hiểu decision boundary và threshold tuning.
-6. Phân biệt L1/L2 regularization và tác dụng của `C` trong sklearn.
-7. Xây pipeline sklearn cho regression/classification cơ bản.
+2. Tính MSE, MAE, Huber bằng tay và hiểu vì sao MSE nhạy outlier, MAE không.
+3. Dérive gradient của linear regression và implement gradient descent.
+4. Hiểu closed-form (normal equation) vs gradient descent — khi nào dùng cái nào.
+5. Giải thích logistic regression như một linear model + sigmoid.
+6. Tính Binary Cross-Entropy cho một prediction, hiểu tại sao cross-entropy phạt confident-but-wrong.
+7. Hiểu decision boundary tuyến tính, threshold tuning và ROC/PR curve cho logistic.
+8. Phân biệt L1/L2/ElasticNet regularization và tác dụng của `C` trong sklearn.
+9. Hiểu OvR vs Multinomial (softmax) cho multi-class.
+10. Hiểu feature engineering (polynomial, interaction) để làm linear model mạnh hơn.
+11. Xây pipeline sklearn cho regression/classification cơ bản, có scale + regularization.
 
 ## Prerequisites
 
 Bạn nên biết:
 
 - Vector/matrix multiplication từ Phase 2.
-- Gradient descent và loss function.
-- Train/validation/test split, precision/recall/F1.
-- Pandas/NumPy/sklearn căn bản.
+- Gradient descent, partial derivative, loss function.
+- Train/validation/test split, precision/recall/F1, AUC-ROC.
+- Pandas/NumPy/sklearn cơ bản.
 
-## Core intuition: model tuyến tính là “cân trọng số feature”
+## Core intuition: model tuyến tính là "cân trọng số feature"
 
 Linear model giả định prediction là tổng có trọng số của feature:
 
@@ -63,7 +69,9 @@ Ví dụ dự đoán cost LLM:
 cost = 0.000001 * input_tokens + 0.000002 * output_tokens + 0.0001
 ```
 
-Nếu `weight_output_tokens` lớn hơn `weight_input_tokens`, output token đắt hơn input token. Như vậy model không chỉ dự đoán, nó còn **giải thích**.
+Nếu `weight_output_tokens` lớn hơn `weight_input_tokens`, output token đắt hơn input token. Như vậy model không chỉ dự đoán, nó còn **giải thích** — đây là ưu thế so với neural network đen.
+
+Linear model là tuyến tính **theo weight** chứ không nhất thiết tuyến tính theo feature. Bạn có thể thêm feature phi tuyến như `x^2`, `log(x)`, `x1 * x2`, và model vẫn tuyến tính theo weight — vẫn giải được bằng linear regression.
 
 ## Linear Regression
 
@@ -79,17 +87,152 @@ Trong đó:
 |---|---|---|
 | `X` | feature matrix | `(n_samples, n_features)` |
 | `w` | weights | `(n_features,)` |
-| `b` | bias | scalar |
+| `b` | bias (intercept) | scalar |
 | `ŷ` | predictions | `(n_samples,)` |
 | `y` | true values | `(n_samples,)` |
 
-### Loss: Mean Squared Error
+Mục tiêu: chọn `w, b` để minimize loss giữa `ŷ` và `y`.
+
+### Loss: Mean Squared Error (MSE)
 
 ```text
-MSE = (1/n) * Σ(y_i - ŷ_i)^2
+MSE = (1/n) * Σ (y_i - ŷ_i)^2
 ```
 
-Vì lỗi được bình phương, lỗi lớn bị phạt mạnh hơn lỗi nhỏ.
+Vì lỗi được bình phương, lỗi lớn bị phạt mạnh hơn lỗi nhỏ. Sai 1 → phạt 1, sai 3 → phạt 9.
+
+#### Gradient của MSE
+
+```text
+∂MSE/∂w_j = (-2/n) * Σ (y_i - ŷ_i) * x_ij
+∂MSE/∂b   = (-2/n) * Σ (y_i - ŷ_i)
+```
+
+Dạng vector:
+
+```text
+grad_w = (2/n) * X^T (ŷ - y)
+grad_b = (2/n) * Σ(ŷ - y)
+```
+
+Gradient luôn trỏ theo hướng tăng loss, nên ta **trừ** gradient để giảm loss:
+
+```text
+w ← w - lr * grad_w
+b ← b - lr * grad_b
+```
+
+### Loss: Mean Absolute Error (MAE)
+
+```text
+MAE = (1/n) * Σ |y_i - ŷ_i|
+```
+
+MAE phạt lỗi tuyến tính, không bình phương — ít nhạy với outlier hơn MSE. Tuy nhiên gradient không xác định tại `error = 0`, khiến optimizer khó hơn (sub-gradient).
+
+### Loss: Huber — kết hợp cả hai
+
+Huber dùng MSE cho lỗi nhỏ, MAE cho lỗi lớn:
+
+```text
+Huber(error) = {
+  0.5 * error^2               nếu |error| <= δ
+  δ * (|error| - 0.5 * δ)      nếu |error| > δ
+}
+```
+
+Huber nhạy vừa với outlier, gradient xác định khắp nơi — thường dùng trong deep learning và robust regression.
+
+<Callout type="info" title="Chọn loss theo business cost">
+MSE: phạt outlier mạnh, smooth gradient — hợp cho đại đa số trường hợp. MAE: phạt outlier ít, nhưng optimizer khó. Huber: cân bằng hai phía. Trong production, chọn loss theo cost function thực — ví dụ dự đoán cost thì phạt sai lớn sẽ tốn tiền hơn sai nhỏ.
+</Callout>
+
+## Closed form (Normal Equation) vs Gradient Descent
+
+### Normal equation
+
+Linear regression có nghiệm đóng:
+
+```text
+w = (X^T X)^(-1) X^T y
+```
+
+Nếu `X^T X` khả nghịch, đây là global optimum — không cần iteration.
+
+```python
+import numpy as np
+
+X = np.array([[1, 100], [1, 200], [1, 300]], dtype=float)  # thêm cột bias = 1
+y = np.array([1.2, 1.9, 3.3])
+
+w = np.linalg.pinv(X.T @ X) @ X.T @ y
+print(w)
+```
+
+Ưu điểm:
+
+- Nhanh với data nhỏ.
+- Không cần tune learning rate.
+- Đến global optimum một bước.
+
+Nhược điểm:
+
+- `X^T X` có shape `(d, d)` — inverse tốn `O(d^3)`. Với d = 10 nghìn feature, không khả thi.
+- `X^T X` có thể gần singular (multicollinearity) → inverse không ổn định.
+- Không generalize cho model non-convex (neural network).
+
+### Gradient descent
+
+```python
+import numpy as np
+
+X = np.array([[100], [200], [300]], dtype=float)
+y = np.array([1.2, 1.9, 3.3])
+
+# normalize để gradient descent dễ hơn
+Xn = X / 100.0
+w = np.array([0.0])
+b = 0.0
+lr = 0.05
+
+for step in range(1000):
+    y_pred = Xn @ w + b
+    error = y_pred - y
+    grad_w = (2 / len(y)) * Xn.T @ error
+    grad_b = (2 / len(y)) * error.sum()
+    w -= lr * grad_w
+    b -= lr * grad_b
+
+print("w:", w, "b:", b)
+```
+
+Ưu điểm:
+
+- Scale tốt với feature dimension lớn (sử dụng mini-batch / SGD).
+- Generalize cho non-convex model (neural network).
+- Memory-efficient với streaming data.
+
+Nhược điểm:
+
+- Cần tune learning rate.
+- Cần normalize feature, nếu không gradient bị dominate bởi feature lớn.
+- Có thể bị kẹt ở plateau hoặc diverge nếu lr quá lớn.
+
+<Callout type="info" title="Vì sao scale feature?">
+Nếu tokens là 100, 200, 300 còn feature khác là 0.1, 0.2, gradient theo tokens sẽ lớn hơn nhiều. Scaling giúp optimizer đi ổn định hơn, đặc biệt với linear/logistic/SVM/KMeans. StandardScaler chia cho std là lựa chọn an toàn.
+</Callout>
+
+### When to use which
+
+| Yếu tố | Normal equation | Gradient descent |
+|---|---|---|
+| Số feature `d` nhỏ (< 10^4) | Hợp | Cũng hợp |
+| Số feature `d` lớn (embedding 1536, BOW 10^5) | Không khả thi | Hợp |
+| Data rất nhiều sample | Có thể tốn memory | SGD stream được |
+| Multicollinearity | Cần regularization (Ridge) | Natural fit |
+| Generalize cho NN | Không | Có |
+
+Trong sklearn, `LinearRegression` dùng least squares (có thể qua SVD). `SGDRegressor` dùng gradient descent — hợp cho data lớn.
 
 ## Worked example by hand: dự đoán API cost
 
@@ -123,11 +266,7 @@ B: 1.9 - 2.0 = -0.1
 C: 3.3 - 3.0 = 0.3
 ```
 
-Squared errors:
-
-```text
-0.04, 0.01, 0.09
-```
+Squared errors: `0.04, 0.01, 0.09`
 
 MSE:
 
@@ -135,49 +274,50 @@ MSE:
 (0.04 + 0.01 + 0.09) / 3 = 0.0467
 ```
 
-Nếu một prediction sai 3.0 thay vì 0.3, squared error là 9.0 — MSE sẽ tăng rất mạnh. Đó là lý do MSE nhạy với outlier.
-
-## Closed form vs Gradient Descent
-
-Linear regression có nghiệm đóng:
+MAE:
 
 ```text
-w = (X^T X)^(-1) X^T y
+(0.2 + 0.1 + 0.3) / 3 = 0.2
 ```
 
-Nhưng trong thực tế:
+Nếu một prediction sai 3.0 thay vì 0.3, squared error là 9.0 — MSE sẽ tăng rất mạnh, MAE chỉ tăng tuyến tính. Đó là lý do MSE nhạy với outlier.
 
-- `X^T X` có thể không nghịch đảo tốt.
-- Feature rất nhiều thì tính inverse tốn.
-- Neural network không có nghiệm đóng.
+### Tính gradient
 
-Vì vậy ta dùng gradient descent:
+```text
+grad_w = (2/3) * Σ (ŷ_i - y_i) * x_i
+       = (2/3) * [(-0.2)(100) + (0.1)(200) + (-0.3)(300)]
+       = (2/3) * [-20 + 20 - 90]
+       = (2/3) * (-90) = -60
+```
+
+Cập nhật `w` với `lr = 0.0001`:
+
+```text
+w ← 0.01 - 0.0001 * (-60) = 0.01 + 0.006 = 0.016
+```
+
+Model đã tăng weight (vì predictions đang lệch thấp trung bình), đi đúng hướng.
+
+## Polynomial and interaction features
+
+Linear model là tuyến tính theo weight nhưng không nhất thiết theo feature. Bạn có thể thêm feature phi tuyến:
 
 ```python
-import numpy as np
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
+from sklearn.pipeline import Pipeline
 
-X = np.array([[100], [200], [300]], dtype=float)
-y = np.array([1.2, 1.9, 3.3])
-
-# normalize để gradient descent dễ hơn
-Xn = X / 100.0
-w = np.array([0.0])
-b = 0.0
-lr = 0.05
-
-for step in range(1000):
-    y_pred = Xn @ w + b
-    error = y_pred - y
-    grad_w = (2 / len(y)) * Xn.T @ error
-    grad_b = (2 / len(y)) * error.sum()
-    w -= lr * grad_w
-    b -= lr * grad_b
-
-print(w, b)
+pipe = Pipeline([
+    ("poly", PolynomialFeatures(degree=2, interaction_only=False, include_bias=False)),
+    ("model", LinearRegression()),
+])
 ```
 
-<Callout type="info" title="Vì sao scale feature?">
-Nếu tokens là 100, 200, 300 còn feature khác là 0.1, 0.2, gradient theo tokens sẽ lớn hơn nhiều. Scaling giúp optimizer đi ổn định hơn, đặc biệt với linear/logistic/SVM/KMeans.
+`degree=2` cho feature `x1, x2, x1^2, x2^2, x1*x2`. Model vẫn tuyến tính theo weight — vẫn dùng LinearRegression.
+
+<Callout type="warning" title="Polynomial quá cao = overfit guaranteed">
+`degree=4` với 5 feature sinh ra 70+ feature. Với dataset nhỏ, model sẽ fit noise. Trong deep learning, neural network tự học feature phi tuyến; polynomial thường chỉ hợp khi你有 domain knowledge về quan hệ cụ thể.
 </Callout>
 
 ## Logistic Regression
@@ -188,13 +328,25 @@ Logistic regression dùng cho binary classification. Nó vẫn bắt đầu bằ
 z = Xw + b
 ```
 
-Sau đó đưa qua sigmoid:
+Sau đó đưa qua **sigmoid** để ép output vào `(0, 1)`:
 
 ```text
 p = sigmoid(z) = 1 / (1 + exp(-z))
 ```
 
-`p` là xác suất class positive.
+`p` được diễn giải như xác suất class positive.
+
+### Sigmoid — derive intuition
+
+Sigmoid là inverse của logit:
+
+```text
+logit(p) = log(p / (1 - p)) = z
+```
+
+- `z` âm lớn → `p → 0`.
+- `z = 0` → `p = 0.5`.
+- `z` dương lớn → `p → 1`.
 
 ```python
 import numpy as np
@@ -214,43 +366,59 @@ Mặc định:
 predict positive nếu p >= 0.5
 ```
 
-Vì sigmoid `p=0.5` khi `z=0`, decision boundary là:
+Vì sigmoid `p = 0.5` khi `z = 0`, decision boundary là:
 
 ```text
 Xw + b = 0
 ```
 
-Với 2 feature, đây là một đường thẳng. Với nhiều feature, là một siêu phẳng.
+Với 2 feature, đây là một **đường thẳng**. Với nhiều feature, là một **siêu phẳng** (hyperplane). Đó là vì sao logistic regression là *linear classifier* — boundary tuyến tính theo feature.
+
+<Callout type="info" title="Logistic vẫn tuyến tính — boundary thẳng">
+Dù output `p` đi qua sigmoid phi tuyến, decision boundary tại `p=0.5` là đường thẳng. Để có boundary cong, cần polynomial features hoặc kernel trick, hoặc dùng model phi tuyến (tree, neural net).
+</Callout>
 
 ## Binary Cross-Entropy
 
-Logistic regression không dùng MSE mà dùng Binary Cross-Entropy:
+Logistic regression không dùng MSE mà dùng **Binary Cross-Entropy (BCE)**, hay còn gọi là negative log-likelihood của Bernoulli:
 
 ```text
-BCE = -[y log(p) + (1 - y) log(1 - p)]
+BCE = -[y * log(p) + (1 - y) * log(1 - p)]
 ```
 
-Nếu label thật `y=1`:
+Logic:
 
-```text
-BCE = -log(p)
-```
+- Nếu label thật `y = 1`: `BCE = -log(p)`. `p` càng gần 1, loss càng gần 0. `p` càng gần 0, loss càng lớn (đi tới ∞).
+- Nếu label thật `y = 0`: `BCE = -log(1 - p)`. `p` càng gần 0, loss càng gần 0.
 
-Nếu model dự đoán `p=0.9`, loss thấp:
+### Vì sao cross-entropy phạt confident-but-wrong
+
+Nếu model dự đoán `p = 0.9` cho `y = 1`: loss thấp.
 
 ```text
 -log(0.9) = 0.105
 ```
 
-Nếu model dự đoán `p=0.01`, loss rất cao:
+Nếu model dự đoán `p = 0.01` cho `y = 1`: loss rất cao.
 
 ```text
 -log(0.01) = 4.605
 ```
 
+MSE với `p = 0.01` và `y = 1` chỉ `(1 - 0.01)^2 = 0.98` — phạt yếu hơn nhiều. Cross-entropy phạt **tự tin mà sai** theo hàm logarithm, rất mạnh, rất hợp lý cho classification.
+
 <Callout type="warning" title="Tự tin mà sai bị phạt nặng">
-Cross-entropy phạt rất mạnh prediction tự tin nhưng sai. Đây là điều bạn muốn: model không chỉ đúng, mà phải calibrated — tự tin khi có lý do.
+Cross-entropy phạt rất mạnh prediction tự tin nhưng sai. Đây là điều bạn muốn: model không chỉ đúng, mà phải calibrated — tự tin khi có lý do. BCE là default cho binary classification trong và ngoài deep learning.
 </Callout>
+
+### Gradient của BCE
+
+```text
+∂BCE/∂w = (p - y) * x
+∂BCE/∂b = (p - y)
+```
+
+Beautifully đơn giản! Gradient = `(prediction - target) * feature`. Tương tự MSE về hình dáng, nhưng prediction đã đi qua sigmoid.
 
 ## Implementation lab: TF-IDF + Logistic Regression spam classifier
 
@@ -259,7 +427,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import (
+    classification_report, confusion_matrix,
+    roc_auc_score, precision_recall_curve,
+)
+import numpy as np
 
 texts = [
     "win money now",
@@ -269,14 +441,10 @@ texts = [
     "limited offer win cash",
     "team sync notes attached",
 ]
-labels = [1, 1, 0, 0, 1, 0]
+labels = [1, 1, 0, 0, 1, 0]  # demo nhỏ — production cần hundreds+
 
 X_train, X_test, y_train, y_test = train_test_split(
-    texts,
-    labels,
-    test_size=0.33,
-    random_state=42,
-    stratify=labels,
+    texts, labels, test_size=0.33, random_state=42, stratify=labels,
 )
 
 pipe = Pipeline([
@@ -286,57 +454,88 @@ pipe = Pipeline([
 
 pipe.fit(X_train, y_train)
 y_pred = pipe.predict(X_test)
+proba  = pipe.predict_proba(X_test)[:, 1]
 
 print(confusion_matrix(y_test, y_pred))
 print(classification_report(y_test, y_pred))
+print("AUC-ROC:", roc_auc_score(y_test, proba))
 ```
 
-Trong dataset thật, bạn cần hàng trăm/hàng nghìn mẫu. Nhưng structure pipeline này là production pattern: vectorizer + classifier trong cùng pipeline để tránh leakage.
+Trong dataset thật, bạn cần hàng trăm/hàng nghìn mẫu. Nhưng structure pipeline này là production pattern: vectorizer + classifier trong cùng pipeline để **tránh leakage** trong cross-validation.
 
 ## Regularization
 
-Regularization thêm penalty vào loss để chống weight quá lớn.
+Regularization thêm penalty vào loss để chống weight quá lớn, giảm overfitting.
 
 ### L2 / Ridge
 
 ```text
-loss_total = loss + λ * Σw_j^2
+loss_total = loss + λ * Σ w_j^2
 ```
 
-Tác dụng: weight nhỏ, model mượt hơn.
+Tác dụng: weight nhỏ, model mượt hơn, ít nhạy với noise. Default trong `LogisticRegression` của sklearn.
 
 ### L1 / Lasso
 
 ```text
-loss_total = loss + λ * Σ|w_j|
+loss_total = loss + λ * Σ |w_j|
 ```
 
-Tác dụng: nhiều weight về đúng 0, giúp feature selection.
+Tác dụng: nhiều weight về đúng **0** — feature selection tự nhiên, model sparse. Hợp khi bạn nghi nhiều feature không liên quan và muốn biết cái nào thật sự quan trọng.
 
-Trong sklearn LogisticRegression:
-
-```python
-LogisticRegression(penalty="l2", C=1.0)
-```
-
-`C` là nghịch đảo strength:
+### ElasticNet — kết hợp L1 + L2
 
 ```text
-C nhỏ  → regularization mạnh
-C lớn  → regularization yếu
+loss_total = loss + λ1 * Σ |w_j| + λ2 * Σ w_j^2
+```
+
+Kết hợp ưu điểm: sparsity của L1 + stability của L2. Khi data có feature tương quan cao, ElasticNet ổn định hơn L1.
+
+### `C` trong sklearn — nghịch đảo strength
+
+Trong sklearn, `LogisticRegression(penalty="l2", C=1.0)`:
+
+```text
+C = 1 / λ
+
+C nhỏ  → regularization mạnh (λ lớn, weight bị phạt nặng)
+C lớn  → regularization yếu  (λ nhỏ, weight ít bị phạt)
+C → ∞  → gần như không regularization (overfit dễ)
 ```
 
 <Callout type="danger" title="C trong sklearn rất dễ hiểu ngược">
-Nhiều người nghĩ `C` lớn nghĩa là regularization mạnh. Sai. Với sklearn logistic regression, `C = 1 / λ`. Vì vậy `C=0.01` regularize mạnh hơn `C=10`.
+Nhiều người nghĩ `C` lớn nghĩa là regularization mạnh. Sai. Với sklearn logistic regression, `C = 1 / λ`. Vì vậy `C=0.01` regularize mạnh hơn `C=10`. Đây là nguồn bug phổ biến khi copy pattern từ framework khác (PyTorch dùng `weight_decay` trực tiếp).
 </Callout>
+
+```python
+from sklearn.linear_model import LogisticRegression
+
+# Regularization mạnh → weight nhỏ, underfit risk
+model_strong = LogisticRegression(C=0.01, max_iter=1000)
+
+# Regularization yếu → weight tự do, overfit risk
+model_weak = LogisticRegression(C=100, max_iter=1000)
+```
+
+### Ridge regression cho regressor
+
+```python
+from sklearn.linear_model import Ridge, Lasso, ElasticNet
+
+ridge   = Ridge(alpha=1.0)      # L2
+lasso   = Lasso(alpha=0.01)     # L1
+elastic = ElasticNet(alpha=0.01, l1_ratio=0.5)
+```
+
+`alpha` trong regressor của sklearn **trùng diện** với `C` logistic: `alpha` lớn = regularization mạnh. Lại một cú đ nữa source of confusion — để ý.
 
 ## Multi-class classification
 
-Có hai cách:
+Với K > 2 class, có hai chiến lược chính:
 
-### One-vs-Rest
+### One-vs-Rest (OvR)
 
-Train một classifier cho mỗi class:
+Train một classifier binary cho mỗi class:
 
 ```text
 class A vs not A
@@ -344,105 +543,168 @@ class B vs not B
 class C vs not C
 ```
 
+Predict = class có score cao nhất. Đơn giản, nhưng class imbalance giữa "class A" và "rest" nặng nếu K lớn.
+
 ### Multinomial / Softmax
 
-Model output score cho mọi class, softmax thành probability:
+Model output score `z_k` cho mỗi class, softmax thành probability:
+
+```text
+softmax(z)_k = exp(z_k) / Σ_j exp(z_j)
+```
+
+Loss là Categorical Cross-Entropy:
+
+```text
+CE = -Σ_k y_k * log(p_k)
+```
 
 ```python
 clf = LogisticRegression(multi_class="multinomial", max_iter=1000)
 ```
 
-Softmax thường tốt hơn khi class loại trừ nhau.
+Softmax thường tốt hơn OvR khi class loại trừ nhau (mỗi sample chỉ thuộc 1 class). Khi class có quan hệ thứ bậc (hierarchical), dùng cấu trúc đặc biệt hơn.
+
+<Callout type="info" title="Lưu ý multi_class trong sklearn mới">
+Từ sklearn 1.5+, `multi_class` sẽ deprecated cho solver 'lbfgs' — multinomial là default. Đọc release notes nếu gặp warning. Trong deep learning, multi-class dùng softmax trực tiếp, không cần OvR.
+</Callout>
+
+## Calibration với logistic regression
+
+Logistic regression thường đã khá calibrated (vì BCE optimize likelihood trực tiếp). Khi dùng L1 heavy regularization hoặc khi feature bị correlated, calibration có thể lệch.
+
+```python
+from sklearn.calibration import CalibratedClassifierCV
+
+calibrated = CalibratedClassifierCV(pipe, cv=3, method="isotonic")
+calibrated.fit(X_train, y_train)
+```
+
+Trong product rủi ro cao (y tế, tài chính), hãy vẽ **reliability diagram** trên validation để check.
 
 ## Common mistakes & debugging checklist
 
 <Callout type="warning" title="Mistake 1: không scale numeric feature">
-Linear/logistic regression nhạy feature scale. Nếu feature có scale rất khác nhau, optimizer khó hội tụ và regularization phạt feature không công bằng.
+Linear/logistic regression nhạy feature scale. Nếu feature có scale rất khác nhau, optimizer khó hội tụ và regularization phạt feature không công bằng — feature lớn bị phạt ít hơn feature nhỏ (vì cần weight nhỏ hơn để có cùng impact).
 </Callout>
 
 <Callout type="warning" title="Mistake 2: dùng predict thay vì predict_proba khi cần threshold">
-`predict()` dùng threshold mặc định. Production thường cần threshold theo business cost. Hãy lấy `predict_proba()` rồi chọn threshold trên validation.
+`predict()` dùng threshold mặc định 0.5. Production thường cần threshold theo business cost. Hãy lấy `predict_proba()` rồi chọn threshold trên validation.
+</Callout>
+
+<Callout type="warning" title="Mistake 3: multicollinearity phá coefficients">
+Nếu 2 feature tương quan cao (r=0.95), coefficients có thể dao động lớn với ít data change — model vẫn predict đúng nhưng interpretação sai. Dùng VIF (Variance Inflation Factor) hoặc L2 regularization.
+</Callout>
+
+<Callout type="danger" title="Mistake 4: diễn giải coefficient khi scale khác nhau">
+Nếu feature A có scale 0-1 và B có scale 0-1000, coefficient của A có thể lớn hơn B nhiều dù B quan trọng hơn. Hãy scale trước, hoặc diễn giải coefficient * std(feature) = "impact của 1 std change".
 </Callout>
 
 Checklist:
 
 1. Feature numeric đã scale chưa?
-2. Pipeline có bao gồm preprocessing không?
-3. Có class imbalance không?
+2. Pipeline có bao gồm preprocessing không (để CV không leakage)?
+3. Có class imbalance cần `class_weight`/threshold tuning không?
 4. Threshold có được tune trên validation không?
-5. Coefficients có hợp lý không?
-6. Regularization `C` có quá mạnh/yếu không?
+5. Coefficients có hợp lý không (dấu, magnitude)?
+6. Regularization `C`/`alpha` có quá mạnh/yếu không (check train vs val gap)?
+7. Có multicollinearity làm coefficients lệch không?
+8. Probability có cần calibration không (reliability diagram)?
 
 ## Practice exercises
 
-1. Tính MSE cho `y=[2,4,6]`, `ŷ=[2.5,3.5,7]`.
-2. Tính BCE khi `y=1`, `p=0.8`; và khi `y=1`, `p=0.05`.
-3. Giải thích vì sao logistic regression vẫn là linear classifier dù output là sigmoid.
-4. Với fraud detection, bạn sẽ tune threshold cao hay thấp hơn 0.5? Vì sao?
-5. Thử train TF-IDF + Logistic Regression trên 20 câu tự tạo spam/not spam.
+1. Tính MSE, MAE cho `y=[2,4,6]`, `ŷ=[2.5,3.5,7]`. Comment về khác biệt.
+2. Tính BCE khi `y=1`, `p=0.8`; và khi `y=1`, `p=0.05`. So sánh với MSE cũng合 với cùng giá trị — vì sao BCE hợp hơn cho classification?
+3. Derive gradient của BCE theo `w` (bắt đầu từ `p = sigmoid(z) = 1/(1+exp(-z))`, `z = Xw + b`). Chứng minh `∂BCE/∂w = (p - y) * x`.
+4. Giải thích vì sao logistic regression vẫn là linear classifier dù output là sigmoid.
+5. Với fraud detection, bạn sẽ tune threshold cao hay thấp hơn 0.5? Vì sao?
+6. Viết code train TF-IDF + Logistic Regression trên 20+ câu tự tạo spam/not spam, có train/val/test, có classification_report và AUC-ROC.
+7. Implement gradient descent cho linear regression từ scratch với NumPy (không dùng sklearn), có normalize feature.
+8. So sánh `LogisticRegression(C=0.01)` vs `C=100` trên cùng dataset: train F1, val F1, gap — giải thích over/underfit.
+9. Tạo polynomial features degree=2 và train LinearRegression — cho ví dụ model fit tốt hơn với dữ liệu phi tuyến.
 
 ## Knowledge check
 
-1. Linear regression dùng cho loại target nào?
-2. Logistic regression output là gì?
+1. Linear regression dùng cho loại target nào? Loss mặc định?
+2. Logistic regression output là gì? Vì sao không dùng MSE?
 3. Decision boundary của logistic regression xảy ra khi `z` bằng bao nhiêu?
-4. MSE nhạy với gì?
-5. L1 regularization có tác dụng đặc biệt gì?
-6. Trong sklearn, `C` nhỏ nghĩa là gì?
+4. MSE nhạy với gì? MAE khác MSE như thế nào?
+5. L1 regularization có tác dụng đặc biệt gì? L2 khác gì?
+6. Trong sklearn LogisticRegression, `C` nhỏ nghĩa là gì? Khác `alpha` của Ridge thế nào?
 7. Vì sao dùng Pipeline với TF-IDF + Logistic Regression?
+8. OvR khác Multinomial (softmax) thế nào? Khi nào chọn cái nào?
+9. Closed-form (normal equation) không hợp cho trường hợp nào?
+10. Polynomial features degree=2 cho 3 feature sinh ra bao nhiêu feature?
 
 ## Answer key
 
-1. Target liên tục.
-2. Xác suất class positive sau sigmoid.
+1. Target liên tục. Loss mặc định MSE.
+2. Output là xác suất class positive sau sigmoid. MSE phạt confident-but-wrong yếu hơn BCE — cho gradient tệ khi p gần 0/1 vì sigmoid gradient nhỏ.
 3. `z = 0`, tương ứng `p = 0.5`.
-4. Outliers/lỗi lớn vì bình phương lỗi.
-5. Tạo sparsity, nhiều weight bằng 0.
-6. Regularization mạnh.
-7. Để vectorizer chỉ fit trên train trong mỗi split/CV, tránh leakage và đóng gói preprocessing + model.
+4. MSE nhạy outlier (bình phương lỗi). MAE phạt tuyến tính, ít nhạy outlier nhưng gradient không xác định tại error=0.
+5. L1 tạo sparsity (nhiều weight = 0, feature selection). L2 làm weight nhỏ (cân bằng), không sparse.
+6. `C` nhỏ = regularization mạnh. `alpha` của Ridge: `alpha` lớn = regularization mạnh — ngược nghĩa với `C`.
+7. Để vectorizer chỉ fit trên train trong mỗi split/CV, tránh leakage và đóng gói preprocessing + model thành một estimator duy nhất.
+8. OvR train K classifier binary; Multinomial train một classifier softmax. Multinomial tốt khi class loại trừ nhau và balance; OvR đơn giản, hợp khi có class hierarchy.
+9. Không hợp khi `d` lớn (inverse `X^T X` tốn `O(d^3)`), multicollinearity (matrix gần singular), hoặc cần generalize cho NN.
+10. 3 feature: `x1, x2, x3, x1^2, x2^2, x3^2, x1x2, x1x3, x2x3` = 9 feature.
 
 Bài tập tính toán:
 
 ```text
-MSE = ((2-2.5)^2 + (4-3.5)^2 + (6-7)^2) / 3
-    = (0.25 + 0.25 + 1) / 3 = 0.5
+MSE = ((2-2.5)^2 + (4-3.5)^2 + (6-7)^2) / 3 = (0.25 + 0.25 + 1) / 3 = 0.5
+MAE = (|2-2.5| + |4-3.5| + |6-7|) / 3 = (0.5 + 0.5 + 1) / 3 = 0.667
 
-BCE(y=1,p=0.8) = -log(0.8) ≈ 0.223
-BCE(y=1,p=0.05) = -log(0.05) ≈ 2.996
+BCE(y=1, p=0.8)  = -log(0.8)  ≈ 0.223
+BCE(y=1, p=0.05) = -log(0.05) ≈ 2.996
+
+MSE tương ứng:
+MSE(y=1, p=0.8)  = (1-0.8)^2 = 0.04
+MSE(y=1, p=0.05) = (1-0.05)^2 = 0.9025 ← phạt yếu hơn BCE rất nhiều
 ```
 
 ## Mini-project: Cost predictor + complexity classifier
 
 **Task:** Build hai baseline models cho một LLM platform giả lập.
 
-1. Regression: dự đoán `cost` từ `input_tokens`, `output_tokens`, `model_name`.
-2. Classification: dự đoán request có `complex_reasoning=1` từ text features.
+1. Regression: dự đoán `cost` từ `input_tokens`, `output_tokens`, `model_name`, `latency`.
+2. Classification: dự đoán request có `complex_reasoning=1` từ text features (token count, presence of certain keywords, embedding reduced).
 
 **Deliverables:**
 
 - Notebook hoặc script sklearn.
-- Pipeline preprocessing + model.
-- Regression metrics: MAE/RMSE.
-- Classification metrics: precision/recall/F1.
-- Nhận xét coefficients hoặc feature importance.
+- Pipeline preprocessing + model (sklearn Pipeline, không fit ngoài pipeline).
+- Regression metrics: MAE, RMSE, R². Nhận xét coefficients.
+- Classification metrics: precision, recall, F1, AUC-ROC, PR-AUC.
+- Threshold tuning trên validation cho classifier (cho một business cost giả định).
+- Baseline comparison: model đơn giản vs regularized model (L1 vs L2).
 
 **Success criteria:**
 
-- Không leakage.
+- Không leakage (Pipeline, split stratified).
 - Có train/val/test split.
 - Có threshold tuning cho classifier.
-- Có baseline comparison: model đơn giản vs regularized model.
+- Coefficients được diễn giải (sign, magnitude relative to feature std).
+- Có phân tích overfit/underfit dựa trên train vs val gap.
+- Báo cáo khi nào baseline đơn giản đủ tốt, khi nào cần nâng cấp model.
+
+<Callout type="tip" title="Đây là pattern production phổ biến">
+Hệ thống routing LLM thực tế thường có một regression để estimate cost và một classifier để chọn model. Cùng baseline LogisticRegression/RidgeRegressor có thể deploy production nếu dữ liệu đủ và feature engineering tốt — không nhất thiết phải neural network.
+</Callout>
 
 ## Điểm cần nhớ
 
-- Linear regression học target liên tục bằng `Xw+b`, loss thường là MSE.
-- Logistic regression = linear score + sigmoid, output probability.
-- Cross-entropy phạt prediction tự tin nhưng sai rất mạnh.
-- Decision boundary của logistic regression là `Xw+b=0`.
-- Regularization chống overfit; L1 tạo sparsity, L2 làm weight nhỏ/mượt.
-- `C` trong sklearn là nghịch đảo regularization.
-- TF-IDF + Logistic Regression là baseline NLP production rất mạnh.
+- Linear regression học target liên tục bằng `Xw+b`, loss thường là MSE (nhạy outlier; MAE/Huber ít nhạy hơn).
+- Có nghiệm đóng (normal equation) cho data nhỏ; gradient descent cho data lớn và generalize cho NN.
+- Logistic regression = linear score + sigmoid, output probability. Boundary là siêu phẳng `Xw+b=0`.
+- Cross-entropy phạt prediction tự tin nhưng sai rất mạnh (theo log); gradient đẹp: `(p-y) * x`.
+- Regularization chống overfit; L1 tạo sparsity (feature selection), L2 làm weight nhỏ (ổn định); ElasticNet kết hợp cả hai.
+- `C` trong sklearn logistic là nghịch đảo regularization — đừng hiểu ngược.
+- Polynomial/interaction features cho phép linear model表现 phi tuyến (vẫn linear theo weight).
+- Multi-class dùng OvR (đơn giản) hoặc Multinomial/softmax (mạnh khi class loại trừ nhau).
+- TF-IDF + Logistic Regression là baseline NLP production cực mạnh, thường khó đánh bại trừ khi dataset lớn và ngữ liệu phong phú.
+- Diễn giải coefficients cần scale hoặc представить "impact of 1 std change" để không bị lừa bởi scale khác nhau.
 
 ## Next chapter bridge
 
-Linear/logistic regression chỉ tạo decision boundary tuyến tính. Khi quan hệ giữa feature và target phi tuyến, bạn cần model linh hoạt hơn. Chương tiếp theo: **Decision Trees & Ensembles** — nơi model học các rule dạng “nếu feature này nhỏ hơn ngưỡng kia” và kết hợp nhiều cây để đạt performance rất mạnh trên tabular data.
+Linear/logistic regression chỉ tạo decision boundary tuyến tính (hoặc cong nếu dùng polynomial). Khi quan hệ giữa feature và target phức tạp và phi tuyến kiểu interaction tree, bạn cần model linh hoạt hơn. Chương tiếp theo: **Decision Trees & Ensembles** — nơi model học các rule dạng "nếu feature này nhỏ hơn ngưỡng kia" và kết hợp nhiều cây để đạt performance rất mạnh trên tabular data.

@@ -1,6 +1,8 @@
 Decision Trees và Ensembles là nhóm model cực mạnh cho **tabular data**. Nếu transformer thống trị text, thì XGBoost/LightGBM/CatBoost vẫn thường thắng trong các bài toán bảng: churn prediction, fraud detection, lead scoring, pricing, click-through rate, user risk score.
 
-Chương này không chỉ dạy bạn gọi `RandomForestClassifier`. Ta sẽ học cách cây ra quyết định, Gini/entropy nghĩa là gì, vì sao cây đơn dễ overfit, random forest giảm variance, gradient boosting sửa lỗi tuần tự, và cách đọc feature importance một cách cẩn thận.
+Chương này không chỉ dạy bạn gọi `RandomForestClassifier`. Ta sẽ học cách cây ra quyết định, Gini/entropy nghĩa là gì, vì sao cây đơn dễ overfit, random forest giảm variance bằng bagging, gradient boosting sửa lỗi tuần tự, cách đọc feature importance một cách cẩn thận, và khi nào nên dùng tree-based vs neural network.
+
+Khi bạn hiểu chương này, bạn sẽ có đủ công cụ để vận hành ML trên dữ liệu tabular production — portfolio mà nhiều công ty AI thực tế dùng làm core model thay vì deep learning.
 
 ## Why this matters
 
@@ -11,8 +13,9 @@ Features:
 - `days_since_last_login`
 - `monthly_usage_minutes`
 - `support_tickets_last_30d`
-- `plan_type`
+- `plan_type` (free / pro / enterprise)
 - `payment_failed_count`
+- `account_age_days`
 
 Target:
 
@@ -23,40 +26,49 @@ churn_next_month = 1/0
 Quan hệ không tuyến tính:
 
 - User usage thấp + payment failed + nhiều ticket → churn cao.
-- User enterprise plan dù usage thấp có thể không churn.
-- User mới có usage thấp chưa chắc churn.
+- User enterprise plan dù usage thấp có thể không churn (contract khóa).
+- User mới có usage thấp chưa chắc churn (onboarding chưa xong).
 
 Linear model khó capture các interaction kiểu này. Decision tree/ensemble học rule tự nhiên:
 
 ```text
 if payment_failed_count > 0 and usage < 30 and tickets > 2:
     high churn risk
+else if plan == enterprise:
+    low churn risk
+else:
+    medium risk
 ```
+
+Tree-based là model fit for purpose cho dữ liệu bảng với categorical, missing values, interaction phi tuyến — đúng như neural network fit for unstructured data (text, ảnh, audio).
 
 ## Learning objectives
 
 Sau chương này, bạn sẽ có thể:
 
-1. Giải thích decision tree split data bằng feature threshold.
-2. Tính Gini impurity và entropy cho một node nhỏ.
-3. Hiểu vì sao decision tree dễ overfit.
-4. Giải thích bagging và random forest giảm variance như thế nào.
-5. Giải thích gradient boosting học tuần tự để sửa lỗi model trước.
-6. Đọc feature importance, permutation importance và hiểu hạn chế.
-7. Xây baseline RandomForest/XGBoost cho tabular classification.
+1. Giải thích decision tree split data bằng feature threshold theo CART algorithm.
+2. Tính Gini impurity và entropy cho một node nhỏ, hiểu information gain.
+3. Phân biệt classification tree và regression tree (variance reduction).
+4. Hiểu vì sao decision tree dễ overfit và các hyperparameter kiểm soát.
+5. Giải thích bagging và random forest giảm variance thông qua averaging decorrelated trees.
+6. Giải thích gradient boosting học tuần tự để sửa lỗi model trước (residuals + learning rate).
+7. Phân biệt Random Forest vs Gradient Boosting vs Stacking.
+8. Đọc feature importance (impurity, permutation), hiểu hạn chế và dùng SHAP.
+9. Xây baseline RandomForest/XGBoost cho tabular classification với engineer cẩn thận.
 
 ## Prerequisites
 
 Bạn nên biết:
 
-- Classification metrics.
-- Train/validation/test split.
+- Classification metrics (precision, recall, F1, AUC-ROC).
+- Train/validation/test split, cross-validation.
 - Entropy từ Phase 2.
-- Overfitting và bias-variance tradeoff.
+- Overfitting, bias-variance tradeoff.
+- Gradient descent cơ bản (cho boosting).
 
 ## Core intuition: cây là chuỗi câu hỏi
 
-Decision tree giống một flowchart. Mỗi node hỏi một câu:
+Decision tree giống một flowchart. Mỗi node hỏi một câu dạng "feature `j` có ≤ threshold `t` không?":
 
 ```text
 monthly_usage_minutes <= 30?
@@ -66,27 +78,55 @@ monthly_usage_minutes <= 30?
 └── no: low risk
 ```
 
-Mỗi split cố gắng tạo ra các node con “sạch” hơn — nghĩa là node chứa chủ yếu một class.
+Mỗi split cố gắng tạo ra các node con "sạch" hơn — nghĩa là node chứa chủ yếu một class. Mỗi lá (leaf) gán một prediction: class phổ biến nhất (classification) hoặc mean target (regression).
 
 ## Formal definition
 
 Một decision tree recursively partition feature space. Tại mỗi node, nó chọn:
 
 ```text
-feature j
-threshold t
+feature j  ∈  {1, ..., d}
+threshold t  ∈  values of feature j
 ```
 
 để chia data thành:
 
 ```text
-left  = samples where x_j <= t
+left  = samples where x_j ≤ t
 right = samples where x_j > t
 ```
 
-Mục tiêu là giảm impurity.
+Mục tiêu là **giảm impurity** (classification) hoặc **giảm variance** (regression). Đây là thuật toán **CART (Classification And Regression Trees)** — greedy, top-down, recursive.
 
-## Gini impurity
+### Pseudo-code CART
+
+```text
+def build_tree(node_data):
+    if should_stop(node_data):           # max_depth, min_samples, pure
+        return Leaf(majority_class(node_data))
+
+    best_split = None
+    best_gain = -inf
+    for feature j in features_to_try:
+        for threshold t in candidate_thresholds(j):
+            left, right = split(node_data, j, t)
+            gain = impurity(node_data) - weighted_impurity(left, right)
+            if gain > best_gain:
+                best_gain, best_split = gain, (j, t, left, right)
+
+    return Node(
+        feature=best_split.j,
+        threshold=best_split.t,
+        left=build_tree(best_split.left),
+        right=build_tree(best_split.right),
+    )
+```
+
+Cây học bằng cách chia greedy — mỗi split chọn optimal cục bộ, không nhìn xa. Đây là vì sao cây dễ overfit: mỗi split vốn fit training noise nếu không kiểm soát.
+
+## Impurity measures (classification)
+
+### Gini impurity
 
 ```text
 Gini = 1 - Σ p_k^2
@@ -98,35 +138,64 @@ Trong binary classification với positive rate `p`:
 Gini = 1 - p^2 - (1-p)^2
 ```
 
-Nếu node toàn class 0:
-
-```text
-p0=1, p1=0 → Gini = 0
-```
-
-Nếu node 50/50:
-
-```text
-Gini = 1 - 0.5^2 - 0.5^2 = 0.5
-```
+- Nếu node toàn class 0: `p=0, Gini = 0` — pure.
+- Nếu node 50/50: `Gini = 1 - 0.25 - 0.25 = 0.5` — maximum impurity.
 
 Gini càng thấp, node càng sạch.
 
-## Entropy và information gain
+### Entropy và information gain
 
 ```text
 Entropy = -Σ p_k log2(p_k)
 ```
 
+- Node pure: `Entropy = 0`.
+- Node 50/50: `Entropy = 1` (binary).
+
 Information Gain:
 
 ```text
 IG = impurity(parent) - weighted_impurity(children)
+
+IG = H(parent) - (n_left/n) * H(left) - (n_right/n) * H(right)
 ```
 
-<Callout type="info" title="Gini vs entropy">
-Gini và entropy thường chọn split tương tự. Gini tính nhanh hơn một chút và là default trong sklearn. Entropy có diễn giải information theory rõ hơn.
+H = Gini hoặc Entropy tùy criterion.
+
+<Callout type="info" title="Gini vs Entropy">
+Gini và entropy thường chọn split tương tự. Gini tính nhanh hơn một chút (không log) và là default trong sklearn. Entropy có diễn giải information theory rõ hơn, “information gain” đo bits of information. Trong thực tế, kết quả gần như nhau.
 </Callout>
+
+### Misclassification error
+
+```text
+MCE = 1 - max(p_k)
+```
+
+Đơn giản nhất nhưng ít smooth — không khuyến khích split nếu best class lợi annot nhỏ. Hiếm dùng cho split selection; chỉ dùng cho đánh giá lá cuối.
+
+## Regression trees — variance reduction
+
+Cho regression, ta thay impurity bằng **MSE / variance**:
+
+```text
+MSE(node) = (1/n) * Σ (y_i - ȳ_node)^2
+```
+
+Split tốt giảm weighted MSE của children so với parent:
+
+```text
+Gain = MSE(parent) - (n_left/n) * MSE(left) - (n_right/n) * MSE(right)
+```
+
+Lá của regression tree = mean target trong lá đó. Cây học một **piecewise-constant function**.
+
+```python
+from sklearn.tree import DecisionTreeRegressor
+
+reg = DecisionTreeRegressor(max_depth=4, min_samples_leaf=10)
+reg.fit(X_train, y_train)
+```
 
 ## Worked example by hand: chọn split
 
@@ -136,23 +205,19 @@ Giả sử node có 10 samples:
 6 churn, 4 not churn
 ```
 
-Parent Gini:
+**Parent Gini**:
 
 ```text
 Gini_parent = 1 - (0.6)^2 - (0.4)^2 = 0.48
 ```
 
-Candidate split A tạo:
+**Candidate split A** tạo:
 
-Left: 5 samples = 4 churn, 1 not churn
-
-```text
-Gini_left = 1 - (4/5)^2 - (1/5)^2 = 0.32
-```
-
-Right: 5 samples = 2 churn, 3 not churn
+- Left: 5 samples = 4 churn, 1 not churn
+- Right: 5 samples = 2 churn, 3 not churn
 
 ```text
+Gini_left  = 1 - (4/5)^2 - (1/5)^2 = 0.32
 Gini_right = 1 - (2/5)^2 - (3/5)^2 = 0.48
 ```
 
@@ -165,23 +230,58 @@ Weighted child impurity:
 Gini gain:
 
 ```text
-0.48 - 0.40 = 0.08
+Gini_gain_A = 0.48 - 0.40 = 0.08
 ```
 
-Candidate split B nếu tạo child impurity 0.30 thì gain 0.18, tốt hơn split A.
+**Candidate split B** tạo child impurity 0.30:
+
+```text
+Gini_gain_B = 0.48 - 0.30 = 0.18
+```
+
+Split B tốt hơn (gain cao hơn). CART sẽ chọn split B.
+
+### Entropy tương tự — tính thử
+
+Parent entropy:
+
+```text
+H(parent) = -(0.6 log2 0.6 + 0.4 log2 0.4)
+          = -(0.6 * (-0.737) + 0.4 * (-1.322))
+          = 0.971
+```
+
+Split A:
+
+```text
+H(left)  = -(4/5 log2(4/5) + 1/5 log2(1/5))  = 0.722
+H(right) = -(2/5 log2(2/5) + 3/5 log2(3/5))  = 0.971
+H_weighted = 0.5 * 0.722 + 0.5 * 0.971 = 0.846
+IG_A = 0.971 - 0.846 = 0.125 bits
+```
+
+Cả hai criterion chọn cùng split trong ví dụ này — pattern phổ biến.
 
 ## Why single trees overfit
 
-Decision tree không giới hạn có thể tiếp tục split đến khi mỗi leaf gần như chỉ chứa vài sample. Khi đó nó học noise.
+Decision tree không giới hạn có thể tiếp tục split đến khi mỗi leaf gần như chỉ chứa 1 sample. Khi đó nó học **noise** chứ không phải pattern.
 
-Các hyperparameters kiểm soát:
+```python
+from sklearn.tree import DecisionTreeClassifier
 
-| Hyperparameter | Ý nghĩa |
-|---|---|
-| `max_depth` | độ sâu tối đa |
-| `min_samples_leaf` | số sample tối thiểu ở leaf |
-| `min_samples_split` | số sample tối thiểu để split |
-| `max_leaf_nodes` | số leaf tối đa |
+tree_no_limit = DecisionTreeClassifier(random_state=42)
+# Có thể đạt train F1 = 1.0, val F1 = 0.55
+```
+
+### Hyperparameters kiểm soát
+
+| Hyperparameter | Ý nghĩa | Tác dụng tăng lên |
+|---|---|---|
+| `max_depth` | độ sâu tối đa | giảm → model đơn giản hơn, giảm variance |
+| `min_samples_leaf` | số sample tối thiểu ở leaf | tăng → leaf tổng quát hơn, chống noise |
+| `min_samples_split` | số sample tối thiểu để split | tăng → fewer splits |
+| `max_leaf_nodes` | số leaf tối đa | tăng → model phức tạp hơn |
+| `max_features` | số feature xét mỗi split | giảm → randomized, decorrelate (forest) |
 
 ```python
 from sklearn.tree import DecisionTreeClassifier
@@ -193,18 +293,29 @@ tree = DecisionTreeClassifier(
 )
 ```
 
+### Pruning (hậu kiểm soát)
+
+Có hai cách:
+
+- **Pre-pruning**: dừng sớm bằng hyperparameters (sklearn default).
+- **Post-pruning**: xây full tree, cắt bỏ nhánh với cost-complexity (`ccp_alpha` trong sklearn).
+
+```python
+tree = DecisionTreeClassifier(ccp_alpha=0.01, random_state=42)
+```
+
 <Callout type="warning" title="Cây sâu nhìn rất thông minh nhưng có thể học thuộc">
-Một cây depth 30 có thể tạo rule cực chi tiết như “nếu `user_id_hash <= ...`” và đạt train score 99%, nhưng validation tệ. Cây càng dễ giải thích không có nghĩa là càng generalize tốt.
+Một cây depth 30 có thể tạo rule cực chi tiết như "nếu `user_id_hash <= ...`" và đạt train score 99%, nhưng validation tệ. Cây càng dễ giải thích không có nghĩa là càng generalize tốt.
 </Callout>
 
-## Random Forest
+## Random Forest — bagging với cây
 
 Random Forest giảm overfitting bằng cách train nhiều cây khác nhau rồi trung bình/vote.
 
 Nó dùng hai nguồn randomness:
 
-1. Bootstrap samples: mỗi cây train trên sample có lặp từ train set.
-2. Random feature subset: mỗi split chỉ xét một subset feature.
+1. **Bootstrap samples**: mỗi cây train trên sample có lặp từ train set (bagging = bootstrap aggregating).
+2. **Random feature subset**: tại mỗi split, chỉ xét một subset feature (`max_features`).
 
 ```python
 from sklearn.ensemble import RandomForestClassifier
@@ -213,40 +324,83 @@ rf = RandomForestClassifier(
     n_estimators=300,
     max_depth=None,
     min_samples_leaf=2,
+    max_features="sqrt",
     random_state=42,
     n_jobs=-1,
+    oob_score=True,
 )
 rf.fit(X_train, y_train)
+print("OOB F1:", rf.oob_score_)
 ```
 
 ### Tại sao forest tốt hơn tree đơn?
 
-Tree đơn có variance cao: đổi data chút, cây khác rất nhiều. Random forest tạo nhiều cây variance cao nhưng **khác nhau**, rồi trung bình lại. Noise riêng của từng cây triệt tiêu phần nào.
+Tree đơn có variance cao: đổi data chút, cây khác rất nhiều. Random forest tạo nhiều cây variance cao nhưng **khác nhau** (decorrelated), rồi average. Noise riêng của từng cây triệt tiêu phần nào:
 
 ```text
-many noisy opinions + averaging → more stable prediction
+many noisy but decorrelated opinions + averaging → more stable prediction
 ```
 
-## Gradient Boosting
+<Callout type="info" title="OOB (Out-of-Bag) score">
+Mỗi cây chỉ train trên bootstrap ~63% sample, ~37% còn lại "out-of-bag". Dùng OOB sample để đánh giá chính cây đó, aggregated thành OOB score — cross-validation miễn phí, không tốn thêm data. Hữu ích khi data ít và tuning `n_estimators`.
+</Callout>
 
-Boosting khác random forest. Forest train cây độc lập song song. Boosting train cây **tuần tự**.
+### Math bagging
+
+Nếu `n` cây độc lập với variance `σ^2` mỗi cây, average có variance:
+
+```text
+Var_avg = σ^2 / n      (nếu cây hoàn toàn độc lập)
+```
+
+Thực tế cây có tương quan `ρ`, nên variance thực:
+
+```text
+Var_avg = ρ * σ^2 + (1 - ρ) * σ^2 / n
+```
+
+`max_features` giảm `ρ` — đây là vì sao nó quan trọng: không chỉ để nhanh hơn, mà còn để decorrelate cây.
+
+## Gradient Boosting — học tuần tự
+
+Boosting khác random forest về cơ bản. Forest train cây **độc lập song song**. Boosting train cây **tuần tự**, mỗi cây mới học sai số của ensemble hiện tại.
 
 Ý tưởng:
 
 ```text
-model_1 học pattern chính
-model_2 học lỗi còn lại của model_1
-model_3 học lỗi còn lại của model_1 + model_2
+F_0 = simple prediction (mean / global prior)
+F_1 = F_0 + lr * tree_1(residuals of F_0)
+F_2 = F_1 + lr * tree_2(residuals of F_1)
 ...
+F_m(x) = F_0(x) + Σ lr * tree_t(x)
 ```
 
-Prediction cuối:
+Mỗi cây mới fit gradient của loss theo prediction hiện tại — đó là vì sao gọi là **gradient** boosting.
+
+### Gradient of loss — generic view
+
+Cho loss `L(y, F(x))`. Boosting fit `-∂L/∂F` bằng regression tree:
+
+- **Squared loss** (regression): residual = `y - F(x)`.
+- **Logistic loss** (classification): residual = `y - sigmoid(F(x))` (= `y - p`).
+
+Mỗi bước cập nhật:
 
 ```text
-F(x) = tree_1(x) + learning_rate * tree_2(x) + ...
+F ← F + lr * tree(x)
 ```
 
-XGBoost/LightGBM/CatBoost là các implementation boosting mạnh.
+`lr` (learning rate, alias `eta`) nhỏ → model mượt, chống overfit, nhưng cần nhiều vòng hơn. Cân `lr` và `n_estimators`.
+
+### XGBoost / LightGBM / CatBoost
+
+Ba implementation boosting mạnh, optimization đặc biệt:
+
+| Library | Đặc điểm |
+|---|---|
+| XGBoost | Matures, regularized objective (L1/L2), handle missing values, distribución |
+| LightGBM | Histogram-based, fast trên data lớn, leaf-wise growth, hỗ trợ GPU |
+| CatBoost | Ordered boosting, xử lý categorical tốt, ít tune |
 
 ```python
 from xgboost import XGBClassifier
@@ -258,18 +412,55 @@ xgb = XGBClassifier(
     subsample=0.8,
     colsample_bytree=0.8,
     eval_metric="logloss",
+    early_stopping_rounds=20,
 )
-
-xgb.fit(X_train, y_train)
+xgb.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
 ```
 
 <Callout type="tip" title="Boosting là vua tabular">
-Trong nhiều competition và production tabular systems, gradient boosting thường là baseline rất khó đánh bại. Nếu data của bạn là bảng có feature engineering tốt, hãy thử LightGBM/XGBoost trước khi nghĩ tới neural network.
+Trong nhiều competition Kaggle và production tabular systems, gradient boosting thường là baseline rất khó đánh bại. Nếu data của bạn là bảng có feature engineering tốt, hãy thử LightGBM/XGBoost trước khi nghĩ tới neural network.
 </Callout>
+
+### Bias-variance view của boosting
+
+- Random forest giảm **variance** (average decorrelated trees).
+- Boosting giảm **bias** dần theo iteration (mỗi cây mới sửa lỗi còn lại) — nhưng nếu dừng quá muộn cũng tăng variance / overfit. Đó là vì sao **early stopping** quan trọng với boosting.
+
+## Stacking — meta-ensem prefer
+
+Stacking train nhiều model base khác nhau (ví dụ logistic, RF, XGBoost), rồi train một **meta-model** trên prediction của chúng:
+
+```text
+Model 1 (LogReg)  → p_1
+Model 2 (RF)      → p_2      Meta-learner (LogReg) → final
+Model 3 (XGBoost) → p_3
+```
+
+Meta-learner học cách kết hợp — model nào đúng khi nào. Để tránh leakage, meta-learner train trên out-of-fold predictions của base models (k-fold).
+
+```python
+from sklearn.ensemble import StackingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+
+stack = StackingClassifier(
+    estimators=[
+        ("lr", LogisticRegression(max_iter=1000)),
+        ("rf", RandomForestClassifier(n_estimators=200, random_state=42)),
+    ],
+    final_estimator=XGBClassifier(n_estimators=100),
+    cv=5,  # out-of-fold cho meta
+)
+```
+
+Stacking thường cho cải thiện nhỏ so với boosting đơn, nhưng tăng complexity — dùng khi 1% lift có giá trị lớn.
 
 ## Feature importance
 
-Tree-based models có feature importance:
+Tree-based models có feature importance tích cực:
+
+### Impurity-based importance
 
 ```python
 import pandas as pd
@@ -278,175 +469,227 @@ importance = pd.Series(rf.feature_importances_, index=feature_names)
 importance.sort_values(ascending=False).head(10)
 ```
 
-Nhưng impurity-based importance có bias với feature nhiều unique values. Ví dụ `user_id_hash` có thể được đánh quan trọng dù không generalize.
+Sklearn tính tổng gain (Gini reduction) mỗi feature đóng góp across all trees. Nhưng có **bias** với feature nhiều unique values — ví dụ `user_id_hash` có thể được đánh quan trọng dù không generalize.
 
-### Permutation importance
+### Permutation importance (model-agnostic)
 
-Permutation importance shuffle một feature và đo metric giảm bao nhiêu:
+Shuffle một feature và đo metric giảm bao nhiêu trên validation:
 
 ```python
 from sklearn.inspection import permutation_importance
 
 result = permutation_importance(
-    rf,
-    X_val,
-    y_val,
-    scoring="f1",
-    n_repeats=10,
-    random_state=42,
+    rf, X_val, y_val,
+    scoring="f1", n_repeats=10, random_state=42,
 )
+imp = pd.Series(result.importances_mean, index=feature_names)
 ```
 
-Nếu shuffle feature làm F1 giảm mạnh, feature đó quan trọng.
+Nếu shuffle feature làm F1 giảm mạnh, feature đó quan trọng trong model. Permutation tránh bias high-cardinality và applic được cho bất kỳ model nào.
 
-### SHAP
+### SHAP — explain prediction từng sample
 
-SHAP giải thích contribution của từng feature cho từng prediction. Dùng nhiều trong model governance và explainability.
+SHAP (SHapley Additive exPlanations) dựa trên game theory, tính contribution của từng feature cho từng prediction. Dùng nhiều trong model governance và explainability.
+
+```python
+import shap
+
+explainer = shap.TreeExplainer(xgb)
+shap_values = explainer.shap_values(X_test)
+shap.summary_plot(shap_values, X_test)
+```
+
+SHAP cho:
+
+- **Global**: summarized plot → feature quan trọng nhất và direction (positive/negative impact).
+- **Local**: waterfall cho từng sample → vì sao model ra prediction này.
 
 <Callout type="warning" title="Feature importance không phải causal importance">
-Model nói feature quan trọng không có nghĩa feature đó gây ra target. Nó có thể chỉ tương quan. Ví dụ “số lần gọi support” dự đoán churn, nhưng giảm support calls không chắc giảm churn — có thể vì user gặp lỗi nên gọi support.
+Model nói feature quan trọng không có nghĩa feature đó gây ra target. Nó có thể chỉ tương quan. Ví dụ "số lần gọi support" dự đoán churn, nhưng giảm support calls không chắc giảm churn — có thể vì user gặp lỗi nên gọi support. Để prove causal, cần intervention, A/B test hoặc causal inference methods (DoWhy, EconML).
 </Callout>
 
-## Implementation lab: churn classifier với RandomForest
+## Implementation lab: churn classifier với RandomForest + Permutation importance
 
 ```python
 from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, roc_auc_score
 from sklearn.inspection import permutation_importance
 import pandas as pd
 
 X, y = make_classification(
-    n_samples=3000,
+    n_samples=5000,
     n_features=12,
     n_informative=5,
     n_redundant=2,
-    weights=[0.8, 0.2],
+    weights=[0.8, 0.2],   # 20% positive
     random_state=42,
 )
 
 feature_names = [f"f{i}" for i in range(X.shape[1])]
 X = pd.DataFrame(X, columns=feature_names)
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X,
-    y,
-    test_size=0.2,
-    stratify=y,
-    random_state=42,
+X_train, X_temp, y_train, y_temp = train_test_split(
+    X, y, test_size=0.30, stratify=y, random_state=42,
+)
+X_val, X_test, y_val, y_test = train_test_split(
+    X_temp, y_temp, test_size=0.50, stratify=y_temp, random_state=42,
 )
 
 rf = RandomForestClassifier(
     n_estimators=300,
     min_samples_leaf=3,
+    max_features="sqrt",
     random_state=42,
     n_jobs=-1,
+    oob_score=True,
 )
 rf.fit(X_train, y_train)
 
-y_pred = rf.predict(X_test)
-print(classification_report(y_test, y_pred))
+proba_val = rf.predict_proba(X_val)[:, 1]
+proba_test = rf.predict_proba(X_test)[:, 1]
+y_pred = (proba_test >= 0.5).astype(int)
 
-perm = permutation_importance(rf, X_test, y_test, scoring="f1", n_repeats=5, random_state=42)
+print(classification_report(y_test, y_pred))
+print("AUC-ROC:", roc_auc_score(y_test, proba_test))
+print("OOB:", rf.oob_score_)
+
+perm = permutation_importance(rf, X_val, y_val, scoring="f1", n_repeats=10, random_state=42)
 imp = pd.Series(perm.importances_mean, index=feature_names).sort_values(ascending=False)
 print(imp.head())
 ```
 
 ### Expected interpretation
 
-- Nếu recall class 1 thấp, cân nhắc class weight hoặc threshold tuning.
-- Feature importance top nên có ý nghĩa domain.
-- Nếu train score rất cao nhưng test thấp, tăng `min_samples_leaf`, giảm `max_depth`, hoặc dùng validation tuning.
+- Nếu recall class 1 thấp, cân nhắc `class_weight="balanced"` hoặc threshold tuning.
+- Feature importance top nên có ý nghĩa domain — nếu không, có leakage hoặc feature engineering sai.
+- Nếu train score rất cao nhưng test thấp, tăng `min_samples_leaf`, giảm `max_depth`, hoặc dùng cross-validation tuning.
 
 ## Common mistakes & debugging checklist
 
 <Callout type="danger" title="Mistake 1: dùng feature ID-like">
-Feature như `user_id`, `session_id`, `email_hash` có nhiều unique values. Cây có thể split theo chúng và overfit. Loại bỏ hoặc encode cẩn thận.
+Feature như `user_id`, `session_id`, `email_hash` có nhiều unique values. Cây có thể split theo chúng và overfit. Loại bỏ hoặc encode cẩn thận (target encoding với regularization, embedding).
 </Callout>
 
 <Callout type="warning" title="Mistake 2: tin feature importance mặc định tuyệt đối">
-Impurity importance thiên vị feature nhiều split/unique. Dùng permutation importance hoặc SHAP để kiểm tra lại.
+Impurity importance thiên vị feature nhiều split/unique. Dùng permutation importance hoặc SHAP để kiểm tra lại – kết luận có thể đảo ngược.
 </Callout>
 
 <Callout type="warning" title="Mistake 3: tuning boosting quá ít">
-Boosting nhạy hyperparameter. `learning_rate`, `n_estimators`, `max_depth`, `subsample`, `colsample_bytree` cần tune và dùng early stopping.
+Boosting nhạy hyperparameter. `learning_rate`, `n_estimators`, `max_depth`, `subsample`, `colsample_bytree` cần tune và dùng early stopping. Default không đủ tốt.
+</Callout>
+
+<Callout type="warning" title="Mistake 4: không fit eval_set cho early stopping">
+Không truyền `eval_set` + `early_stopping_rounds` khiến XGBoost chạy hết `n_estimators` và overfit. Fit với eval_set trên validation riêng (không phải CV fold).
+</Callout>
+
+<Callout type="warning" title="Mistake 5: categorical chưa encode">
+Tree sklearn yêu numeric. Categorical phải encode — OneHot (cho cardinality thấp), Target/LeaveOneOut (cho cardinality cao), hoặc CatBoost/LightGBM tự xử lý. Cast về `category` dtype không đủ cho sklearn.
 </Callout>
 
 Checklist:
 
 1. Có ID-like/high-cardinality feature không?
-2. Train vs validation gap có lớn không?
+2. Train vs validation gap có lớn không (overfit)?
 3. `min_samples_leaf` có quá nhỏ không?
-4. Boosting có validation/early stopping không?
-5. Feature importance có hợp lý domain không?
-6. Có class imbalance cần `class_weight`/threshold không?
+4. Boosting có eval_set và early stopping không?
+5. Feature importance có hợp lý domain không (kiểm tra bằng permutation/SHAP)?
+6. Có class imbalance cần `class_weight'/threshold không?
+7. Categorical đã encode đúng chưa?
+8. Đã scale? Tree không cần scale, nhưng nếu stack với logistic regression thì cần.
 
 ## Practice exercises
 
-1. Tính Gini cho node có 8 positive, 2 negative.
-2. So sánh random forest và gradient boosting: khác nhau ở cách train thế nào?
-3. Vì sao tree-based models ít cần feature scaling?
-4. Nêu 3 hyperparameter giúp giảm overfitting của decision tree.
-5. Viết code train RandomForestClassifier và in permutation importance.
+1. Tính Gini cho node có 8 positive, 2 negative. Tính entropy cho cùng node.
+2. So sánh random forest và gradient boosting: khác nhau ở cách train, cách giảm error, khi nào dùng cái nào?
+3. Vì sao tree-based models ít cần feature scaling? Có trường hợp ngoại lệ không (khi nào scale có ích cho tree system)?
+4. Nêu 5 hyperparameter giúp giảm overfitting của decision tree và random forest.
+5. Viết code train RandomForestClassifier với OOB score, in confusion matrix và permutation importance.
+6. Viết code XGBoost với early stopping, eval_set, learning rate 0.05, max_depth 4.
+7. Giải thích vì sao `max_features="sqrt"` giúp random forest (decorrelate) nhưng không hợp cho single decision tree.
+8. Phân biệt impurity importance, permutation importance, SHAP — ưu/nhược từng loại.
+9. Stacking là gì? Vì sao cần out-of-fold predictions cho meta-learner (để tránh leakage gì)?
 
 ## Knowledge check
 
-1. Gini impurity bằng 0 nghĩa là gì?
-2. Random forest giảm variance bằng cách nào?
-3. Gradient boosting học cây mới để làm gì?
-4. `min_samples_leaf` lớn hơn thường làm model đơn giản hơn hay phức tạp hơn?
-5. Feature importance có chứng minh causal relationship không?
-6. XGBoost/LightGBM thường mạnh trên loại dữ liệu nào?
-7. Vì sao `user_id` thường là feature nguy hiểm?
+1. Gini impurity bằng 0 nghĩa là gì? Bằng 0.5 (binary) nghĩa là gì?
+2. CART split bằng cách nào? Greedy hay global?
+3. Regression tree khác classification tree ở impurity và prediction cuối?
+4. Random forest giảm variance bằng cách nào? Hai nguồn randomness là gì?
+5. Gradient boosting học cây mới để làm gì? Bias hay variance?
+6. `min_samples_leaf` lớn hơn thường làm model đơn giản hơn hay phức tạp hơn?
+7. Feature importance có chứng minh causal relationship không?
+8. OOB score là gì và hữu ích cho việc gì?
+9. XGBoost/LightGBM/CatBoost thường mạnh trên loại dữ liệu nào?
+10. Vì sao `user_id` thường là feature nguy hiểm trong tree models?
 
 ## Answer key
 
-1. Node thuần một class.
-2. Train nhiều cây khác nhau bằng bootstrap/random feature rồi average/vote.
-3. Sửa lỗi/residual/gradient còn lại của ensemble hiện tại.
-4. Đơn giản hơn, giảm overfit.
-5. Không. Nó chỉ cho biết model dùng feature để dự đoán, không chứng minh nguyên nhân.
-6. Tabular data.
-7. Vì high-cardinality ID dễ khiến cây học thuộc user trong train và không generalize.
+1. Gini=0: node thuần một class (pure). Gini=0.5: binary 50/50, maximum impurity.
+2. CART split greedy: chọn feature và threshold giảm impurity nhiều nhất cục bộ, không nhìn global optimum.
+3. Regression dùng MSE/variance và prediction lá = mean target; classification dùng Gini/entropy và prediction = majority class.
+4. Train nhiều cây decorrelated bằng bootstrap + random feature, rồi average/vote. Hai nguồn randomness: bootstrap sample, random feature subset `max_features`.
+5. Sửa lỗi/residual/gradient còn lại của ensemble hiện tại, giảm bias. (Early stopping ngăn variance tăng quá muộn.)
+6. Đơn giản hơn, giảm overfit.
+7. Không. Nó chỉ cho biết model dùng feature để dự đoán, không chứng minh nguyên nhân.
+8. Out-of-Bag: mỗi cây train trên ~63% bootstrap, ~37% OOB samples còn lại dùng để đánh giá. Hữu ích như CV miễn phí, không tốn thêm data.
+9. Tabular data — bảng với feature engineering tốt, interaction phi tuyến, missing values, categorical.
+10. High-cardinality ID dễ khiến cây học thuộc user trong train và không generalize — overfit mask as performance.
 
 Bài tập 1:
 
 ```text
 p_pos = 0.8, p_neg = 0.2
 Gini = 1 - 0.8^2 - 0.2^2 = 1 - 0.64 - 0.04 = 0.32
+
+Entropy = -(0.8 log2 0.8 + 0.2 log2 0.2)
+        = -(0.8 * (-0.322) + 0.2 * (-2.322))
+        = 0.722 bits
 ```
 
 ## Mini-project: Churn prediction with explainability
 
-**Task:** Build churn classifier bằng RandomForest hoặc XGBoost.
+**Task:** Build churn classifier bằng RandomForest hoặc XGBoost, đầy đủ explainability.
 
-**Dataset gợi ý:** Telco Customer Churn dataset hoặc dataset synthetic bạn tự tạo.
+**Dataset gợi ý:**
+
+- Telco Customer Churn dataset (Kaggle) — nhiều categorical, imbalance nhẹ.
+- Hoặc dataset synthetic bạn tự tạo (5+ feature, 1000+ sample, 20% positive).
 
 **Deliverables:**
 
-- Train/validation/test split.
-- Baseline Logistic Regression.
-- RandomForest hoặc XGBoost.
-- Classification report.
+- Train/validation/test split stratified.
+- Baseline Logistic Regression + scaled.
+- RandomForest hoặc XGBoost (có early stopping và eval_set nếu boosting).
+- Classification report + AUC-ROC + PR-AUC.
 - Permutation importance top 10.
-- 5 insight giải thích vì sao user churn.
+- SHAP summary plot (nếu cố). 3 individual SHAP waterfall cho prediction của 3 user.
+- 5 insight giải thích vì sao user churn, với caveat "not causal" cho mỗi insight.
 
 **Success criteria:**
 
-- Không có leakage.
+- Không có leakage (split stratified, không preprocessing outside pipeline cho LR baseline).
 - Model tree outperform baseline hoặc giải thích vì sao không.
-- Có confusion matrix và threshold discussion.
-- Feature importance được giải thích với caveat “not causal”.
+- Có confusion matrix và threshold discussion (business cost FP/FN).
+- Feature importance được giải thích với caveat "not causal".
+- Có OOB/early-stopping cho ensemble, không chỉ train generic default.
+
+<Callout type="tip" title="Production note">
+Hệ thống churn prediction production thực thường có class imbalance 5-15%, cần class_weight/threshold tuning, và quan trọng nhất là **time-based split** (train 6 tháng trước, val tháng gần, test tháng gần nhất). Random split aporias vô nghĩa nếu model sẽ cần dự đoán cho user tương lai.
+</Callout>
 
 ## Điểm cần nhớ
 
-- Decision tree học rule feature-threshold, dễ hiểu nhưng dễ overfit.
-- Gini/entropy đo độ impurity; split tốt giảm impurity.
-- Random forest dùng bagging + random feature để giảm variance.
-- Gradient boosting học tuần tự để sửa lỗi model trước, rất mạnh cho tabular.
-- Feature importance hữu ích nhưng có bias và không phải causal.
-- Tree-based models ít cần scaling nhưng vẫn cần tránh leakage/high-cardinality traps.
+- Decision tree học rule feature-threshold theo CART greedy, dễ hiểu nhưng dễ overfit; cần pre/post-pruning.
+- Gini/entropy đo độ impurity; split tốt giảm impurity weighted. Regression tree giảm variance (MSE).
+- Cây đơn = high variance; bagging + random feature (Random Forest) giảm variance bằng averaging decorrelated trees.
+- Gradient boosting giảm bias học tuần tự: `F += lr * tree(residuals)`. Cần early stopping + eval_set.
+- XGBoost/LightGBM/CatBoost là ba boosting mạnh cho tabular — thường baseline khó đánh bại.
+- Stacking kết hợp model khác loại qua meta-learner (out-of-fold để tránh leakage).
+- Feature importance (impurity, permutation, SHAP) hữu ích nhưng có bias và không phải causal.
+- Tree-based models ít cần scaling nhưng vẫn cần tránh leakage, ID-like features, và cần encode categorical.
+- Use random forest cho nhanh/robust, gradient boosting cho performance cao hơn (đổi lại cần tuning kỹ).
 
 ## Next chapter bridge
 
