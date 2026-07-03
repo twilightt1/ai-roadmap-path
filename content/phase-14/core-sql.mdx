@@ -201,7 +201,7 @@ ORDER BY spend_usd DESC;
 
 ---
 
-## 7. Implementation Playbook (Thực thi)
+## Implementation Playbook: Core SQL for AI Usage Analytics
 
 Dưới đây là bộ query tối thiểu cho project **AI Usage Analytics Dashboard**.
 
@@ -306,35 +306,29 @@ Stretch goal: thêm alert khi cost của một feature trong ngày hiện tại 
 
 ---
 
-## 8. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
 <Callout type="warning" title="Pitfall 1: Join explosion làm chi phí bị nhân đôi">
 **Triệu chứng:** Tổng `cost_usd` sau join lớn hơn tổng trong bảng `model_calls`.
 
-**Nguyên nhân:** Bạn join bảng một-nhiều như `messages` vào `model_calls`, khiến một model call bị lặp lại theo số message trong conversation.
-
-**Cách khắc phục:** Aggregate ở đúng cấp trước khi join. Nếu muốn cost per conversation, hãy group `model_calls` theo `conversation_id` trước, sau đó mới join sang bảng metadata.
+**Fix:** Aggregate ở đúng cấp trước khi join. Nếu muốn cost per conversation, hãy group `model_calls` theo `conversation_id` trước, sau đó mới join sang bảng metadata.
 </Callout>
 
 <Callout type="warning" title="Pitfall 2: Timezone làm dashboard lệch ngày">
 **Triệu chứng:** Finance xem ngày 1 nhưng dashboard vẫn tính một phần request ngày 31.
 
-**Nguyên nhân:** Database lưu UTC, frontend hiển thị local timezone, query dùng `date_trunc('day', now())` mà không quy ước timezone rõ ràng.
-
-**Cách khắc phục:** Lưu timestamp bằng `timestamptz`, chuẩn hóa dashboard theo timezone doanh nghiệp, và ghi rõ timezone trong mọi query báo cáo.
+**Fix:** Lưu timestamp bằng `timestamptz`, chuẩn hóa dashboard theo timezone doanh nghiệp, và ghi rõ timezone trong mọi query báo cáo.
 </Callout>
 
 <Callout type="danger" title="Pitfall 3: Bỏ qua request lỗi vẫn bị tính tiền">
 **Triệu chứng:** Nội bộ tính cost thấp hơn provider invoice.
 
-**Nguyên nhân:** Query chỉ lấy `status = 'success'`, trong khi provider có thể tính tiền cho output đã stream một phần trước khi timeout.
-
-**Cách khắc phục:** Billing query nên tính mọi dòng có `cost_usd IS NOT NULL`, không chỉ request success. Status dùng để phân tích reliability, không phải để quyết định dòng nào được tính tiền.
+**Fix:** Billing query nên tính mọi dòng có `cost_usd IS NOT NULL`, không chỉ request success. Status dùng để phân tích reliability, không phải để quyết định dòng nào được tính tiền.
 </Callout>
 
 ---
 
-## 9. Cost & Performance Unit Economics
+## Cost / Performance / Billing Unit Economics
 
 | Metric | Query cốt lõi | Ý nghĩa kinh tế |
 |---|---|---|
@@ -386,6 +380,8 @@ SQL cốt lõi giúp bạn biến “cảm giác hệ thống đắt” thành s
 - `GROUP BY` và `HAVING` là nền tảng để tìm heavy users, feature đắt và provider lỗi.
 - Billing query nên dựa trên `cost_usd`/provider invoice, không chỉ dựa trên `status = 'success'`.
 
+---
+
 ## Next chapter bridge
 
-Core SQL giúp bạn trả lời câu hỏi “đã xảy ra bao nhiêu?”. Nhưng khi hệ thống lớn lên, bạn cần trả lời các câu hỏi khó hơn: “chi phí tăng từ lúc nào?”, “user nào tăng usage bất thường?”, “request trước đó ảnh hưởng request sau ra sao?”. Chương tiếp theo: **Advanced SQL** — nơi CTEs và Window Functions biến database thành một pipeline phân tích production AI telemetry.
+Core SQL giúp bạn trả lời câu hỏi "đã xảy ra bao nhiêu?". Nhưng khi hệ thống lớn lên, bạn cần trả lời các câu hỏi khó hơn: "chi phí tăng từ lúc nào?", "user nào tăng usage bất thường?", "request trước đó ảnh hưởng request sau ra sao?". Chương tiếp theo: **Advanced SQL** — nơi CTEs và Window Functions biến database thành một pipeline phân tích production AI telemetry.

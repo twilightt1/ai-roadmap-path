@@ -1,82 +1,54 @@
 Production RAG là distributed data system cộng với probabilistic generation system. Vấn đề khó không phải trả lời đúng một câu hỏi demo; vấn đề là cập nhật tài liệu, xóa dữ liệu, enforce ACL, isolate tenants, monitor retrieval quality, kiểm soát cost và chứng minh answer grounded ở quy mô lớn.
 
-## Why this matters
+---
 
-Enterprise RAG có thể fail nghiêm trọng:
+## 1. The Incident (Tình huống sự cố)
 
-- document đã xóa vẫn retrieve được,
-- user thấy tài liệu tenant khác,
-- index stale trả policy cũ,
-- embedding model đổi nhưng corpus chưa re-embed,
-- prompt injection nằm trong retrieved docs,
-- logs chứa private context,
-- retrieval quality drift mà không ai biết.
+<Callout type="danger" title="Báo cáo sự cố: Xóa tài liệu nhưng vector vẫn còn, 3,000 user thấy tài liệu đã xóa">
+**Bối cảnh:** Một team build enterprise RAG. Họ có 10,000 documents. Khách hàng yêu cầu xóa tài liệu (GDPR right-to-erasure). Team xóa document khỏi source, nhưng **không xóa** vector khỏi index. Mục tiêu: deleted content không được retrieve.
 
-<Callout type="danger" title="RAG index là derived data, không phải source of truth">
-Source documents là nguồn sự thật. Vector index là dữ liệu dẫn xuất phải rebuild được, versioned, auditable và delete được khi source thay đổi.
+**Sự cố:** Document deleted khỏi source, nhưng vector index vẫn còn. RAG retrieve vector, LLM trả lời bằng deleted document. User thấy tài liệu đã xóa, khiếu nại. GDPR violation: deleted content không được retrieve.
+
+**Hậu quả:** 3,000 user thấy tài liệu đã xóa, 1 GDPR violation, 1 incident report, 2 tuần fix.
+
+1. RAG index là derived data, không phải source of truth. Source documents là nguồn sự thật. Vector index là dữ liệu dẫn xuất phải rebuild được, versioned, auditable và delete được khi source thay đổi.
+2. Deleted docs vẫn retrieve được là security/compliance incident. Delete semantics phải được test như feature production.
+3. Production RAG cần biết chunk thuộc tenant/doc version/permission nào. Nếu không, bạn có thể retrieve dữ liệu cấm hoặc stale.
 </Callout>
 
-## Learning objectives
+---
 
-Sau chương này, bạn sẽ có thể:
-
-1. Thiết kế production RAG architecture.
-2. Implement incremental indexing bằng content hash/versioning.
-3. Xử lý delete semantics và stale vectors.
-4. Thiết kế multi-tenant isolation và ACL-aware retrieval.
-5. Cache RAG an toàn.
-6. Monitor retrieval/generation quality.
-7. Thiết kế “I don’t know” fallback.
-8. Xây production readiness checklist cho RAG.
-
-## Prerequisites
-
-Bạn nên biết:
-
-- RAG pipeline implementation.
-- Vector DB metadata filtering.
-- Secure API integration và tenant policies.
-- Observability: logs, metrics, traces.
-- Basic queues/workers/databases.
-
-## Core intuition: RAG index is a derived data product
+## 2. Architecture Blueprint (Production RAG)
 
 ```text
-Source documents = source of truth
-Vector index     = derived state
-```
-
-Derived state phải có tính chất:
-
-- rebuildable,
-- versioned,
-- auditable,
-- delete-aware,
-- permission-aware,
-- monitored.
-
-## Production architecture
-
-```text
-Sources: PDF/DOCX/HTML/wiki/DB
-   ↓
-Connectors
-   ↓
-Ingestion queue
-   ↓
-Parser workers
-   ↓
-Cleaning + dedup
-   ↓
-Chunk/embed workers
-   ↓
-Vector DB + Metadata DB
-   ↓
-Retrieval API
-   ↓
-RAG generation service
-   ↓
-Observability + Eval dashboard
+[ Sources: PDF/DOCX/HTML/wiki/DB ]
+        │
+        ▼
+[ Connectors ]
+        │
+        ▼
+[ Ingestion queue ]
+        │
+        ▼
+[ Parser workers ]
+        │
+        ▼
+[ Cleaning + dedup ]
+        │
+        ▼
+[ Chunk/embed workers ]
+        │
+        ▼
+[ Vector DB + Metadata DB ]
+        │
+        ▼
+[ Retrieval API ]  ←  filters, rerank, tenant/ACL
+        │
+        ▼
+[ RAG generation service ]
+        │
+        ▼
+[ Observability + Eval dashboard ]
 ```
 
 Components:
@@ -93,7 +65,31 @@ Components:
 | Generation service | prompt, answer, citations |
 | Eval dashboard | quality/regression monitoring |
 
-## Incremental indexing
+---
+
+## 3. Core Intuition: RAG Index Is a Derived Data Product
+
+```text
+Source documents = source of truth
+Vector index     = derived state
+```
+
+Derived state phải có tính chất:
+
+- rebuildable,
+- versioned,
+- auditable,
+- delete-aware,
+- permission-aware,
+- monitored.
+
+<Callout type="danger" title="RAG index là derived data, không phải source of truth">
+Source documents là nguồn sự thật. Vector index là dữ liệu dẫn xuất phải rebuild được, versioned, auditable và delete được khi source thay đổi.
+</Callout>
+
+---
+
+## 4. Incremental Indexing
 
 Không reindex toàn bộ corpus mỗi lần.
 
@@ -117,7 +113,9 @@ if deleted: tombstone/delete chunks
 
 Chunk-level hash giúp re-embed chỉ chunks thay đổi.
 
-## Document versioning metadata
+---
+
+## 5. Document Versioning Metadata
 
 ```json
 {
@@ -134,7 +132,9 @@ Chunk-level hash giúp re-embed chỉ chunks thay đổi.
 
 Answer citations nên expose version/source timestamp nếu domain cần audit.
 
-## Delete semantics
+---
+
+## 6. Delete Semantics
 
 Delete khó hơn upsert.
 
@@ -155,7 +155,9 @@ deleted source must not be retrievable
 
 Test delete propagation định kỳ.
 
-## Multi-tenant isolation
+---
+
+## 7. Multi-Tenant Isolation
 
 Options:
 
@@ -172,7 +174,9 @@ Tenant ID must be hard filter.
 Không retrieve cross-tenant docs rồi nhờ LLM không tiết lộ. ACL phải enforce trước chunks vào prompt.
 </Callout>
 
-## ACL-aware retrieval
+---
+
+## 8. ACL-Aware Retrieval
 
 Metadata:
 
@@ -194,7 +198,9 @@ AND status = active
 
 Prefer pre-filtering at vector DB/index layer. Post-filtering phải cực kỳ cẩn thận.
 
-## Caching in production RAG
+---
+
+## 9. Caching in Production RAG
 
 Cache layers:
 
@@ -207,7 +213,9 @@ Cache layers:
 
 Never share personalized/private answer cache across tenants.
 
-## Monitoring retrieval
+---
+
+## 10. Monitoring Retrieval
 
 Metrics:
 
@@ -230,7 +238,9 @@ Drift signals:
 - user feedback worsens,
 - new docs not retrieved.
 
-## RAG observability trace
+---
+
+## 11. RAG Observability Trace
 
 ```json
 {
@@ -250,7 +260,9 @@ Drift signals:
 }
 ```
 
-## Fallback and “I don’t know” policy
+---
+
+## 12. Fallback and "I Don't Know" Policy
 
 No-answer triggers:
 
@@ -274,7 +286,9 @@ Optional:
 - escalate to human,
 - trigger ingestion request.
 
-## Security risks in production RAG
+---
+
+## 13. Security Risks in Production RAG
 
 | Risk | Example | Mitigation |
 |---|---|---|
@@ -285,7 +299,9 @@ Optional:
 | Citation spoofing | model cites wrong chunk | citation validation |
 | Stale ACL | permission revoked but cache valid | permission version in cache key |
 
-## Production evaluation
+---
+
+## 14. Production Evaluation
 
 Evaluation must run continuously.
 
@@ -309,7 +325,9 @@ Slices:
 - permission-restricted docs,
 - no-answer questions.
 
-## Deployment patterns
+---
+
+## 15. Deployment Patterns
 
 Medium production stack:
 
@@ -333,7 +351,9 @@ Enterprise scale:
 - audit log pipeline,
 - eval jobs scheduled nightly.
 
-## Implementation lab: enterprise RAG skeleton
+---
+
+## Implementation Playbook: Enterprise RAG Skeleton
 
 Design schemas:
 
@@ -372,7 +392,7 @@ Lab steps:
 6. Run 20-query eval nightly.
 7. Build simple dashboard table.
 
-## Production readiness checklist
+Production readiness checklist:
 
 1. Can rebuild index from source of truth?
 2. Are document versions tracked?
@@ -388,30 +408,47 @@ Lab steps:
 12. Are caches invalidated on doc/ACL changes?
 13. Are logs redacted and access-controlled?
 
-## Common mistakes & debugging checklist
+---
 
-<Callout type="warning" title="Mistake 1: không version documents/chunks/index">
-Khi answer sai hoặc stale, bạn cần biết nó dựa trên document version nào, embedding model nào và chunking strategy nào.
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Không version documents/chunks/index">
+**Triệu chứng:** Answer sai hoặc stale, không biết dựa trên document version nào, embedding model nào, chunking strategy nào.
+
+**Fix:** Khi answer sai hoặc stale, bạn cần biết nó dựa trên document version nào, embedding model nào và chunking strategy nào.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: chỉ eval lúc launch">
-RAG quality drift khi docs, queries, embeddings, chunking hoặc user behavior thay đổi. Cần eval liên tục.
+<Callout type="warning" title="Pitfall 2: Chỉ eval lúc launch">
+**Triệu chứng:** RAG quality drift, answer sai, không ai biết.
+
+**Fix:** RAG quality drift khi docs, queries, embeddings, chunking hoặc user behavior thay đổi. Cần eval liên tục.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: delete không xóa khỏi vector index">
-Deleted docs vẫn retrieve được là security/compliance incident. Delete semantics phải được test như feature production.
+<Callout type="danger" title="Pitfall 3: Delete không xóa khỏi vector index">
+**Triệu chứng:** Deleted docs vẫn retrieve được, GDPR violation, security incident.
+
+**Fix:** Deleted docs vẫn retrieve được là security/compliance incident. Delete semantics phải được test như feature production.
 </Callout>
 
-Checklist:
+---
 
-1. Có ingestion lag metric không?
-2. Có failed embedding job queue không?
-3. Có ACL tests không?
-4. Có no-answer tests không?
-5. Có retrieval trace không?
-6. Có eval dashboard không?
-7. Có cache invalidation policy không?
-8. Có incident runbook khi leak docs không?
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Incremental indexing | không reindex toàn bộ | content hash logic |
+| Document versioning | audit, rollback | storage, metadata |
+| Hard delete | clean | hard to audit |
+| Soft delete + tombstone | auditable | storage grows |
+| Separate indexes | strong isolation | more ops/cost |
+| Metadata filters | flexible | filter bugs dangerous |
+| Pre-filtering | security | recall/latency tùy DB |
+| Caching | latency thấp | invalidation complexity |
+| Continuous eval | phát hiện drift | eval infrastructure |
+
+Production RAG là data system + retrieval system + generation system. Vector index là derived state cần versioning, rebuild, delete và audit. Multi-tenant RAG phải enforce tenant/ACL trước retrieval.
+
+---
 
 ## Practice exercises
 
@@ -423,6 +460,8 @@ Checklist:
 6. Thiết kế nightly eval workflow.
 7. Viết production readiness checklist cho Chat with PDF app.
 
+---
+
 ## Knowledge check
 
 1. Vì sao vector index là derived data?
@@ -432,7 +471,9 @@ Checklist:
 5. ACL-aware retrieval phải xảy ra ở đâu?
 6. RAG cache cần invalidate khi nào?
 7. Monitor retrieval quality bằng gì?
-8. Khi nào system nên nói “I don’t know”?
+8. Khi nào system nên nói "I don't know"?
+
+---
 
 ## Answer key
 
@@ -445,7 +486,9 @@ Checklist:
 7. Recall@k nightly, empty result rate, score distributions, citation coverage, feedback.
 8. Khi retrieval thiếu evidence, confidence thấp, sources conflict, citation validation fail hoặc permission thiếu.
 
-## Mini-project: Enterprise RAG system design
+---
+
+## Mini-project: Enterprise RAG System Design
 
 **Task:** Thiết kế enterprise RAG multi-tenant.
 
@@ -470,6 +513,8 @@ Checklist:
 - Eval/monitoring chạy liên tục.
 - Có incident plan cho cross-tenant leak.
 
+---
+
 ## Điểm cần nhớ
 
 - Production RAG là data system + retrieval system + generation system.
@@ -478,6 +523,8 @@ Checklist:
 - Caching phải tenant-safe và invalidated theo doc/ACL/version.
 - Observability cần trace retrieved chunks, scores, citations, versions và latency.
 - Continuous eval là bắt buộc vì RAG quality drift theo data và behavior.
+
+---
 
 ## Phase 8 wrap-up
 
@@ -489,6 +536,8 @@ Bạn đã hoàn thành module **RAG & Vector Databases**:
 4. **Vector Databases:** retrieval infrastructure với ANN, HNSW, filtering, hybrid search và lifecycle.
 5. **RAG Pipeline Implementation:** ingestion/query pipeline, reranking, HyDE, multi-query, compression và evaluation.
 6. **Production RAG:** incremental indexing, document versioning, tenant isolation, ACL, monitoring, delete semantics và readiness.
+
+---
 
 ## Next phase bridge
 

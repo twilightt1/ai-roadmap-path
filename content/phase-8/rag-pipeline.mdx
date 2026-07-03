@@ -1,61 +1,51 @@
 RAG Pipeline Implementation là nơi mọi quyết định trước đó gặp nhau: parsing, cleaning, chunking, embeddings, vector search, reranking, context packing, prompt design, citations, abstention và evaluation. Basic top-k retrieval + prompt là baseline để học, không phải đích đến của production RAG.
 
-## Why this matters
+---
 
-RAG demo thường chạy tốt với 1 PDF sạch. RAG thật fail vì:
+## 1. The Incident (Tình huống sự cố)
 
-- query không giống wording trong docs,
-- top-k trả chunks trùng nhau,
-- retriever lấy đúng docs nhưng LLM bỏ qua,
-- LLM cite sai nguồn,
-- context thiếu evidence nhưng model vẫn trả lời,
-- reranker cải thiện quality nhưng tăng latency/cost,
-- pipeline không tách retrieval failure và generation failure.
+<Callout type="danger" title="Báo cáo sự cố: Tăng top-k từ 5 lên 50 để 'chữa' recall, LLM hallucinate vì noise">
+**Bối cảnh:** Một team build RAG. Recall@5 thấp, họ không biết vì sao. Thay vì eval retrieval, họ tăng `top_k` từ 5 lên 50 để "chữa" recall. Mục tiêu: retrieve nhiều evidence hơn, answer tốt hơn.
 
-<Callout type="info" title="RAG là two-stage system">
-Retrieval quyết định evidence nào vào prompt. Generation quyết định cách dùng evidence đó. Debug RAG phải tách hai stage này, nếu không bạn sẽ sửa prompt khi lỗi thật nằm ở retriever.
+**Sự cố:** `top_k=50` retrieve 50 chunks, nhưng nhiều chunks trùng nhau, nhiều chunks nhiễu, nhiều chunks không liên quan. LLM nhận 50 chunks, context bị nhiễu, lost-in-the-middle. LLM trả lời: "Refund policy có 30 ngày." (Sai. Chunk đúng có 60 ngày, nhưng bị đẩy xuống vị trí thứ 30, LLM bỏ qua.) LLM hallucinate vì noise.
+
+**Hậu quả:** 8 user khiếu nại, 2 support ticket, 1 user bị quote sai.
+
+1. Tăng `top-k` không phải chữa mọi lỗi. Top-k cao hơn có thể tăng recall nhưng cũng tăng noise, cost và lost-in-the-middle.
+2. RAG là two-stage system. Retrieval quyết định evidence nào vào prompt. Generation quyết định cách dùng evidence đó. Debug RAG phải tách hai stage này.
+3. Nếu retriever không lấy đúng evidence, prompt hay đến đâu cũng không cứu được grounded answer.
 </Callout>
 
-## Learning objectives
+---
 
-Sau chương này, bạn sẽ có thể:
+## 2. Architecture Blueprint (RAG Pipeline)
 
-1. Implement baseline RAG end-to-end.
-2. Thiết kế ingestion pipeline và query pipeline.
-3. Dùng top-k retrieval đúng cách.
-4. Thêm query expansion, multi-query và HyDE.
-5. Dùng reranker để cải thiện precision.
-6. Thiết kế context packing có citations/abstention.
-7. Đánh giá retrieval và generation riêng.
-8. Debug RAG failures theo taxonomy.
+```text
+Ingestion:
+[ Document ] → [ Parse ] → [ Clean ] → [ Chunk ] → [ Embed ] → [ Store ]
 
-## Prerequisites
+Query:
+[ User query ] → [ Normalize ] → [ Retrieve ] → [ Rerank ] → [ Pack context ] → [ Generate ] → [ Validate/Cite ]
+```
 
-Bạn nên biết:
+RAG là two-stage system. Retrieval quality quyết định evidence. Generation quality quyết định answer từ evidence.
 
-- Why RAG exists.
-- Embeddings và vector DB basics.
-- Chunking strategies.
-- Prompt engineering và API patterns.
+---
 
-## Core intuition: retrieve evidence, then generate answer
+## 3. Core Intuition: Retrieve Evidence, Then Generate Answer
 
 ```text
 Retrieval quality determines evidence.
 Generation quality determines answer from evidence.
 ```
 
-Pipeline tổng quát:
+<Callout type="info" title="RAG là two-stage system">
+Retrieval quyết định evidence nào vào prompt. Generation quyết định cách dùng evidence đó. Debug RAG phải tách hai stage này, nếu không bạn sẽ sửa prompt khi lỗi thật nằm ở retriever.
+</Callout>
 
-```text
-Ingestion:
-Document → Parse → Clean → Chunk → Embed → Store
+---
 
-Query:
-User query → Rewrite/Embed → Retrieve → Rerank → Pack context → Generate → Validate/Cite
-```
-
-## Ingestion pipeline
+## 4. Ingestion Pipeline
 
 Ingestion biến source documents thành searchable chunks.
 
@@ -94,7 +84,9 @@ def ingest_document(doc, chunk_fn, embed_fn, vector_store):
         )
 ```
 
-## Query pipeline
+---
+
+## 5. Query Pipeline
 
 Query pipeline phục vụ user request.
 
@@ -116,7 +108,9 @@ LLM answer with citations
 validate groundedness
 ```
 
-## Baseline top-k retrieval
+---
+
+## 6. Baseline Top-k Retrieval
 
 Baseline:
 
@@ -134,7 +128,9 @@ Important knobs:
 
 `k` quá nhỏ: miss evidence. `k` quá lớn: context nhiễu và tốn token.
 
-## Query expansion
+---
+
+## 7. Query Expansion
 
 Query expansion thêm terms/synonyms/domain vocabulary.
 
@@ -147,7 +143,9 @@ expanded: "refund reimbursement return policy money back"
 
 Risk: broaden quá nhiều làm retrieve docs không liên quan.
 
-## Multi-query retrieval
+---
+
+## 8. Multi-Query Retrieval
 
 LLM tạo nhiều query variants.
 
@@ -164,7 +162,9 @@ Flow:
 generate variants → retrieve per variant → merge → deduplicate → rerank
 ```
 
-## HyDE
+---
+
+## 9. HyDE
 
 HyDE — Hypothetical Document Embeddings — tạo answer/document giả định rồi embed nó để retrieve docs giống answer.
 
@@ -178,7 +178,9 @@ Good for vague queries. Risk: hypothetical answer hallucinated bias retrieval sa
 Nếu hypothetical answer bịa chi tiết, vector search có thể tìm docs gần với chi tiết bịa đó. HyDE cần eval, không bật mặc định cho mọi query.
 </Callout>
 
-## Reranking
+---
+
+## 10. Reranking
 
 Retriever lấy candidates nhanh nhưng chưa tối ưu ranking. Reranker chấm query-document pair kỹ hơn.
 
@@ -199,7 +201,9 @@ Tradeoff:
 - latency/cost tăng,
 - cần monitor p95.
 
-## Contextual compression
+---
+
+## 11. Contextual Compression
 
 Compression lọc phần liên quan trong chunks trước khi đưa vào prompt.
 
@@ -209,7 +213,9 @@ long chunk → extract relevant spans → compact context
 
 Risk: compression model có thể bỏ sót hoặc hallucinate. Giữ citation mapping tới original chunk.
 
-## Parent document retriever
+---
+
+## 12. Parent Document Retriever
 
 ```text
 child chunks small for retrieval
@@ -218,7 +224,9 @@ parent sections large for context
 
 Useful when retrieval cần specificity nhưng generation cần broader context.
 
-## Self-querying retriever
+---
+
+## 13. Self-Querying Retriever
 
 Self-querying chuyển natural language thành semantic query + metadata filters.
 
@@ -230,7 +238,9 @@ Self-querying chuyển natural language thành semantic query + metadata filters
 
 Cần validate filters để tránh injection hoặc unsupported fields.
 
-## Context packing
+---
+
+## 14. Context Packing
 
 Context packing chọn và sắp xếp chunks vào prompt.
 
@@ -247,7 +257,9 @@ Consider:
 
 Bad packing: top-k chunks all from same page, missing other evidence.
 
-## RAG prompt design
+---
+
+## 15. RAG Prompt Design
 
 Template:
 
@@ -265,7 +277,9 @@ Question:
 {question}
 ```
 
-## Evaluation: retrieval vs generation
+---
+
+## 16. Evaluation: Retrieval vs Generation
 
 Retrieval metrics:
 
@@ -287,7 +301,9 @@ Generation metrics:
 | citation accuracy | citations support claims không |
 | refusal correctness | thiếu context có biết từ chối không |
 
-## Debugging RAG failures
+---
+
+## 17. Debugging RAG Failures
 
 | Symptom | Likely cause | Debug step |
 |---|---|---|
@@ -298,7 +314,9 @@ Generation metrics:
 | Answer outdated | stale index | document version/index freshness |
 | Unauthorized source | ACL filter bug | retrieval security test |
 
-## Implementation lab: advanced RAG pipeline
+---
+
+## Implementation Playbook: Advanced RAG Pipeline
 
 ```python
 
@@ -332,21 +350,7 @@ Lab variants:
 4. Add HyDE.
 5. Compare recall@5, faithfulness, latency, cost.
 
-## Common mistakes & debugging checklist
-
-<Callout type="warning" title="Mistake 1: chỉ optimize generation prompt">
-Nếu retriever không lấy đúng evidence, prompt hay đến đâu cũng không cứu được grounded answer.
-</Callout>
-
-<Callout type="warning" title="Mistake 2: tăng top-k để chữa mọi lỗi">
-Top-k cao hơn có thể tăng recall nhưng cũng tăng noise, cost và lost-in-the-middle. Dùng reranking/context packing.
-</Callout>
-
-<Callout type="danger" title="Mistake 3: không eval retrieval riêng">
-Nếu chỉ chấm final answer, bạn không biết lỗi nằm ở ingestion, chunking, embedding, retrieval, reranking hay generation.
-</Callout>
-
-Checklist:
+Production checklist:
 
 1. Có log retrieved chunk IDs không?
 2. Có retrieval eval set không?
@@ -356,6 +360,46 @@ Checklist:
 6. Có measure latency/cost per variant không?
 7. Có separate retrieval vs generation metrics không?
 8. Có ACL filters trong retrieval không?
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Chỉ optimize generation prompt">
+**Triệu chứng:** Answer sai, team chỉ sửa prompt, không cải thiện.
+
+**Fix:** Nếu retriever không lấy đúng evidence, prompt hay đến đâu cũng không cứu được grounded answer. Eval retrieval riêng.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Tăng top-k để chữa mọi lỗi">
+**Triệu chứng:** Top-k cao, context nhiễu, LLM hallucinate, cost cao.
+
+**Fix:** Top-k cao hơn có thể tăng recall nhưng cũng tăng noise, cost và lost-in-the-middle. Dùng reranking/context packing.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Không eval retrieval riêng">
+**Triệu chứng:** Answer sai, không biết lỗi nằm ở ingestion, chunking, embedding, retrieval, reranking hay generation.
+
+**Fix:** Nếu chỉ chấm final answer, bạn không biết lỗi nằm ở đâu. Tách retrieval vs generation metrics.
+</Callout>
+
+---
+
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Baseline top-k | đơn giản | recall thấp, nhiễu |
+| Reranking | precision cao | latency/cost |
+| Multi-query | recall cao | cost, complexity |
+| HyDE | vague query tốt | hallucination bias |
+| Contextual compression | context compact | bỏ sót evidence |
+| Parent-child | retrieve small, context large | storage, complexity |
+| Citation validation | không cite sai | extra LLM calls |
+
+RAG pipeline có ingestion stage và query stage. Baseline top-k retrieval là điểm bắt đầu, không phải đích đến. Evaluation phải tách retrieval và generation.
+
+---
 
 ## Practice exercises
 
@@ -367,6 +411,8 @@ Checklist:
 6. Tạo RAG eval table retrieval vs generation.
 7. Phân tích 10 failures theo debugging table.
 
+---
+
 ## Knowledge check
 
 1. Ingestion pipeline gồm bước nào?
@@ -376,6 +422,8 @@ Checklist:
 5. Contextual compression có rủi ro gì?
 6. Parent document retriever dùng khi nào?
 7. Retrieval metrics khác generation metrics thế nào?
+
+---
 
 ## Answer key
 
@@ -387,25 +435,7 @@ Checklist:
 6. Khi child chunk retrieve tốt nhưng answer cần parent section rộng hơn.
 7. Retrieval đo evidence selection; generation đo answer grounded/relevant/cited không.
 
-## Mini-project: Advanced RAG benchmark
-
-**Task:** Build RAG pipeline với 3 retrieval variants.
-
-**Deliverables:**
-
-- Baseline dense top-k.
-- Reranked RAG.
-- Multi-query hoặc HyDE RAG.
-- 50 labeled queries.
-- Metrics: recall@5, MRR, faithfulness, citation accuracy, latency, cost.
-- Failure analysis.
-
-**Success criteria:**
-
-- Chứng minh variant nào tốt hơn bằng metrics.
-- Có tách retrieval vs generation failures.
-- Có citation/abstention behavior.
-- Có recommendation production pipeline.
+---
 
 ## Điểm cần nhớ
 
@@ -414,6 +444,8 @@ Checklist:
 - Query expansion, multi-query, HyDE, reranking, compression giải quyết failure khác nhau.
 - Context packing ảnh hưởng mạnh tới answer quality.
 - Evaluation phải tách retrieval và generation.
+
+---
 
 ## Next chapter bridge
 

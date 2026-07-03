@@ -1,60 +1,28 @@
 Multi-LLM Gateway là control plane cho AI calls trong production. Nó không chỉ forward request sang OpenAI/Claude/Gemini; nó enforce policy: ai được gọi model nào, với budget nào, prompt version nào, fallback nào, cache nào, validation nào và trace nào. Đây là chương capstone của Phase 7 vì nó gom routing, fallback, provider abstraction, cost tracking, cache, security và observability thành một kiến trúc thống nhất.
 
-## Why this matters
+---
 
-Nếu không có gateway, mỗi app/team sẽ tự implement:
+## 1. The Incident (Tình huống sự cố)
 
-- API keys,
-- retries,
-- fallback,
-- token counting,
-- logging,
-- prompt versions,
-- cost tracking,
-- provider adapters,
-- schema validation,
-- rate limits.
+<Callout type="danger" title="Báo cáo sự cố: Không có gateway, mỗi app tự gọi provider, 50,000 USD/tháng không biết ai tiêu">
+**Bối cảnh:** Một công ty SaaS có 5 product teams. Mỗi team tự gọi OpenAI/Anthropic trực tiếp. Mỗi team tự implement API keys, retries, fallback, token counting, logging, cost tracking. Không có central control plane.
 
-Kết quả thường là:
+**Sự cố:** Hóa đơn API tăng 50,000 USD/tháng. Finance team không biết ai tiêu tiền. Không có cost attribution per tenant/user/feature. Một team dùng frontier model cho 90% simple classification tasks. Một team leak API key trong code. Một team không có fallback, provider outage chết toàn app.
 
-- duplicated bugs,
-- inconsistent security,
-- không biết ai tiêu tiền,
-- khó đổi provider,
-- prompt/version phân tán,
-- không có global observability.
+1. Mỗi app tự implement API keys, retries, fallback, cost tracking.
+2. Không có central model registry, không có capability matrix.
+3. Không có prompt versioning, không có audit log.
+4. Không có tenant policy, không có data residency enforcement.
+5. API key leak, không có key rotation, không có audit.
 
-<Callout type="danger" title="Gateway là control plane, không chỉ proxy">
-Nếu gateway chỉ forward request sang provider, nó chưa phải multi-LLM gateway. Gateway phải enforce policy: model, budget, tenant, prompt, routing, fallback, validation, cost và observability.
+**Hậu quả:** 50,000 USD/tháng không biết ai tiêu. 5 product teams phải tắt khẩn cấp, thiết kế lại toàn bộ central gateway. Hóa đơn giảm 50,000 USD/tháng xuống 18,000 USD/tháng sau khi 90% simple task được chuyển sang model rẻ, cost tracking được centralize, và tenant policy được enforce.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: gateway không chỉ là proxy. Nếu gateway không enforce policy, route, validate, log cost và manage fallback, nó chưa giải quyết multi-LLM production problems. Gateway là control plane, không chỉ forward request.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Thiết kế multi-LLM gateway architecture end-to-end.
-2. Xây provider abstraction layer cho chat, stream, embed.
-3. Thiết kế model/capability registry.
-4. Implement request lifecycle: auth → route → call → validate → log.
-5. Track token/cost per user/tenant/feature/model.
-6. Thiết kế exact/semantic cache manager an toàn.
-7. Thiết kế fallback manager và response validator.
-8. Support streaming qua gateway.
-9. Instrument traces, metrics, logs và dashboards.
-10. Chuẩn bị scaling architecture với Redis/Postgres/Kafka/K8s.
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Phase 6: LLM APIs, integration patterns, secure API.
-- Phase 7: multi-LLM rationale, routing, fallback, MCP, frameworks.
-- Backend architecture: FastAPI/Node, Redis, Postgres, queues.
-- Observability concepts: logs, metrics, traces.
-
-## Core intuition: centralize AI policy
-
-Architecture:
+## 2. Architecture Blueprint (Centralize AI Policy)
 
 ```text
 Apps / Products
@@ -76,7 +44,9 @@ OpenAI / Anthropic / Gemini / Local / vLLM / MCP tools
 
 Gateway biến AI calls thành governed platform capability.
 
-## Gateway responsibilities
+---
+
+## 3. Gateway Responsibilities
 
 | Component | Responsibility |
 |---|---|
@@ -92,9 +62,13 @@ Gateway biến AI calls thành governed platform capability.
 | Observability | traces, metrics, logs |
 | Policy engine | tenant/provider/data restrictions |
 
-## Provider abstraction layer
+<Callout type="danger" title="Gateway là control plane, không chỉ proxy">
+Nếu gateway chỉ forward request sang provider, nó chưa phải multi-LLM gateway. Gateway phải enforce policy: model, budget, tenant, prompt, routing, fallback, validation, cost và observability.
+</Callout>
 
-Interface:
+---
+
+## 4. Provider Abstraction Layer
 
 ```python
 from typing import Protocol, AsyncIterator
@@ -138,7 +112,9 @@ class LLMProvider(Protocol):
 
 Normalized response giúp app không phụ thuộc provider-specific SDK.
 
-## Model and capability registry
+---
+
+## 5. Model and Capability Registry
 
 Registry fields:
 
@@ -167,7 +143,9 @@ Registry fields:
 
 Registry là nguồn sự thật cho router/fallback/cost estimator.
 
-## Request lifecycle
+---
+
+## 6. Request Lifecycle
 
 ```text
 1. Authenticate tenant/user
@@ -189,7 +167,9 @@ Registry là nguồn sự thật cho router/fallback/cost estimator.
 Cache trước hay sau quota? Token count trước hay sau prompt resolution? Validation trước hay sau logging? Những quyết định này ảnh hưởng cost, security và correctness.
 </Callout>
 
-## Tenant AI policy
+---
+
+## 7. Tenant AI Policy
 
 Example:
 
@@ -208,7 +188,9 @@ Example:
 
 Policy engine phải enforce hard constraints trước routing score.
 
-## Token counting and cost tracking
+---
+
+## 8. Token Counting and Cost Tracking
 
 Cost attribution dimensions:
 
@@ -246,7 +228,9 @@ llm_usage_events(
 
 Estimated tokens dùng trước call; actual usage ghi sau response.
 
-## Prompt registry
+---
+
+## 9. Prompt Registry
 
 Prompt registry quản lý:
 
@@ -272,7 +256,9 @@ Example:
 }
 ```
 
-## Router in the gateway
+---
+
+## 10. Router in the Gateway
 
 Router uses:
 
@@ -291,7 +277,9 @@ Output:
 }
 ```
 
-## Cache manager
+---
+
+## 11. Cache Manager
 
 ### Exact cache
 
@@ -319,7 +307,9 @@ Key includes:
 embedding_model + text_hash + preprocessing_version
 ```
 
-## Response validator
+---
+
+## 12. Response Validator
 
 Validation layers:
 
@@ -345,7 +335,9 @@ If fail:
 repair → retry → fallback → controlled error → human review
 ```
 
-## Streaming gateway design
+---
+
+## 13. Streaming Gateway Design
 
 Gateway can normalize provider stream events:
 
@@ -363,7 +355,7 @@ event: done
 data: {"finish_reason":"stop"}
 ```
 
-Issues:
+**Issues:**
 
 - cancellation,
 - partial provider errors,
@@ -372,9 +364,11 @@ Issues:
 - buffering for schema-critical outputs,
 - safety scanning partial text.
 
-## Observability
+---
 
-Metrics:
+## 14. Observability
+
+**Metrics:**
 
 - request count by provider/model,
 - p50/p95/p99 latency,
@@ -389,7 +383,7 @@ Metrics:
 - router distribution,
 - circuit breaker state.
 
-Trace example:
+**Trace example:**
 
 ```json
 {
@@ -417,7 +411,9 @@ Trace example:
 }
 ```
 
-## Scaling architecture
+---
+
+## 15. Scaling Architecture
 
 ```text
 Load Balancer
@@ -430,7 +426,7 @@ Stateless Gateway Pods
    └── Provider APIs / vLLM / MCP servers
 ```
 
-Scaling concerns:
+**Scaling concerns:**
 
 - gateway pods stateless,
 - provider concurrency limits,
@@ -440,7 +436,9 @@ Scaling concerns:
 - backpressure during provider outage,
 - per-tenant quotas distributed correctly.
 
-## Security and governance
+---
+
+## 16. Security and Governance
 
 Gateway must enforce:
 
@@ -457,7 +455,9 @@ Gateway must enforce:
 Gateway thấy prompts, outputs, usage, tenant policy và provider keys. Nó phải được bảo vệ như critical infrastructure: auth, least privilege, audit, encryption, incident response.
 </Callout>
 
-## Implementation lab: gateway skeleton
+---
+
+## 17. Implementation Playbook: Gateway Skeleton
 
 ```python
 from dataclasses import dataclass
@@ -505,7 +505,7 @@ class Gateway:
         return validated
 ```
 
-Extend lab milestones:
+**Extend lab milestones:**
 
 1. `POST /v1/chat` endpoint.
 2. Mock provider adapters.
@@ -518,11 +518,11 @@ Extend lab milestones:
 9. Streaming endpoint.
 10. MCP tool integration stub.
 
-## Mapping to Phase 7 hard project
+---
+
+## 18. Mapping to Phase 7 Hard Project
 
 Hard project: **Production Multi-LLM Orchestration Platform**.
-
-Gateway components map directly:
 
 | Project feature | Gateway component |
 |---|---|
@@ -537,34 +537,61 @@ Gateway components map directly:
 | streaming | normalized SSE gateway |
 | K8s auto-scaling | stateless pods + metrics |
 
-## Common mistakes & debugging checklist
+**Production checklist:**
 
-<Callout type="warning" title="Mistake 1: gateway chỉ là thin proxy">
-Nếu gateway không enforce policy, route, validate, log cost và manage fallback, nó chưa giải quyết multi-LLM production problems.
+- [ ] Có provider abstraction không?
+- [ ] Có model/capability registry không?
+- [ ] Có tenant AI policy không?
+- [ ] Có prompt registry/versioning không?
+- [ ] Có token/cost tracking không?
+- [ ] Có router reason logs không?
+- [ ] Có fallback manager không?
+- [ ] Có response validation layers không?
+- [ ] Có exact cache tenant-safe không?
+- [ ] Có streaming normalization không?
+- [ ] Có metrics/traces/logs không?
+- [ ] Có security controls cho gateway keys/logs không?
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: gateway chỉ là thin proxy">
+**Triệu chứng:** Nếu gateway không enforce policy, route, validate, log cost và manage fallback, nó chưa giải quyết multi-LLM production problems. Mỗi app tự gọi provider, cost không biết ai tiêu.
+
+**Fix:** Gateway phải enforce policy: model, budget, tenant, prompt, routing, fallback, validation, cost và observability. Gateway là control plane, không chỉ forward request.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: không có model registry">
-Hard-code model metadata trong code làm routing/fallback/cost updates chậm và dễ sai.
+<Callout type="warning" title="Pitfall 2: không có model registry">
+**Triệu chứng:** Hard-code model metadata trong code làm routing/fallback/cost updates chậm và dễ sai. Model registry không có, không có capability matrix.
+
+**Fix:** Model registry là nguồn sự thật cho router/fallback/cost estimator. Registry phải có: provider, model, context, price, modalities, tools, JSON support, region, data policy, health, eval scores.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: semantic cache shared giữa tenants">
-Semantic cache không tenant-isolated có thể leak dữ liệu. Cache phải tôn trọng tenant, user permissions và data version.
+<Callout type="danger" title="Pitfall 3: semantic cache shared giữa tenants">
+**Triệu chứng:** Semantic cache không tenant-isolated có thể leak dữ liệu. Cache phải tôn trọng tenant, user permissions và data version. Nếu không, tenant A có thể thấy answer của tenant B.
+
+**Fix:** Cache phải tôn trọng tenant, user permissions và data version. Semantic cache cần tenant isolation, similarity threshold, data version, permission version, no high-risk personalized cache.
 </Callout>
 
-Checklist:
+---
 
-1. Có provider abstraction không?
-2. Có model/capability registry không?
-3. Có tenant AI policy không?
-4. Có prompt registry/versioning không?
-5. Có token/cost tracking không?
-6. Có router reason logs không?
-7. Có fallback manager không?
-8. Có response validation layers không?
-9. Có exact cache tenant-safe không?
-10. Có streaming normalization không?
-11. Có metrics/traces/logs không?
-12. Có security controls cho gateway keys/logs không?
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Centralized gateway | cost control, governance | overhead, single point of failure |
+| No gateway | đơn giản | duplicated bugs, inconsistent security |
+| No model registry | đơn giản | routing/fallback/cost updates chậm |
+| No prompt registry | đơn giản | prompt/version phân tán, regression khó |
+| No cost tracking | đơn giản | không biết ai tiêu tiền |
+| No fallback | đơn giản | provider outage chết toàn app |
+| Semantic cache shared | cost giảm | leak dữ liệu giữa tenants |
+| No streaming normalization | đơn giản | frontend phụ thuộc provider-specific events |
+
+Gateway design là nghệ thuật chuyển "AI calls" thành "governed platform capability". Mỗi component phải có policy, trace, và cost control.
+
+---
 
 ## Practice exercises
 
@@ -579,6 +606,8 @@ Checklist:
 9. Thiết kế fallback manager trong gateway.
 10. So sánh gateway centralized vs mỗi app tự gọi provider.
 
+---
+
 ## Knowledge check
 
 1. Vì sao gateway là control plane?
@@ -592,6 +621,8 @@ Checklist:
 9. Scaling gateway cần state lưu ở đâu?
 10. Gateway security có rủi ro gì?
 
+---
+
 ## Answer key
 
 1. Vì nó centralize/enforce AI policy: model, prompt, routing, budget, validation, logging.
@@ -604,6 +635,8 @@ Checklist:
 8. Normalized events, cancellation, partial errors, usage metadata, client disconnect, buffering if needed.
 9. Stateless pods; shared state in Redis/Postgres/queues/vector DB depending component.
 10. It holds provider keys, prompts, logs, policies and can route sensitive data; needs strict security/audit.
+
+---
 
 ## Mini-project: Production Multi-LLM Gateway
 
@@ -632,6 +665,8 @@ Checklist:
 - Invalid JSON blocked before app response.
 - Design can extend to real providers and MCP tools.
 
+---
+
 ## Điểm cần nhớ
 
 - Multi-LLM gateway centralizes AI policy and provider access.
@@ -641,6 +676,8 @@ Checklist:
 - Cache and routing must respect tenant policy and permissions.
 - Observability is mandatory: traces, metrics, logs, route reasons.
 - Gateway becomes critical infrastructure and must be secured accordingly.
+
+---
 
 ## Phase 7 wrap-up
 
@@ -652,6 +689,8 @@ Bạn đã hoàn thành module **Multi-LLM Orchestration**:
 4. **Model Context Protocol:** chuẩn hóa tools/resources/prompts nhưng vẫn cần security.
 5. **Orchestration Frameworks:** chọn LangChain/LangGraph/LlamaIndex/CrewAI/AutoGen đúng problem shape.
 6. **Multi-LLM Gateway:** control plane production cho providers, routing, fallback, cost, cache, validation và observability.
+
+---
 
 ## Next phase bridge
 

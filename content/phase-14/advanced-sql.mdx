@@ -324,7 +324,7 @@ Nếu query này chậm, hãy chuyển sang CTE + join hoặc window function.
 
 ---
 
-## 9. Implementation Playbook (Thực thi)
+## Implementation Playbook: Cost Spike Detection Query
 
 Playbook dưới đây trả lời câu hỏi: “Feature nào làm cost tăng bất thường tuần này?”
 
@@ -385,35 +385,29 @@ ORDER BY baseline_ratio DESC;
 
 ---
 
-## 10. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
 <Callout type="warning" title="Pitfall 1: Window frame mặc định gây sai rolling sum">
 **Triệu chứng:** Rolling metric nhảy kỳ lạ khi nhiều dòng có cùng timestamp.
 
-**Nguyên nhân:** Nếu không chỉ định frame, database có thể dùng frame mặc định theo `RANGE`, gom các dòng có cùng giá trị `ORDER BY`.
-
-**Cách khắc phục:** Khi cần rolling theo số dòng, ghi rõ `ROWS BETWEEN ...`. Khi cần rolling theo thời gian, cân nhắc pre-aggregate theo ngày/giờ trước.
+**Fix:** Khi cần rolling theo số dòng, ghi rõ `ROWS BETWEEN ...`. Khi cần rolling theo thời gian, cân nhắc pre-aggregate theo ngày/giờ trước.
 </Callout>
 
 <Callout type="warning" title="Pitfall 2: Correlated subquery chạy O(n²)">
 **Triệu chứng:** Query chạy tốt trên 10,000 dòng nhưng treo khi bảng lên 10 triệu dòng.
 
-**Nguyên nhân:** Subquery bị chạy lại cho từng dòng ngoài.
-
-**Cách khắc phục:** Dùng CTE để tính baseline một lần, rồi join lại. Hoặc dùng window function nếu metric cùng partition.
+**Fix:** Dùng CTE để tính baseline một lần, rồi join lại. Hoặc dùng window function nếu metric cùng partition.
 </Callout>
 
 <Callout type="danger" title="Pitfall 3: Ranking sai vì không hiểu ties">
 **Triệu chứng:** Dashboard top 10 user đôi khi hiển thị 12 người hoặc bỏ qua hạng.
 
-**Nguyên nhân:** `RANK()` tạo khoảng trống khi hòa, `DENSE_RANK()` không tạo khoảng trống, `ROW_NUMBER()` ép mỗi dòng một số duy nhất.
-
-**Cách khắc phục:** Chọn function theo ý nghĩa sản phẩm. Leaderboard công bằng thường dùng `DENSE_RANK()`. Pagination ổn định thường cần `ROW_NUMBER()` kèm tie-breaker như `ORDER BY spend DESC, user_id`.
+**Fix:** Chọn function theo ý nghĩa sản phẩm. Leaderboard công bằng thường dùng `DENSE_RANK()`. Pagination ổn định thường cần `ROW_NUMBER()` kèm tie-breaker như `ORDER BY spend DESC, user_id`.
 </Callout>
 
 ---
 
-## 11. Cost & Performance Unit Economics
+## Cost / Performance / Anomaly Unit Economics
 
 | Kỹ thuật | Giá trị sản phẩm | Chi phí vận hành |
 |---|---|---|
@@ -464,6 +458,8 @@ Nguyên tắc thực tế: query ad-hoc có thể chậm vài giây; dashboard p
 - `GROUP BY` trả lời câu hỏi summary; `PARTITION BY` trả lời câu hỏi contextual.
 - Recursive CTE hữu ích cho conversation tree và agent/tool-call hierarchy, nhưng cần guard chống vòng lặp.
 - Advanced SQL là nền tảng để phát hiện cost spike, latency regression và usage anomaly trong AI systems.
+
+---
 
 ## Next chapter bridge
 

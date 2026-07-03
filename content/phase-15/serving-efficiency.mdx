@@ -364,7 +364,7 @@ Mục tiêu của benchmark không phải chọn backend “ngầu nhất”, m�
 
 ---
 
-## 11. Implementation Playbook (Thực thi)
+## Implementation Playbook: Concurrent vLLM Benchmark
 
 Ví dụ dưới đây gọi một vLLM OpenAI-compatible server và chạy nhiều request đồng thời để đo latency cơ bản. Đây là skeleton cho project **High-Throughput Inference Server**.
 
@@ -446,51 +446,97 @@ Trong production, hãy thêm:
 
 ---
 
-## 12. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## Project Guide: High-Throughput Inference Server (Phase 15 Hard)
+
+Mục tiêu project: deploy vLLM với nhiều model, request batching, model switching, load balancing và monitoring.
+
+### Requirements
+
+- Deploy vLLM server với ít nhất 2 model (ví dụ 8B chat và 3B router).
+- Cấu hình continuous batching, max-model-len, gpu-memory-utilization.
+- Viết benchmark script đo concurrency ladder: 1, 10, 50, 100 users.
+- Export Prometheus metrics và tạo Grafana dashboard.
+- Triển khai Docker Compose hoặc Kubernetes.
+
+### Suggested stack
+
+```text
+vLLM
+Docker Compose / Kubernetes
+Prometheus + Grafana
+Python benchmark script
+```
+
+### Benchmark plan
+
+```text
+1. Single model baseline
+   - load 8B FP16
+   - measure TTFT, TPOT, throughput at concurrency 1/10/50/100
+
+2. Quantized model
+   - load 8B AWQ INT4
+   - repeat same concurrency ladder
+   - compare VRAM and throughput
+
+3. Multi-model serving
+   - route traffic by task type
+   - measure cold start and model switching overhead
+
+4. Monitoring
+   - Prometheus scrape vLLM metrics
+   - Grafana dashboard: TTFT, TPOT, GPU utilization, queue time
+   - alert rules: p95 > threshold, error rate > 1%
+```
+
+### Acceptance criteria
+
+- Có Docker Compose hoặc Kubernetes manifest chạy được vLLM.
+- Có benchmark table so sánh 2+ model trên 4+ concurrency level.
+- Có Grafana dashboard với TTFT, TPOT, throughput, GPU utilization.
+- Có alert rules cho p95 latency và error rate.
+- Có runbook cho rollback và model switching.
+- Có README với architecture diagram và startup instructions.
+
+Stretch goal: thêm autoscaling rule dựa trên queue length và deploy trên Kubernetes với HPA.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
 <Callout type="warning" title="Pitfall 1: gpu-memory-utilization đặt quá cao">
 **Triệu chứng:** Server khởi động được nhưng OOM khi traffic tăng nhẹ.
 
-**Nguyên nhân:** Runtime giữ quá nhiều VRAM cho KV cache hoặc không còn headroom cho CUDA workspace, fragmentation và spikes.
-
-**Cách khắc phục:** Giảm `--gpu-memory-utilization`, đặt `max_model_len` thực tế, benchmark concurrency và theo dõi peak VRAM dưới tải.
+**Fix:** Giảm `--gpu-memory-utilization`, đặt `max_model_len` thực tế, benchmark concurrency và theo dõi peak VRAM dưới tải.
 </Callout>
 
 <Callout type="warning" title="Pitfall 2: Max context quá dài cho mọi user">
 **Triệu chứng:** GPU memory bị chiếm lớn dù phần lớn request chỉ cần context ngắn.
 
-**Nguyên nhân:** Cấu hình max context theo worst case 32K/128K cho toàn bộ pool.
-
-**Cách khắc phục:** Tách pool theo context length: chat ngắn, RAG medium, long-context premium. Dùng router và quota để tránh long-context làm nghẽn mọi traffic.
+**Fix:** Tách pool theo context length: chat ngắn, RAG medium, long-context premium. Dùng router và quota để tránh long-context làm nghẽn mọi traffic.
 </Callout>
 
 <Callout type="danger" title="Pitfall 3: Model switching gây cold start">
 **Triệu chứng:** Request đầu tiên sau khi đổi model mất hàng chục giây hoặc timeout.
 
-**Nguyên nhân:** Server phải unload/load weights lớn, warm up kernels và cấp phát KV cache.
-
-**Cách khắc phục:** Tránh dynamic model switching trong cùng process cho hot path. Dùng pool riêng cho từng model quan trọng, warm replicas trước rollout, và route traffic bằng gateway.
+**Fix:** Tránh dynamic model switching trong cùng process cho hot path. Dùng pool riêng cho từng model quan trọng, warm replicas trước rollout, và route traffic bằng gateway.
 </Callout>
 
 <Callout type="warning" title="Pitfall 4: Benchmark thiếu concurrency">
 **Triệu chứng:** Demo single-user rất nhanh, production multi-user rất chậm.
 
-**Nguyên nhân:** Benchmark chỉ đo một request, không đo scheduler, queue time, batching và KV cache pressure.
-
-**Cách khắc phục:** Benchmark theo concurrency ladder: 1, 10, 50, 100, 500 users. Đo p95/p99, error rate và GPU metrics.
+**Fix:** Benchmark theo concurrency ladder: 1, 10, 50, 100, 500 users. Đo p95/p99, error rate và GPU metrics.
 </Callout>
 
 <Callout type="danger" title="Pitfall 5: Không tách interactive và batch workloads">
 **Triệu chứng:** Người dùng chat realtime bị chậm mỗi khi batch summarization chạy.
 
-**Nguyên nhân:** Cả hai workload dùng chung inference pool, scheduler ưu tiên throughput nhưng không bảo vệ latency interactive.
-
-**Cách khắc phục:** Tách pool hoặc queue priority. Batch jobs dùng pool throughput-optimized; chat dùng pool latency-optimized với SLA riêng.
+**Fix:** Tách pool hoặc queue priority. Batch jobs dùng pool throughput-optimized; chat dùng pool latency-optimized với SLA riêng.
 </Callout>
 
 ---
 
-## 13. Cost & Performance Unit Economics
+## Cost / Performance / Serving Unit Economics
 
 | Quyết định | Tác động latency | Tác động chi phí | Trade-off |
 |---|---|---|---|
@@ -516,6 +562,36 @@ Nếu thiếu một trong các yếu tố này, hệ thống có thể demo tố
 
 ---
 
+## Practice exercises
+
+1. Viết lệnh `docker run` để khởi động vLLM với `--max-model-len 8192` và `--gpu-memory-utilization 0.9`. Giải thích vì sao 2 thông số này ảnh hưởng throughput và TTFT.
+2. Thiết kế một benchmark plan so sánh vLLM vs naive `transformers.generate()` cho 3 concurrency level (1, 50, 100). Nêu 4 metric cần đo.
+3. Mô tả pattern "router + multi-backend pool" gồm 3 backend: vLLM (chat), Ollama (local), frontier API (fallback). Nêu 2 điều kiện cần để route đúng.
+4. Viết ADR chọn vLLM thay vì TGI cho một production chatbot 8B, với 2 lý do kỹ thuật và 1 rủi ro.
+5. Thiết kế Grafana dashboard cho inference server: liệt kê 5 panel và 2 alert rule cho p95 latency và error rate.
+
+---
+
+## Knowledge check
+
+1. Vì sao không nên serve production LLM bằng `model.generate()` thủ công?
+2. PagedAttention và continuous batching giải quyết hai bottleneck nào của LLM serving?
+3. Khi nào nên chọn Ollama/llama.cpp thay vì vLLM/TGI?
+4. Vì sao cần tách interactive chat pool và batch summarization pool?
+5. Model registry + rollout/rollback trong serving có vai trò gì?
+
+---
+
+## Answer key
+
+1. `model.generate()` không có continuous batching, KV cache management, scheduler và streaming; khi concurrency cao, GPU utilization thấp, queue time tăng và server OOM.
+2. PagedAttention giảm KV cache fragmentation và lãng phí VRAM; continuous batching thêm request mới vào batch khi sequence cũ xong, tăng GPU utilization.
+3. Ollama/llama.cpp phù hợp cho local/dev/edge, CPU/Mac/privacy/offline; vLLM/TGI phù hợp cho high-concurrency GPU server.
+4. Batch job dài làm nghẽn interactive chat vì scheduler ưu tiên throughput; tách pool bảo vệ SLA latency cho interactive và cho phép batch pool tối ưu throughput riêng.
+5. Model registry giúp version, rollback và canary deployment; khi model mới gây regression, rollback về version cũ bằng config thay vì redeploy code.
+
+---
+
 ## Điểm cần nhớ
 
 - Không nên serve production LLM bằng vòng lặp `model.generate()` thủ công nếu có concurrency thật.
@@ -538,6 +614,8 @@ Bạn vừa hoàn thành chuyên đề **Quantization, Optimization & Efficiency
 5. **Model Serving Efficiency:** đóng gói model tối ưu vào serving backend, benchmark, observe, autoscale và rollback như một hệ thống production.
 
 Phase 15 là cầu nối giữa “model thông minh” và “dịch vụ AI bền vững về kinh tế”. Bạn không chỉ biết model nào tốt, mà còn biết làm sao chạy nó nhanh, rẻ và đáng tin cậy.
+
+---
 
 ## Next phase bridge
 

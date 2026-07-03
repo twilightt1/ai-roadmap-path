@@ -1,350 +1,473 @@
-API Integration Patterns là phần biến LLM API từ demo thành hệ thống production. Ở cấp độ giáo sư AI engineering, ta không chỉ nói “thêm retry và cache”; ta phải thiết kế **middleware policy**: request đi qua bước nào, lỗi nào retry, lỗi nào fallback, quota tính ra sao, cache có an toàn không, logs đủ debug không, và mọi quyết định này ảnh hưởng cost/latency/security thế nào.
+API Integration Patterns là bước biến LLM từ một "call" thành một **hệ thống có resilience**. Ở cấp độ giáo sư AI, bạn không chỉ "gọi provider rồi trả kết quả". Production cần middleware: token budget guard, retry policy, caching, fallback, circuit breaker, rate limit, observability. Mỗi layer là một decision point ảnh hưởng cost, latency, reliability và correctness.
 
-## Why this matters
+---
 
-LLM APIs là dependency đắt, chậm và có xác suất lỗi cao hơn nhiều API nội bộ. Chúng có thể:
+## 1. The Incident (Tình huống sự cố)
 
-- timeout,
-- rate limit,
-- trả JSON lỗi,
-- bị safety block,
-- vượt context,
-- chậm theo giờ cao điểm,
-- thay đổi behavior khi model version đổi,
-- làm bill tăng mạnh nếu retry/cache sai.
+<Callout type="danger" title="Báo cáo sự cố: Retry storm 3:00 AM, provider down, 50,000 USD/tháng wasted, 1,000 users bị duplicate refund">
+**Bối cảnh:** Một team build chatbot RAG. Họ dùng OpenAI, không có retry policy, không có cache, không có fallback. Họ deploy production, app chạy ngon. Họ không có observability.
 
-<Callout type="danger" title="LLM call không được là black box">
-Mỗi request phải có trace: input tokens, output tokens, prompt version, model, latency, cache hit, retry count, fallback path, validation status và estimated cost. Không có trace thì không có production engineering.
+**Sự cố:** 3:00 AM, provider OpenAI bị down. App retry 3 lần, mỗi request. Họ set retry=True với exponential backoff. 3 phút, 1,000 requests, 50,000 USD. Họ không có fallback. Họ không có circuit breaker. Họ không có cache.
+
+1. Không có retry policy — retry 3 lần, không có max attempts.
+2. Không có circuit breaker — retry storm khi provider down.
+3. Không có fallback — chỉ phụ thuộc OpenAI.
+4. Không có cache — mỗi request gọi provider, không cache.
+5. Không có observability — không biết retry storm, không biết cost.
+
+**Hậu quả:** 50,000 USD/tháng wasted. Họ phải tắt chatbot, thiết kế lại retry policy, circuit breaker, fallback provider, cache. Hóa đơn 3x sau khi tối ưu.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: LLM call không được là "hộp đen". Mỗi request phải có trace: input tokens, output tokens, prompt version, model, latency, cache hit, retry count, fallback path, validation status. Cần middleware ordering, token budget guard, retry policy, caching, fallback, circuit breaker, rate limit, observability.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Thiết kế middleware ordering cho LLM request.
-2. Quản lý token budget, truncation và context packing.
-3. Phân loại errors và quyết định retry/fallback/user response.
-4. So sánh rate limiting algorithms.
-5. Thiết kế cache exact/semantic/tenant-isolated an toàn.
-6. Dùng circuit breaker để bảo vệ hệ thống khi provider lỗi.
-7. Thiết kế fallback policy có constraints quality/security/schema.
-8. Xây observability với logs, metrics, traces.
-9. Validate response theo nhiều lớp: syntax, schema, business, groundedness, safety.
+## 2. Architecture Blueprint (API as a Pipeline)
 
-## Prerequisites
-
-Bạn nên biết:
-
-- HTTP errors, retries, timeout.
-- Tokenization/context window.
-- AI API provider abstraction.
-- Redis/cache/rate limit concepts.
-- Structured output validation.
-
-## Core intuition: LLM APIs are distributed systems dependencies
-
-Một LLM call production nên đi qua pipeline:
+Một request LLM production là một pipeline:
 
 ```text
-Request
-  ↓
-Authenticate / authorize
-  ↓
-Normalize input
-  ↓
-Estimate tokens
-  ↓
-Check quota/rate limit
-  ↓
-Cache lookup
-  ↓
-Provider call with timeout
-  ↓
-Retry if retryable
-  ↓
-Fallback if policy allows
-  ↓
-Validate response
-  ↓
-Log/trace usage
-  ↓
-Return response
+[ User request ]
+        │
+        ▼
+[ Middleware: token budget guard ]
+        │
+        ▼
+[ Middleware: cache lookup ]
+        │
+        ▼
+[ Middleware: rate limit ]
+        │
+        ▼
+[ Provider call ]
+        │
+        ├── retry policy, error handling
+        │
+        ▼
+[ Response validation ]
+        │
+        ▼
+[ Response caching ]
+        │
+        ▼
+[ Observability logging ]
+        │
+        ▼
+[ Return to app ]
 ```
 
-Mỗi mũi tên là một policy decision.
+Mỗi middleware là một decision point. Mỗi middleware có thể short-circuit, retry, cache, hoặc fallback.
 
-## Middleware ordering and policy decisions
+---
 
-Ordering không tùy tiện.
+## 3. Core intuition: API as a pipeline
 
-### Auth first
+Một request LLM production không chỉ là:
 
-Không auth thì không biết user/tenant, không áp quota/permissions được.
+```python
+response = client.chat.completions.create(...)
+```
 
-### Normalize before cache key
+Nó là một pipeline:
 
-Nếu input có whitespace khác nhau nhưng meaning giống nhau, normalize có thể tăng cache hit. Nhưng normalize quá mạnh có thể làm sai semantics.
+```text
+build prompt → validate → send → retry → stream → parse → validate → log → return
+```
 
-### Token count before provider call
+Mỗi middleware là một decision point. Mỗi middleware có thể short-circuit, retry, cache, hoặc fallback.
 
-Để chặn context overflow và estimate cost.
+---
 
-### Rate limit before expensive work
+## 4. Middleware ordering
 
-Thông thường check quota trước provider call. Nhưng có thể cache lookup trước quota nếu cache hit không tốn provider cost. Policy này phải rõ.
+### Why ordering matters
 
-### Log even on failure
+```text
+[ User request ]
+        │
+        ▼
+[ Rate limit ]
+        │
+        ▼
+[ Token budget guard ]
+        │
+        ▼
+[ Cache lookup ]
+        │
+        ▼
+[ Provider call ]
+        │
+        ▼
+[ Response validation ]
+        │
+        ▼
+[ Response caching ]
+        │
+        ▼
+[ Observability logging ]
+        │
+        ▼
+[ Return to app ]
+```
 
-Failed calls vẫn cần trace để debug provider reliability và cost.
+### Why ordering matters
 
-<Callout type="warning" title="Không có ordering đúng, middleware sẽ tự mâu thuẫn">
-Ví dụ deduct quota trước cache lookup có thể làm user mất quota dù trả cached answer. Ngược lại cache lookup trước auth có thể leak tenant data nếu cache key không isolate.
-</Callout>
+| Middleware | Lý do đặt ở đây |
+|---|---|
+| Auth | trước khi tính token |
+| Rate limit | trước khi tính token |
+| Token budget guard | trước khi gọi provider |
+| Cache lookup | trước khi gọi provider |
+| Provider call | sau khi validate |
+| Response validation | sau khi provider trả |
+| Response caching | sau khi validate |
+| Observability logging | cuối pipeline |
 
-## Token budget management
+### Why ordering matters
 
-Budget equation:
+- Rate limit trước khi tốn token.
+- Cache trước khi tốn provider call.
+- Token budget trước khi gọi provider.
+- Validation sau khi provider trả.
+- Caching sau khi validate.
+- Logging cuối pipeline.
+
+---
+
+## 5. Token budget guard
+
+### Why token budget guard?
 
 ```text
 system + developer + chat_history + retrieved_context + user_query + output_budget <= context_window
 ```
 
-Strategies khi vượt budget:
-
-| Strategy | Khi dùng | Rủi ro |
-|---|---|---|
-| Drop oldest history | chat dài | mất context quan trọng |
-| Summarize history | cần giữ gist | summary hallucination |
-| Reduce retrieved chunks | RAG | giảm recall |
-| Rerank context | nhiều chunks | cần reranker tốt |
-| Compress context | docs dài | mất chi tiết |
-| Long-context model | truly long input | cost/latency cao |
-| Ask user narrow scope | query mơ hồ | UX gián đoạn |
-
-## Context packing for RAG
-
-Không chỉ lấy top-k rồi nhét vào prompt. Context packing cần cân bằng:
-
-- relevance,
-- diversity,
-- source priority,
-- recency,
-- token length,
-- citation metadata.
-
-Pattern:
-
-```text
-retrieve top-50 → rerank top-10 → diversify → pack until token budget → cite IDs
-```
-
-Nếu có lost-in-the-middle, đặt evidence quan trọng gần cuối prompt hoặc gần question tùy model/eval.
-
-## Truncation is a product decision
-
-Silent truncation là bug. Nếu phải cắt, log rõ:
-
-```text
-truncated: true
-truncated_sections: ["chat_history", "retrieved_context"]
-original_tokens: 18000
-final_tokens: 7900
-```
-
-User-facing behavior có thể là:
-
-- trả lời với context rút gọn,
-- thông báo cần narrow query,
-- dùng long-context model,
-- chạy multi-step retrieval.
-
-## Error taxonomy and retry matrix
-
-| Error | Retry? | Fallback? | Strategy |
-|---|---|---|---|
-| 400 invalid request | no | no | fix payload/schema |
-| 401/403 auth | no | no | check key/permissions |
-| 408 timeout | maybe | yes | retry with timeout budget |
-| 429 rate limit | yes | maybe | backoff + jitter, respect Retry-After |
-| 500/502/503/504 | yes | yes | retry then fallback |
-| context length | no | maybe | reduce context or long-context model |
-| invalid JSON output | repair/retry | maybe | schema repair loop |
-| safety refusal | usually no | policy-dependent | return refusal or human review |
-| stream interrupted | tricky | maybe | cannot blindly replay partial output |
-
-Professor-level point: retry is not moral virtue. Retry is a policy with cost and side effects.
-
-## Exponential backoff with jitter
-
-Without jitter, many clients retry at the same time, creating retry storms.
+### Why token budget guard?
 
 ```python
+def check_token_budget(prompt: str, model: str, max_tokens: int = 1000) -> bool:
+    prompt_tokens = count_tokens(prompt, model)
+    total = prompt_tokens + max_tokens
+    return total <= model_context_window(model)
+```
+
+### Why token budget guard?
+
+- Context overflow: model reject.
+- Cost: input tokens tăng.
+- Latency: input tokens tăng.
+- Quality: context dài có thể lost-in-the-middle.
+
+### Why token budget guard?
+
+```python
+def enforce_token_budget(prompt: str, model: str, max_tokens: int = 1000) -> str:
+    prompt_tokens = count_tokens(prompt, model)
+    context_window = model_context_window(model)
+    if prompt_tokens + max_tokens > context_window:
+        return truncate_prompt(prompt, context_window - max_tokens)
+    return prompt
+```
+
+---
+
+## 6. Retry policy
+
+### Why retry policy?
+
+```text
+[ Provider call ]
+        │
+        ▼
+[ Error? ]
+        │
+        ├── retryable → retry
+        │
+        ├── non-retryable → fail
+        │
+        ▼
+[ Return or fallback ]
+```
+
+### Why retry policy?
+
+| Error | Retry? | Strategy |
+|---|---|---|
+| 400 invalid request | no | fix payload |
+| 401/403 auth | no | check key |
+| 408 timeout | yes | retry with timeout |
+| 429 rate limit | yes | backoff + jitter |
+| 500/502/503/504 | yes | retry then fallback |
+| context length | no | reduce context |
+| invalid JSON output | repair | schema repair loop |
+
+### Why retry policy?
+
+```python
+import time
 import random
+
+
+def call_with_retry(
+    provider,
+    messages,
+    max_attempts=3,
+    base_delay=0.1,
+    max_delay=10.0,
+):
+    for attempt in range(max_attempts):
+        try:
+            return provider.chat(messages)
+        except RetryableError:
+            if attempt == max_attempts - 1:
+                raise
+            delay = min(base_delay * (2 ** attempt), max_delay)
+            delay += random.uniform(0, 0.1)
+            time.sleep(delay)
+```
+
+### Why retry policy?
+
+- 429: backoff + jitter.
+- 500/502/503/504: retry then fallback.
+- 408: timeout.
+- Context length: reduce context.
+- Invalid JSON: repair.
+
+---
+
+## 7. Caching
+
+### Why caching?
+
+| Cache type | Lợi ích | Hạn chế |
+|---|---|---|
+| Exact match | đơn giản | không match semantically |
+| Semantic | match semantically | phức tạp, cost embeddings |
+| Prefix | cache prefix | không match semantically |
+| Response | cache response | không match semantically |
+
+### Why caching?
+
+```python
+import hashlib
+import json
+
+
+def cache_key(prompt: str, model: str, params: dict) -> str:
+    data = {"prompt": prompt, "model": model, "params": params}
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+
+
+def get_cached_response(cache, key: str):
+    return cache.get(key)
+
+
+def set_cached_response(cache, key: str, response: dict, ttl: int = 3600):
+    cache.set(key, response, ttl=ttl)
+```
+
+### Why caching?
+
+- Exact match: hash prompt + model + params.
+- Semantic: embeddings + similarity.
+- Prefix: cache prefix (prompt caching).
+- Response: cache response.
+
+---
+
+## 8. Semantic caching
+
+### Why semantic caching?
+
+```python
+def semantic_cache_lookup(query: str, cache: list[dict], threshold: float = 0.95):
+    query_embedding = embed(query)
+    for item in cache:
+        similarity = cosine_similarity(query_embedding, item["embedding"])
+        if similarity > threshold:
+            return item["response"]
+    return None
+```
+
+### Why semantic caching?
+
+- Tăng cache hit rate.
+- Giảm cost.
+- Giảm latency.
+- Nhưng cần embeddings, similarity threshold, và eviction policy.
+
+---
+
+## 9. Fallback
+
+### Why fallback?
+
+```text
+[ Provider A ]
+        │
+        ├── fail
+        │
+        ▼
+[ Provider B ]
+        │
+        ├── fail
+        │
+        ▼
+[ Provider C ]
+        │
+        ├── fail
+        │
+        ▼
+[ Default response ]
+```
+
+### Why fallback?
+
+```python
+class FallbackChain:
+    def __init__(self, providers: list):
+        self.providers = providers
+
+    def chat(self, messages: list[dict]) -> LLMResponse:
+        for provider in self.providers:
+            try:
+                return provider.chat(messages)
+            except Exception:
+                continue
+        raise RuntimeError("all providers failed")
+```
+
+### Why fallback?
+
+- Reliability: provider A fail, provider B.
+- Cost: provider A cheap, provider B expensive.
+- Quality: provider A strong, provider B weak.
+- Latency: provider A fast, provider B slow.
+
+---
+
+## 10. Circuit breaker
+
+### Why circuit breaker?
+
+```text
+[ Provider call ]
+        │
+        ▼
+[ Error count > threshold? ]
+        │
+        ├── yes → open circuit
+        │
+        ├── no → closed circuit
+        │
+        ▼
+[ Circuit open? ]
+        │
+        ├── yes → fail fast
+        │
+        ├── no → call provider
+        │
+        ▼
+[ Circuit half-open? ]
+        │
+        ├── yes → test call
+        │
+        ├── no → call provider
+        │
+        ▼
+[ Return or fallback ]
+```
+
+### Why circuit breaker?
+
+```python
+class CircuitBreaker:
+    def __init__(self, threshold: int = 5, reset_timeout: int = 60):
+        self.threshold = threshold
+        self.reset_timeout = reset_timeout
+        self.failure_count = 0
+        self.state = "closed"
+        self.last_failure_time = None
+
+    def record_failure(self):
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+        if self.failure_count >= self.threshold:
+            self.state = "open"
+
+    def record_success(self):
+        self.failure_count = 0
+        self.state = "closed"
+
+    def can_call(self) -> bool:
+        if self.state == "closed":
+            return True
+        if self.state == "open":
+            if time.time() - self.last_failure_time > self.reset_timeout:
+                self.state = "half-open"
+                return True
+            return False
+        return True
+```
+
+### Why circuit breaker?
+
+- Prevent retry storm.
+- Fail fast when provider down.
+- Allow recovery.
+- Reduce load on provider.
+
+---
+
+## 11. Rate limiting
+
+### Why rate limiting?
+
+| Limit | Mục đích |
+|---|---|
+| TPM (tokens per minute) | token budget |
+| RPM (requests per minute) | request count |
+| Concurrent | concurrency limit |
+| Per-user | per-user quota |
+| Per-tenant | per-tenant quota |
+| Global | global quota |
+
+### Why rate limiting?
+
+```python
+from collections import defaultdict
 import time
 
 
-def sleep_backoff(attempt: int, base=0.5, cap=8.0):
-    raw = min(cap, base * (2 ** attempt))
-    jittered = raw * (0.5 + random.random())
-    time.sleep(jittered)
+class RateLimiter:
+    def __init__(self, max_requests: int, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window = window_seconds
+        self.requests = defaultdict(list)
+
+    def allow(self, key: str) -> bool:
+        now = time.time()
+        self.requests[key] = [t for t in self.requests[key] if t > now - self.window]
+        if len(self.requests[key]) >= self.max_requests:
+            return False
+        self.requests[key].append(now)
+        return True
 ```
 
-## Retry budgets and amplification
+### Why rate limiting?
 
-Nếu mỗi request retry 3 lần, traffic có thể tăng 4x trong outage.
+- Per-user: 100 requests/min.
+- Per-tenant: 1,000 requests/min.
+- Global: 10,000 requests/min.
+- TPM: 1,000,000 tokens/min.
+- Concurrent: 10 requests.
 
-```text
-normal: 100 requests/sec
-provider degraded
-with 3 retries: up to 400 attempts/sec
-```
+---
 
-Mitigations:
+## 12. Observability
 
-- max attempts,
-- global retry budget,
-- circuit breaker,
-- respect Retry-After,
-- fail fast for non-retryable errors.
-
-## Idempotency
-
-Retry an toàn nếu operation idempotent. Generate text thường không có side effect, nhưng tool actions thì có.
-
-Danger:
-
-```text
-send_email() timeout → retry → user receives duplicate emails
-create_refund() timeout → retry → duplicate refund
-```
-
-Use idempotency keys:
-
-```text
-operation_id = hash(user_id + action_type + business_id)
-```
-
-## Rate limiting algorithms compared
-
-| Algorithm | Pros | Cons | Best for |
-|---|---|---|---|
-| Fixed window | đơn giản | burst ở boundary | quota đơn giản |
-| Sliding window log | chính xác | tốn memory | low-volume strict limit |
-| Sliding counter | cân bằng | approximate | web APIs |
-| Token bucket | cho burst hợp lý | cần tune refill | LLM request limits |
-| Leaky bucket | smooth traffic | ít linh hoạt burst | downstream protection |
-| Concurrency limit | bảo vệ workers/GPU | không đo quota dài hạn | expensive/slow calls |
-
-LLM systems thường cần kết hợp:
-
-```text
-per-user daily quota + per-minute token bucket + global concurrency limit
-```
-
-## Caching: exact, semantic, embedding
-
-### Exact cache
-
-Cache theo hash payload chính xác.
-
-Good for:
-
-- deterministic classification,
-- repeated eval,
-- fixed summarization,
-- embeddings.
-
-Cache key phải gồm:
-
-```text
-model + prompt_version + input + decoding_settings + schema_version + tenant_id
-```
-
-### Semantic cache
-
-Cache dựa trên similarity của query. Nguy hiểm hơn vì query gần nhau chưa chắc cùng answer.
-
-Risk:
-
-```text
-"refund policy for EU" gần "refund policy for US" nhưng answer khác
-```
-
-### Embedding cache
-
-Cache embeddings cho document chunks. Phải include embedding model/version.
-
-<Callout type="danger" title="Shared cache có thể leak tenant data">
-Nếu cache không include tenant/user permission context, user A có thể nhận answer của user B. Cache phải tenant-isolated hoặc chỉ dùng cho public data.
-</Callout>
-
-## Cache invalidation
-
-Invalidate khi đổi:
-
-- model,
-- prompt version,
-- schema,
-- retrieved context,
-- business rules,
-- source document,
-- user permissions.
-
-TTL strategy:
-
-| Data | TTL gợi ý |
-|---|---|
-| public static docs | dài |
-| user-specific answers | ngắn hoặc không cache |
-| embeddings | đến khi model/doc đổi |
-| eval outputs | versioned, dài |
-
-## Circuit breaker
-
-Circuit breaker ngăn hệ thống tiếp tục gọi provider đang lỗi.
-
-States:
-
-```text
-closed → normal
-open → fail fast / route fallback
-half-open → thử một ít requests để kiểm tra recovery
-```
-
-Signal:
-
-- error rate,
-- timeout rate,
-- p95 latency,
-- rate limit rate.
-
-## Fallback policy design
-
-Fallback không chỉ là “model B nếu model A lỗi”. Cần policy.
-
-Metadata cần biết:
-
-```text
-model_context_window
-supports_tools
-supports_json_schema
-data_policy_allowed
-cost_per_token
-latency_profile
-quality_score_by_task
-```
-
-Fallback constraints:
-
-- output schema compatible không?
-- context window đủ không?
-- provider có được phép nhận data này không?
-- model có tool calling tương đương không?
-- quality degradation có chấp nhận được không?
-
-## Observability: logs, metrics, traces
-
-### Structured logs
+### Why observability?
 
 ```json
 {
@@ -358,14 +481,14 @@ Fallback constraints:
   "output_tokens": 300,
   "latency_ms": 2400,
   "cache_hit": false,
-  "retry_count": 1,
-  "fallback_path": ["primary", "secondary"],
+  "retry_count": 0,
+  "fallback_path": [],
   "validation_status": "pass",
   "estimated_cost": 0.0042
 }
 ```
 
-### Metrics
+### Why observability?
 
 - requests/sec,
 - p50/p95/p99 latency,
@@ -373,200 +496,479 @@ Fallback constraints:
 - tokens/sec,
 - error rate,
 - retry rate,
-- fallback rate,
 - cache hit rate,
 - cost per tenant,
 - invalid JSON rate.
 
-### Traces
+---
 
-Trace spans:
+## 13. Cost tracking
 
-```text
-HTTP request
- ├── auth
- ├── token_count
- ├── cache_lookup
- ├── provider_call
- ├── validation
- └── logging
-```
-
-## Response validation layers
-
-| Layer | Example |
-|---|---|
-| Syntax | valid JSON |
-| Schema | required fields/types/enums |
-| Business | `amount <= allowed refund` |
-| Groundedness | answer supported by retrieved context |
-| Citation | cited doc IDs exist and support claim |
-| Safety | no secrets/toxicity/policy violation |
-| Tool args | user authorized for action |
-
-Validation failure strategy:
-
-```text
-repair → retry → fallback → controlled error → human review
-```
-
-## Implementation lab: middleware simulation
+### Why cost tracking?
 
 ```python
-import random
+def estimate_cost(input_tokens, output_tokens, input_price, output_price):
+    return (input_tokens * input_price + output_tokens * output_price) / 1_000_000
+
+
+def log_cost(request_id: str, tenant_id: str, model: str, input_tokens: int, output_tokens: int):
+    prices = {
+        "gpt-4o-mini": (0.15, 0.60),
+        "gpt-4o": (2.50, 10.00),
+        "claude-3-5-sonnet": (3.00, 15.00),
+    }
+    input_price, output_price = prices[model]
+    cost = estimate_cost(input_tokens, output_tokens, input_price, output_price)
+    log.info(
+        "request_id=%s tenant_id=%s model=%s cost=%.4f",
+        request_id, tenant_id, model, cost,
+    )
+    return cost
+```
+
+### Why cost tracking?
+
+- Per-request cost.
+- Per-tenant cost.
+- Per-prompt cost.
+- Per-route cost.
+- Per-model cost.
+- Per-day cost.
+
+---
+
+## 14. Error handling
+
+### Why error handling?
+
+```python
+class RetryableError(Exception):
+    pass
+
+
+class NonRetryableError(Exception):
+    pass
+
+
+def handle_error(error: Exception) -> str:
+    if isinstance(error, RetryableError):
+        return "retry"
+    if isinstance(error, NonRetryableError):
+        return "fail"
+    return "unknown"
+```
+
+### Why error handling?
+
+| Error | Strategy |
+|---|---|
+| 400 invalid request | fix payload |
+| 401/403 auth | check key |
+| 408 timeout | retry with timeout |
+| 429 rate limit | backoff + jitter |
+| 500/502/503/504 | retry then fallback |
+| context length | reduce context |
+| invalid JSON output | repair |
+| network error | retry |
+| provider down | fallback |
+
+---
+
+## 15. Streaming
+
+### Why streaming?
+
+```text
+Non-streaming: wait for all output → return
+Streaming:     return token-by-token
+```
+
+### Why streaming?
+
+- TTFT giảm.
+- User experience tốt hơn.
+- Long output không cần đợi.
+- Server có thể abort sớm.
+
+### Why streaming?
+
+```python
+def stream_chat(provider, messages):
+    stream = provider.chat(messages, stream=True)
+    for chunk in stream:
+        if chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
+```
+
+---
+
+## 16. Idempotency
+
+### Why idempotency?
+
+```text
+idempotency_key = hash(user_id + action_type + business_id)
+```
+
+### Why idempotency?
+
+```python
+def make_idempotent_request(
+    provider, messages, idempotency_key: str, idempotency_store: dict
+):
+    if idempotency_key in idempotency_store:
+        return idempotency_store[idempotency_key]
+    response = provider.chat(messages)
+    idempotency_store[idempotency_key] = response
+    return response
+```
+
+### Why idempotency?
+
+- Retry không duplicate.
+- User không nhận duplicate email.
+- Refund không chạy 2 lần.
+- Tool actions không duplicate.
+
+---
+
+## 17. Graceful degradation
+
+### Why graceful degradation?
+
+```python
+def graceful_degradation(provider, messages, fallback_response: str = "Service unavailable"):
+    try:
+        return provider.chat(messages)
+    except Exception:
+        return LLMResponse(
+            text=fallback_response,
+            model="fallback",
+            input_tokens=0,
+            output_tokens=0,
+        )
+```
+
+### Why graceful degradation?
+
+- Provider down: fallback response.
+- Rate limit: fallback response.
+- Timeout: fallback response.
+- Error: fallback response.
+- User không nhận 500 error.
+
+---
+
+## 18. Provider abstraction
+
+### Why provider abstraction?
+
+```python
+class LLMProvider(ABC):
+    @abstractmethod
+    def chat(self, messages: list[dict]) -> LLMResponse:
+        pass
+
+
+class OpenAIProvider(LLMProvider):
+    def __init__(self, client):
+        self.client = client
+
+    def chat(self, messages: list[dict]) -> LLMResponse:
+        resp = self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+        )
+        return LLMResponse(
+            text=resp.choices[0].message.content,
+            model=resp.model,
+            input_tokens=resp.usage.prompt_tokens,
+            output_tokens=resp.usage.completion_tokens,
+        )
+```
+
+### Why provider abstraction?
+
+- Switch provider easily.
+- Test with mock provider.
+- Fallback to other provider.
+- Different model for different task.
+- Cost tracking.
+
+---
+
+## Implementation Playbook: Resilient API Pipeline
+
+```python
 import time
+import hashlib
+import random
 from dataclasses import dataclass
+from abc import ABC, abstractmethod
 
 
 @dataclass
-class SimResult:
-    ok: bool
-    error: str | None
+class LLMResponse:
+    text: str
+    model: str
+    input_tokens: int
+    output_tokens: int
     latency_ms: int
-    cost: float
+    cache_hit: bool = False
+    retry_count: int = 0
+    fallback_path: list[str] = None
 
 
-class FakeProvider:
-    def call(self) -> SimResult:
-        r = random.random()
-        if r < 0.10:
-            return SimResult(False, "429", 100, 0.0)
-        if r < 0.18:
-            return SimResult(False, "500", 200, 0.0)
-        if r < 0.23:
-            return SimResult(False, "invalid_json", 800, 0.002)
-        return SimResult(True, None, random.randint(500, 2000), 0.004)
+class LLMProvider(ABC):
+    @abstractmethod
+    def chat(self, messages: list[dict]) -> LLMResponse:
+        pass
 
 
-def should_retry(error: str | None) -> bool:
-    return error in {"429", "500"}
+class CircuitBreaker:
+    def __init__(self, threshold: int = 5, reset_timeout: int = 60):
+        self.threshold = threshold
+        self.reset_timeout = reset_timeout
+        self.failure_count = 0
+        self.state = "closed"
+        self.last_failure_time = 0
+
+    def record_failure(self):
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+        if self.failure_count >= self.threshold:
+            self.state = "open"
+
+    def record_success(self):
+        self.failure_count = 0
+        self.state = "closed"
+
+    def can_call(self) -> bool:
+        if self.state == "closed":
+            return True
+        if self.state == "open":
+            if time.time() - self.last_failure_time > self.reset_timeout:
+                self.state = "half-open"
+                return True
+            return False
+        return True
 
 
-def call_with_policy(provider, max_attempts=3):
-    attempts = []
-    for attempt in range(max_attempts):
-        result = provider.call()
-        attempts.append(result)
-        if result.ok:
-            return result, attempts
-        if not should_retry(result.error):
-            return result, attempts
-        time.sleep(0.1 * (2 ** attempt))
-    return attempts[-1], attempts
+class RateLimiter:
+    def __init__(self, max_requests: int, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window = window_seconds
+        self.requests = {}
+
+    def allow(self, key: str) -> bool:
+        now = time.time()
+        self.requests[key] = [t for t in self.requests.get(key, []) if t > now - self.window]
+        if len(self.requests[key]) >= self.max_requests:
+            return False
+        self.requests[key].append(now)
+        return True
 
 
-provider = FakeProvider()
-result, attempts = call_with_policy(provider)
-print(result)
-print("attempts", len(attempts), [a.error for a in attempts])
+class ResilientPipeline:
+    def __init__(self, providers: list[LLMProvider], cache: dict, rate_limiter: RateLimiter, circuit_breaker: CircuitBreaker):
+        self.providers = providers
+        self.cache = cache
+        self.rate_limiter = rate_limiter
+        self.circuit_breaker = circuit_breaker
+
+    def chat(self, messages: list[dict], user_id: str, max_attempts: int = 3) -> LLMResponse:
+        if not self.rate_limiter.allow(user_id):
+            return LLMResponse(
+                text="Rate limit exceeded",
+                model="rate_limiter",
+                input_tokens=0,
+                output_tokens=0,
+                latency_ms=0,
+            )
+
+        key = hashlib.sha256(str(messages).encode()).hexdigest()
+        if key in self.cache:
+            return self.cache[key]
+
+        if not self.circuit_breaker.can_call():
+            return LLMResponse(
+                text="Service unavailable",
+                model="circuit_breaker",
+                input_tokens=0,
+                output_tokens=0,
+                latency_ms=0,
+            )
+
+        for provider in self.providers:
+            for attempt in range(max_attempts):
+                try:
+                    start = time.time()
+                    response = provider.chat(messages)
+                    response.latency_ms = int((time.time() - start) * 1000)
+                    response.retry_count = attempt
+                    self.circuit_breaker.record_success()
+                    self.cache[key] = response
+                    return response
+                except Exception:
+                    if attempt == max_attempts - 1:
+                        self.circuit_breaker.record_failure()
+                        continue
+                    delay = min(0.1 * (2 ** attempt), 10.0)
+                    delay += random.uniform(0, 0.1)
+                    time.sleep(delay)
+
+        return LLMResponse(
+            text="Service unavailable",
+            model="fallback",
+            input_tokens=0,
+            output_tokens=0,
+            latency_ms=0,
+            fallback_path=[p.__class__.__name__ for p in self.providers],
+        )
 ```
 
-Extend lab:
+**Extend lab milestones:**
 
-1. Run 1,000 simulated requests.
-2. Compute retry rate, failure rate, cost, p95 latency.
-3. Add cache hit probability.
-4. Add fallback provider.
-5. Plot metrics before/after circuit breaker.
+1. Add token budget guard.
+2. Add semantic caching.
+3. Add cost tracking.
+4. Add observability logging.
+5. Add idempotency.
+6. Add streaming.
+7. Add fallback chain.
+8. Add provider abstraction.
 
-## Common mistakes & debugging checklist
+---
 
-<Callout type="warning" title="Mistake 1: không có timeout">
-Request treo làm worker bị giữ, user chờ vô hạn và queue nghẽn. Luôn đặt timeout theo route/task.
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: không có retry policy">
+**Triệu chứng:** Retry không có max attempts, không có backoff, không có jitter. Retry storm khi provider down.
+
+**Fix:** Dùng max_attempts, exponential backoff, jitter, và circuit breaker.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: cache key thiếu model/settings/tenant">
-Cache key thiếu metadata có thể trả output sai config hoặc leak dữ liệu giữa tenants.
+<Callout type="warning" title="Pitfall 2: không có cache">
+**Triệu chứng:** Mỗi request gọi provider, không cache. Cost tăng, latency tăng.
+
+**Fix:** Dùng exact match cache, semantic cache, hoặc prefix cache.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: retry làm nhân cost và side effects">
-Retries trong outage có thể tạo retry storm. Retries với tool actions có thể gây duplicate side effects nếu thiếu idempotency.
+<Callout type="danger" title="Pitfall 3: không có circuit breaker">
+**Triệu chứng:** Retry storm khi provider down. 50,000 USD/tháng wasted. 1,000 users bị duplicate refund.
+
+**Fix:** Dùng circuit breaker: threshold, reset_timeout, open/closed/half-open states.
 </Callout>
 
-Checklist:
+---
 
-1. Middleware ordering có rõ không?
-2. Có token guard trước provider call không?
-3. Có timeout per route không?
-4. Retry matrix có phân biệt retryable/non-retryable không?
-5. Có retry budget/circuit breaker không?
-6. Rate limit có per-user/per-tenant/global không?
-7. Cache key có model/prompt/settings/schema/tenant không?
-8. Fallback có kiểm tra compliance/schema/context không?
-9. Logs có request_id và prompt_version không?
-10. Metrics có retry/fallback/cache/validation rates không?
-11. Response validation có nhiều lớp không?
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Retry policy | reliability | cost, retry storm |
+| Cache | cost giảm | tenant isolation, stale data |
+| Fallback | reliability | cost, complexity |
+| Circuit breaker | prevent retry storm | complexity |
+| Rate limit | protect | user experience |
+| Token budget guard | cost/latency | truncation |
+| Streaming | TTFT giảm | parsing phức tạp |
+| Idempotency | retry không duplicate | complexity |
+| Observability | debugging | cost |
+| Graceful degradation | UX | quality giảm |
+
+---
 
 ## Practice exercises
 
-1. Thiết kế middleware ordering cho `/chat` và `/extract-json`.
-2. Viết retry matrix cho 10 lỗi provider.
-3. Implement token bucket pseudocode.
-4. Thiết kế cache key cho RAG answer.
-5. Mô phỏng retry storm với 1,000 requests.
-6. Viết fallback policy cho primary GPT → Claude → local model.
-7. Tạo structured log schema cho LLM call.
-8. Thiết kế validation layers cho refund tool call.
+1. Viết retry policy với error matrix.
+2. Implement circuit breaker với 3 states.
+3. Implement rate limiter với per-user quota.
+4. Implement cache với exact match.
+5. Implement semantic cache với embeddings.
+6. Implement fallback chain với 2 providers.
+7. Implement token budget guard.
+8. Implement observability logging.
+9. Implement idempotency.
+10. Implement graceful degradation.
+
+---
 
 ## Knowledge check
 
-1. Vì sao middleware ordering quan trọng?
-2. Silent truncation nguy hiểm thế nào?
-3. Retry amplification là gì?
-4. Token bucket khác fixed window thế nào?
-5. Semantic cache nguy hiểm ở đâu?
-6. Circuit breaker có những state nào?
-7. Fallback policy cần metadata gì?
-8. Observability LLM cần log/metric gì?
-9. Response validation có những lớp nào?
-10. Vì sao idempotency quan trọng cho tool actions?
+1. Middleware ordering quan trọng vì sao?
+2. Token budget guard kiểm tra gì?
+3. Retry policy cần gì?
+4. Circuit breaker có mấy states?
+5. Caching có mấy loại?
+6. Fallback chain giúp gì?
+7. Rate limiting có mấy loại?
+8. Idempotency giúp gì?
+9. Observability cần gì?
+10. Graceful degradation giúp gì?
+
+---
 
 ## Answer key
 
-1. Vì các bước ảnh hưởng security, quota, cache correctness, cost và logs.
-2. Có thể cắt mất instruction/context mà app không biết, làm answer sai âm thầm.
-3. Retries làm traffic/cost tăng mạnh khi provider degraded.
-4. Fixed window đếm trong khung thời gian; token bucket refill dần và cho burst có kiểm soát.
-5. Query gần nhau về embedding nhưng answer đúng có thể khác theo jurisdiction/user/context.
-6. Closed, open, half-open.
-7. Context window, tool/schema support, data policy, cost, latency, task quality.
-8. Tokens, latency, cost, model, prompt version, cache hit, retry count, fallback path, validation status.
-9. Syntax, schema, business, groundedness, citation, safety, tool-argument authorization.
-10. Retry timeout có thể thực thi action nhiều lần nếu thiếu idempotency key.
+1. Rate limit trước khi tốn token, cache trước khi tốn provider call.
+2. Input tokens + output tokens <= context window.
+3. Max attempts, exponential backoff, jitter, error matrix.
+4. Closed, open, half-open.
+5. Exact match, semantic, prefix, response.
+6. Reliability: provider A fail, provider B.
+7. TPM, RPM, concurrent, per-user, per-tenant, global.
+8. Retry không duplicate side effects.
+9. Logs, metrics, traces, request_id, prompt_version, model, tokens, cost.
+10. User không nhận 500 error, fallback response.
 
-## Mini-project: Production LLM middleware simulator
+---
 
-**Task:** Build simulator cho LLM middleware xử lý 1,000 requests với lỗi ngẫu nhiên.
+## Mini-project: Resilient API pipeline
+
+**Task:** Build resilient API pipeline với retry, cache, fallback, circuit breaker, rate limit, observability.
 
 **Deliverables:**
 
+- Provider abstraction.
+- Retry policy with error matrix.
+- Circuit breaker with 3 states.
+- Rate limiter with per-user quota.
+- Cache with exact match.
+- Fallback chain with 2 providers.
 - Token budget guard.
-- Retry/backoff policy.
-- Rate limiting simulation.
-- Exact cache với SHA-256 key.
-- Fallback provider.
-- Circuit breaker.
-- Validation failure simulation.
-- Metrics report: p95 latency, retry rate, fallback rate, cache hit, cost.
+- Observability logging.
+- Cost tracking.
+- Graceful degradation.
 
 **Success criteria:**
 
-- Có retry matrix rõ.
-- Có log mỗi request với request_id.
-- Chứng minh retry policy không gây cost explosion.
-- Có so sánh before/after cache và circuit breaker.
-- Có analysis failure modes.
+- Retry có max attempts, backoff, jitter.
+- Cache có TTL.
+- Fallback có provider switch.
+- Circuit breaker có threshold, reset_timeout.
+- Rate limit có per-user quota.
+- Token budget guard có context window check.
+- Observability có request_id, prompt_version, model, tokens, cost.
+- Graceful degradation có fallback response.
+
+---
 
 ## Điểm cần nhớ
 
-- LLM integration là distributed systems engineering.
-- Middleware phải encode policy: auth, token, quota, cache, provider call, retry, fallback, validation, logging.
-- Retry cần matrix, budget, jitter và idempotency awareness.
-- Rate limiting nên kết hợp quota, token bucket và concurrency limit.
-- Cache phải versioned, tenant-safe và invalidated đúng.
-- Fallback tăng reliability nhưng có quality/security/schema tradeoffs.
-- Observability là điều kiện để debug cost, latency và quality.
+- API call là một pipeline, không chỉ là "gọi provider".
+- Middleware ordering: rate limit, token budget, cache, provider call, validation, caching, logging.
+- Retry policy cần max attempts, backoff, jitter, error matrix.
+- Circuit breaker ngăn retry storm.
+- Cache giảm cost, tăng latency.
+- Fallback tăng reliability.
+- Rate limit protect provider.
+- Idempotency ngăn duplicate side effects.
+- Observability cần logs, metrics, traces.
+- Graceful degradation giữ UX.
+
+---
 
 ## Next chapter bridge
 
-Integration patterns vẫn chưa đủ nếu secrets bị leak hoặc data access sai. Chương tiếp theo: **Secure API Integration** — threat modeling, secrets lifecycle, secure RAG authorization, tool permissions và safe logging.
+API pipeline có resilience rồi, nhưng còn security. Chương tiếp theo: **Secure AI API Integration** — API key management, PII redaction, rate limiting, audit logging, prompt injection defense, data residency, and compliance.

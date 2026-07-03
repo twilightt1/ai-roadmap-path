@@ -1,508 +1,828 @@
-Working with AI APIs là nơi lý thuyết LLM gặp production software. Một provider API không chỉ là endpoint trả text; nó là một **contract** gồm request schema, response schema, capability limits, pricing, streaming behavior, tool calling semantics, data policy và failure modes. AI Engineer phải hiểu contract này để build hệ thống ổn định, portable và đo được.
+Working with AI APIs là bước biến LLM từ demo thành hệ thống production. Ở cấp độ giáo sư AI, bạn không chỉ "gọi `client.chat.completions.create`"; bạn phải hiểu **provider contracts** (model, params, context, token, cost, error), tool calling state machine, embeddings, streaming, batch, vision và provider abstraction. Mỗi quyết định này ảnh hưởng cost, latency, reliability và correctness.
 
-## Why this matters
+---
 
-Prototype gọi API một lần rất dễ. Production khó hơn vì:
+## 1. The Incident (Tình huống sự cố)
 
-- mỗi provider có message format khác nhau,
-- tool calling không hoàn toàn giống nhau,
-- streaming event format khác nhau,
-- token accounting khác nhau,
-- embeddings model đổi là đổi cả vector space,
-- vision input có cost/privacy/failure modes riêng,
-- batch jobs có partial failures,
-- provider outages/rate limits xảy ra thật.
+<Callout type="danger" title="Báo cáo sự cố: Tool call chạy 2 lần, user nhận 2 email, 5,000 user bị duplicate refund">
+**Bối cảnh:** Một team build chatbot có tool calling để send email và refund. Họ dùng OpenAI tool calling, deploy production, tool chạy ngon. Họ không có retry policy, không có idempotency, không có timeout.
 
-<Callout type="warning" title="Đừng nhầm model ability với API feature">
-Một model có thể giỏi reasoning nhưng provider API chưa hỗ trợ structured output tốt. Một provider có tool calling tiện nhưng model cụ thể có thể yếu ở domain của bạn. Luôn tách capability của model và capability của API platform.
+**Sự cố:** API timeout 1 lần. Họ set retry=True. Retry gọi lại tool. Tool send_email chạy 2 lần. User nhận 2 email. Refund tool chạy 2 lần. 5,000 user bị duplicate refund.
+
+1. Không có timeout — request treo.
+2. Retry không idempotency — retry gọi tool 2 lần.
+3. Không có idempotency key — tool không biết retry là request cũ.
+4. Không có tool result validation — tool không kiểm tra output.
+5. Không có observability — không biết tool chạy 2 lần.
+
+**Hậu quả:** 5,000 user bị duplicate refund. Hóa đơn refund 2x. Họ phải tắt chatbot, refund users, audit log, và thiết kế lại tool calling state machine. Hóa đơn incident response 2 tuần.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: tool calling là state machine, không phải function call. Mỗi request phải có trace: input tokens, output tokens, prompt version, model, latency, cache hit, retry count, fallback path, validation status. LLM call không được là black box. Provider API là một dependency, không phải "hộp đen".
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Thiết kế API contract cho chat/generate/embed/stream/tool calls.
-2. So sánh OpenAI, Anthropic, Gemini và local/open providers theo capability matrix.
-3. Hiểu chat messages, structured output, tool calling và streaming ở mức state machine.
-4. Dùng embeddings API với hiểu biết về vector space, metrics và retrieval evaluation.
-5. Nhận diện multimodal/vision failure modes.
-6. Thiết kế batch job lifecycle với retries/partial failures.
-7. Viết provider abstraction có mock provider và contract tests.
-8. Log usage/cost/latency an toàn cho mỗi request.
+## 2. Architecture Blueprint (API as a Contract)
 
-## Prerequisites
-
-Bạn nên biết:
-
-- HTTP, JSON, SDK, environment variables.
-- Prompt engineering và structured output.
-- Embeddings/RAG basics.
-- Async/streaming concept.
-
-## Core intuition: providers differ, capabilities repeat
-
-Các provider khác nhau, nhưng capability lặp lại:
+API call là một **contract** giữa app và provider. Mỗi biến số ảnh hưởng cost, latency, correctness và security.
 
 ```text
-chat/generate
-stream
-embed
-vision/multimodal
-tool calling
-structured output
-batch
-usage metadata
+[ App code ]
+        │
+        ▼
+[ Provider abstraction ]
+        │
+        ├── model, params, context, token budget
+        │
+        ▼
+[ Provider SDK / HTTP ]
+        │
+        ├── timeout, retry, error handling
+        │
+        ▼
+[ Provider endpoint ]
+        │
+        ├── response, streaming, tool calls
+        │
+        ▼
+[ Validation, parsing, logging ]
+        │
+        ▼
+[ Return to app ]
 ```
 
-Vì vậy app nên phụ thuộc vào interface nội bộ, không phụ thuộc trực tiếp mọi nơi vào SDK cụ thể.
+---
+
+## 3. Core intuition: API as a contract
+
+LLM API là một **contract** giữa app và provider. Mỗi biến số ảnh hưởng cost, latency, correctness và security.
 
 ```text
-Application → LLMClient interface → Provider adapters → OpenAI/Anthropic/Gemini/Local
+model, params, context, tokens, tools, errors, cost, latency
 ```
 
-## Provider capability matrix
-
-| Capability | OpenAI-style | Anthropic Claude | Gemini | Local/vLLM/Ollama |
-|---|---|---|---|---|
-| Chat/messages | có | có | có | tùy wrapper |
-| System instruction | message/field tùy API | thường field riêng | field/config tùy SDK | chat template |
-| Tool calling | mạnh | có | có/varies | model-dependent |
-| Structured output | JSON/schema tùy model | varies | varies | thường manual/constrained decoder |
-| Streaming | SSE/events | events | events | server-dependent |
-| Embeddings | có | không phải trọng tâm chính | có | model-dependent |
-| Vision | có | có | mạnh | model-dependent |
-| Batch | có/varies | varies | varies | tự build |
-| Token counting | tokenizer/provider-specific | provider-specific | provider-specific | tokenizer local |
-| Data policy | theo provider/plan | theo provider/plan | theo provider/plan | bạn tự chịu trách nhiệm |
-
-Bảng này không thay thế docs. Nó dạy bạn phải hỏi đúng câu hỏi trước khi chọn provider.
-
-## Chat API contract design
-
-Một chat contract tối thiểu nên có:
-
-```json
-{
-  "model": "string",
-  "messages": [
-    {"role": "system", "content": "..."},
-    {"role": "user", "content": "..."}
-  ],
-  "temperature": 0.2,
-  "max_tokens": 1000
-}
-```
-
-Response contract nên expose:
-
-```json
-{
-  "text": "...",
-  "model": "...",
-  "finish_reason": "stop|length|tool_call|safety|error",
-  "usage": {"input_tokens": 123, "output_tokens": 456},
-  "latency_ms": 1500
-}
-```
-
-Professor-level point: nếu app layer không có normalized `finish_reason`, bạn sẽ khó phân biệt answer kết thúc tự nhiên, bị cắt vì max tokens, bị safety block, hay cần tool call.
-
-## OpenAI-style chat example
+Một request LLM production không chỉ là:
 
 ```python
-from openai import OpenAI
-
-client = OpenAI()
-
-resp = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[
-        {"role": "system", "content": "You are a concise AI tutor."},
-        {"role": "user", "content": "Explain KV cache in 3 bullets."},
-    ],
-    temperature=0.2,
-)
-
-print(resp.choices[0].message.content)
-print(resp.usage)
+response = client.chat.completions.create(...)
 ```
 
-## Anthropic and Gemini differences
-
-Anthropic-style APIs thường tách `system` khỏi `messages`. Gemini-style SDK có abstraction riêng cho `contents`, multimodal parts và generation config. Đây là lý do cần adapter.
-
-```python
-class AnthropicAdapter:
-    def generate(self, messages, model, system=None, **kwargs):
-        # Convert internal message format to Anthropic format
-        ...
-
-class GeminiAdapter:
-    def generate(self, messages, model, **kwargs):
-        # Convert internal messages to Gemini contents
-        ...
-```
-
-<Callout type="tip" title="Normalize ở boundary">
-Chỉ adapter layer nên biết provider-specific schema. Business logic nên gọi interface chung.
-</Callout>
-
-## Tool calling execution loop
-
-Tool calling không có nghĩa model tự chạy function. Model chỉ đề xuất action có structured arguments.
-
-State machine:
+Nó là một pipeline:
 
 ```text
-User request
-   ↓
-Model response: tool_call(name, arguments)
-   ↓
-Validate schema
-   ↓
-Authorize user/action
-   ↓
-Execute tool in app/backend
-   ↓
-Sanitize observation
-   ↓
-Send observation back to model
-   ↓
-Model final answer
-   ↓
-Validate final response
+build prompt → validate → send → retry → stream → parse → validate → log → return
 ```
 
-Risks:
+---
 
-- model chọn sai tool,
-- arguments không hợp lệ,
-- tool result chứa prompt injection,
-- tool có side effect,
-- retry tạo duplicate action,
-- loop tool call vô hạn.
+## 4. Provider contracts
 
-Controls:
+### Model
 
-- max tool calls,
-- schema validation,
-- permission checks,
-- idempotency keys,
-- human confirmation cho actions rủi ro.
+Mỗi provider có model naming. Model quyết định:
 
-## Structured output across providers
+- context window,
+- capability (reasoning, tool use, vision),
+- cost,
+- latency,
+- output format,
+- safety policy.
 
-Structured output có nhiều mức:
+### Parameters
 
-| Level | Cơ chế | Độ tin cậy |
+| Parameter | Mục đích |
+|---|---|
+| `temperature` | độ ngẫu nhiên |
+| `top_p` | nucleus sampling |
+| `max_tokens` | giới hạn output |
+| `stop` | stop sequences |
+| `response_format` | JSON mode |
+| `seed` | reproducibility |
+| `n` | số candidates |
+| `tool_choice` | tool calling behavior |
+
+### Context window
+
+Input tokens + output tokens phải <= context window.
+
+```text
+system + developer + chat_history + retrieved_context + user_query + output_budget <= context_window
+```
+
+### Token
+
+Token là đơn vị model xử lý. Token không phải từ. Token có thể là prefix, word, hoặc subword.
+
+```text
+1 token ≈ 0.75 English word
+```
+
+Tokenization có thể khác nhau giữa model, ngôn ngữ, và encoding.
+
+### Cost
+
+| Pricing | Ý nghĩa |
+|---|---|
+| `input_price` | USD per 1M input tokens |
+| `output_price` | USD per 1M output tokens |
+| `cached_input_price` | giá cho cached input |
+| `tool_call_price` | tool call pricing |
+| `batch_price` | giảm giá cho batch |
+
+### Error
+
+| Error | Retry? | Strategy |
 |---|---|---|
-| Prompt-only JSON | “Return JSON” | thấp-trung bình |
-| JSON mode | provider ép JSON syntax | tốt hơn |
-| JSON schema/structured output | provider constrained theo schema | mạnh nếu hỗ trợ |
-| Tool calling | model trả function args | mạnh cho actions |
-| External constrained decoding | grammar/parser ở serving | mạnh nhưng phức tạp |
+| 400 invalid request | no | fix payload |
+| 401/403 auth | no | check key |
+| 408 timeout | yes | retry with timeout |
+| 429 rate limit | yes | backoff + jitter |
+| 500/502/503/504 | yes | retry then fallback |
+| context length | no | reduce context |
+| invalid JSON output | repair | schema repair loop |
 
-Dù dùng level cao, vẫn validate ở app.
+---
 
-## Streaming protocol details
+## 5. Tool calling state machine
 
-Streaming thường dùng SSE-like events.
-
-SSE frame đơn giản:
-
-```text
-event: token
-data: {"delta":"Hello"}
-
-event: token
-data: {"delta":" world"}
-
-event: done
-data: {"usage":{"input_tokens":10,"output_tokens":2}}
-```
-
-Production issues:
-
-- client disconnect,
-- provider stream error giữa chừng,
-- partial unsafe output,
-- final usage metadata có thể đến cuối,
-- cancellation phải propagate tới provider,
-- UI cần biết stream ended normally hay error.
-
-## Embeddings API: vector space contract
-
-Embedding model biến text thành vector. Nhưng vector chỉ meaningful trong cùng một vector space.
+Tool calling là một **state machine**, không phải function call.
 
 ```text
-embedding_model_A(text) ≠ embedding_model_B(text)
+[ User: "What is the refund status?" ]
+        │
+        ▼
+[ Model decides to call tool ]
+        │
+        ▼
+[ Tool: check_refund_status(order_id=123) ]
+        │
+        ▼
+[ Model: tool result observation ]
+        │
+        ▼
+[ Model: "Your refund is processing..." ]
+        │
+        ▼
+[ Return to user ]
 ```
 
-Nếu đổi embedding model, thường phải re-embed toàn bộ corpus.
+Key insight: tool calling không phải "model gọi function". Model **chỉ output tool call arguments**. App phải validate, execute, và trả result.
 
-Key concepts:
+```text
+model → tool call arguments (JSON)
+        │
+        ▼
+[ app validates arguments ]
+        │
+        ▼
+[ app executes tool with permission ]
+        │
+        ▼
+[ app returns tool result ]
+        │
+        ▼
+[ model continues with tool result ]
+```
 
-| Concept | Ý nghĩa |
-|---|---|
-| dimension | số chiều vector |
-| cosine | đo cùng hướng |
-| dot product | giống cosine nếu vectors normalized |
-| L2 distance | khoảng cách Euclidean |
-| normalization | làm norm = 1 |
-| ANN index | approximate nearest neighbor search |
-
-Example:
+### Tool result validation
 
 ```python
-from openai import OpenAI
+def validate_tool_call(tool_name: str, arguments: dict) -> bool:
+    if tool_name == "check_refund_status":
+        return "order_id" in arguments and isinstance(arguments["order_id"], str)
+    if tool_name == "create_refund":
+        return "order_id" in arguments and "amount" in arguments
+    return False
 
-client = OpenAI()
-resp = client.embeddings.create(
+
+def execute_tool(tool_name: str, arguments: dict, user_id: str) -> dict:
+    if not validate_tool_call(tool_name, arguments):
+        return {"error": "invalid arguments"}
+    if not check_permission(user_id, tool_name, arguments):
+        return {"error": "permission denied"}
+    return run_tool(tool_name, arguments)
+```
+
+---
+
+## 6. Embeddings
+
+Embeddings là vector representation của text. Embeddings dùng cho:
+
+- semantic search,
+- RAG,
+- classification,
+- clustering,
+- similarity.
+
+### Model
+
+| Model | Mục đích |
+|---|---|
+| `text-embedding-3-small` | cheap, general |
+| `text-embedding-3-large` | higher quality |
+| `voyage-3` | high quality |
+| `bge-m3` | multilingual, open source |
+
+### Dimensions
+
+| Dimension | Ý nghĩa |
+|---|---|
+| `1536` | text-embedding-3-small |
+| `3072` | text-embedding-3-large |
+| `custom` | dimensional reduction |
+
+```python
+response = client.embeddings.create(
     model="text-embedding-3-small",
-    input=["Refunds are available within 30 days.", "Reset your password."],
+    input="hello world",
+    dimensions=512,
 )
-
-vectors = [item.embedding for item in resp.data]
-print(len(vectors), len(vectors[0]))
 ```
 
-## Retrieval evaluation
-
-Embeddings API không đủ. Bạn phải đo retrieval:
-
-| Metric | Câu hỏi |
-|---|---|
-| recall@k | relevant chunk có nằm trong top-k không? |
-| MRR | relevant result xuất hiện sớm cỡ nào? |
-| nDCG | ranking có tốt khi relevance nhiều mức không? |
-
-RAG production thường dùng:
-
-```text
-sparse retrieval + dense embeddings + reranker
-```
-
-Dense search bắt semantic similarity; sparse search bắt exact IDs/error codes; reranker cải thiện precision.
-
-## Vision and multimodal APIs
-
-Vision model nhận image/document/screenshot. Use cases:
-
-- chart QA,
-- invoice extraction,
-- screenshot troubleshooting,
-- OCR fallback,
-- UI automation.
-
-Failure modes:
-
-- đọc sai số trong chart,
-- bỏ sót footnote,
-- nhầm layout bảng,
-- screenshot chứa prompt injection,
-- ảnh mờ/downscale mất chữ,
-- cost tăng mạnh với nhiều pages.
-
-Decision rule:
-
-```text
-PDF text selectable → parse/OCR + RAG trước
-complex image/chart → vision model có thể cần
-100-page scan → OCR/layout pipeline + selective vision, không gửi hết bừa
-```
-
-## Batch API lifecycle
-
-Batch phù hợp jobs offline:
-
-- classify 1M tickets,
-- embed documents,
-- summarize archives,
-- run prompt eval.
-
-Lifecycle:
-
-```text
-prepare JSONL requests
-   ↓
-upload batch
-   ↓
-provider validates
-   ↓
-running
-   ↓
-completed with outputs + errors
-   ↓
-reconcile partial failures
-   ↓
-retry failed items idempotently
-```
-
-Cần:
-
-- request IDs,
-- idempotency,
-- partial failure handling,
-- cost accounting,
-- output validation.
-
-## Testing provider abstractions
-
-Provider wrapper phải test được không cần gọi API thật.
-
-Test types:
-
-| Test | Mục đích |
-|---|---|
-| mock provider tests | app logic không cần external API |
-| contract tests | adapter trả normalized schema đúng |
-| golden tests | fixed input → expected parsed behavior |
-| streaming snapshot tests | event sequence đúng |
-| error tests | rate limit, timeout, malformed response |
-
-## Implementation lab: provider-agnostic client
+### Batch
 
 ```python
+response = client.embeddings.create(
+    model="text-embedding-3-small",
+    input=["text1", "text2", "text3"],
+)
+```
+
+---
+
+## 7. Streaming
+
+### Why streaming?
+
+```text
+Non-streaming: wait for all output → return
+Streaming:     return token-by-token
+```
+
+Streaming giảm TTFT (time-to-first-token) và tăng UX. User thấy output ngay khi model sinh, không phải đợi toàn bộ.
+
+### Streaming code
+
+```python
+stream = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "hi"}],
+    stream=True,
+)
+for chunk in stream:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+```
+
+### Stream parsing challenges
+
+- Tool call args có thể split across chunks.
+- Need buffer.
+- Need handle partial JSON.
+- Need handle stop signal.
+- Need handle errors.
+
+### Stream parsing
+
+```python
+def parse_tool_call_stream(stream):
+    tool_args = ""
+    for chunk in stream:
+        delta = chunk.choices[0].delta
+        if delta.tool_calls:
+            tool_args += delta.tool_calls[0].function.arguments
+        if chunk.choices[0].finish_reason:
+            break
+    return json.loads(tool_args)
+```
+
+---
+
+## 8. Batch
+
+### Why batch?
+
+Batch API cho gửi nhiều requests không đồng thời, giảm cost.
+
+| Use case | Batch |
+|---|---|
+| Eval set | 50% off |
+| Bulk processing | 50% off |
+| Non-urgent | 24h latency |
+| Batch API | 50% off |
+
+Batch API:
+
+```text
+batch of 1,000 requests → 50% off
+```
+
+---
+
+## 9. Vision
+
+### Why vision?
+
+Multimodal model có thể nhận image.
+
+```text
+[image, text] → model → answer
+```
+
+### Vision code
+
+```python
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What is in this image?"},
+            {"type": "image_url", "image_url": {"url": "https://..."}},
+        ],
+    }],
+)
+```
+
+### Vision considerations
+
+- Image resolution: dùng lowest detail.
+- Image count: chỉ dùng 1 image.
+- Image format: prefer JPEG, WebP.
+- Image size: 1MB per image.
+- Image tokens: 85-280 tokens per image.
+
+---
+
+## 10. Provider abstraction
+
+### Why abstraction?
+
+Provider abstraction giúp switch provider, test với mock, fallback, cost tracking, và different model cho different task.
+
+```python
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Protocol, Iterable
-
-
-@dataclass
-class LLMUsage:
-    input_tokens: int = 0
-    output_tokens: int = 0
 
 
 @dataclass
 class LLMResponse:
     text: str
     model: str
-    finish_reason: str
-    usage: LLMUsage
+    input_tokens: int
+    output_tokens: int
 
 
-class ChatProvider(Protocol):
-    def generate(self, messages: list[dict], model: str, **kwargs) -> LLMResponse:
-        ...
+class LLMProvider(ABC):
+    @abstractmethod
+    def chat(self, messages: list[dict]) -> LLMResponse:
+        pass
 
-    def stream(self, messages: list[dict], model: str, **kwargs) -> Iterable[dict]:
-        ...
-
-
-class MockProvider:
-    def generate(self, messages, model, **kwargs):
-        return LLMResponse(
-            text="mock response",
-            model=model,
-            finish_reason="stop",
-            usage=LLMUsage(input_tokens=10, output_tokens=2),
-        )
-
-    def stream(self, messages, model, **kwargs):
-        yield {"event": "token", "delta": "mock"}
-        yield {"event": "done", "usage": {"input_tokens": 10, "output_tokens": 1}}
+    @abstractmethod
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        pass
 ```
 
-Extend lab:
+### OpenAI implementation
 
-1. Add OpenAI adapter.
-2. Add Anthropic/Gemini adapter or second mock.
-3. Add contract tests for normalized response.
-4. Add streaming test.
-5. Add usage logging.
+```python
+class OpenAIProvider(LLMProvider):
+    def __init__(self, client):
+        self.client = client
 
-## Common mistakes & debugging checklist
+    def chat(self, messages: list[dict]) -> LLMResponse:
+        resp = self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+        )
+        return LLMResponse(
+            text=resp.choices[0].message.content,
+            model=resp.model,
+            input_tokens=resp.usage.prompt_tokens,
+            output_tokens=resp.usage.completion_tokens,
+        )
+```
 
-<Callout type="warning" title="Mistake 1: gọi SDK trực tiếp khắp codebase">
-Không có abstraction sẽ khó đổi provider, thêm fallback, log usage hoặc test.
+### Benefits
+
+- Switch provider easily.
+- Test with mock provider.
+- Fallback to other provider.
+- Different model for different task.
+- Cost tracking.
+
+---
+
+## 11. Provider comparison
+
+| Feature | OpenAI | Anthropic | Google |
+|---|---|---|---|
+| Tool calling | yes | yes | yes |
+| Streaming | yes | yes | yes |
+| Vision | yes | yes | yes |
+| Batch | yes | yes | yes |
+| JSON mode | yes | yes | yes |
+| Embeddings | yes | yes | yes |
+| Long context | 128k | 200k | 1M |
+| Cost | medium | medium | low |
+| Latency | medium | low | low |
+
+---
+
+## 12. Testing provider wrappers
+
+### Why test?
+
+- Mock provider cho unit tests.
+- Test error handling.
+- Test streaming.
+- Test tool calling.
+- Test rate limit.
+- Test fallback.
+
+### Mock provider
+
+```python
+class MockProvider:
+    def __init__(self, response: str):
+        self.response = response
+        self.call_count = 0
+
+    def chat(self, messages: list[dict]) -> LLMResponse:
+        self.call_count += 1
+        return LLMResponse(
+            text=self.response,
+            model="mock",
+            input_tokens=100,
+            output_tokens=50,
+        )
+```
+
+### Test retry
+
+```python
+def test_retry_on_500():
+    provider = MockProvider(response="error")
+    provider.call_count = 0
+    result, attempts = call_with_policy(provider, max_attempts=3)
+    assert provider.call_count == 3
+    assert len(attempts) == 3
+```
+
+---
+
+## 13. Token budget
+
+### Why budget?
+
+```text
+system + developer + chat_history + retrieved_context + user_query + output_budget <= context_window
+```
+
+### Token counting
+
+```python
+import tiktoken
+
+
+def count_tokens(text: str, model: str) -> int:
+    enc = tiktoken.encoding_for_model(model)
+    return len(enc.encode(text))
+```
+
+### Token counting libraries
+
+- Use `tiktoken` for OpenAI.
+- Use `transformers` for local models.
+- Use `anthropic` for Anthropic.
+- Use `google.generativeai` for Gemini.
+- Use `voyage` for embeddings.
+
+---
+
+## 14. Cost estimation
+
+```python
+def estimate_cost(input_tokens, output_tokens, input_price, output_price):
+    return (input_tokens * input_price + output_tokens * output_price) / 1_000_000
+
+
+def estimate_cost_per_request(input_tokens, output_tokens, model):
+    prices = {
+        "gpt-4o-mini": (0.15, 0.60),
+        "gpt-4o": (2.50, 10.00),
+        "claude-3-5-sonnet": (3.00, 15.00),
+    }
+    input_price, output_price = prices[model]
+    return estimate_cost(input_tokens, output_tokens, input_price, output_price)
+```
+
+---
+
+## 15. Error handling
+
+### Why error handling?
+
+```python
+def call_with_retry(provider, messages, max_attempts=3):
+    for attempt in range(max_attempts):
+        try:
+            return provider.chat(messages)
+        except Exception as e:
+            if attempt == max_attempts - 1:
+                raise
+            time.sleep(0.1 * (2 ** attempt))
+```
+
+### Error matrix
+
+- 400: fix payload.
+- 401/403: check key.
+- 408: timeout.
+- 429: rate limit.
+- 500/502/503/504: server error.
+- Context length: reduce context.
+- Invalid JSON: repair.
+
+---
+
+## 16. Observability
+
+### Why observability?
+
+```json
+{
+  "request_id": "req_123",
+  "tenant_id": "t_abc",
+  "route": "/chat",
+  "prompt_version": "rag_answer_v3",
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "input_tokens": 1200,
+  "output_tokens": 300,
+  "latency_ms": 2400,
+  "cache_hit": false,
+  "retry_count": 0,
+  "fallback_path": [],
+  "validation_status": "pass",
+  "estimated_cost": 0.0042
+}
+```
+
+### Metrics
+
+- requests/sec,
+- p50/p95/p99 latency,
+- TTFT,
+- tokens/sec,
+- error rate,
+- retry rate,
+- cache hit rate,
+- cost per tenant,
+- invalid JSON rate.
+
+---
+
+## 17. API key management
+
+- Store in secret manager.
+- Rotate keys.
+- Use separate keys for dev/stage/prod.
+- Use scoped keys.
+- Never expose in frontend.
+- Use backend proxy.
+
+---
+
+## 18. Rate limiting
+
+| Limit | Mục đích |
+|---|---|
+| TPM (tokens per minute) | token budget |
+| RPM (requests per minute) | request count |
+| Concurrent | concurrency limit |
+| Per-user | per-user quota |
+| Per-tenant | per-tenant quota |
+| Global | global quota |
+
+---
+
+## Implementation Playbook: Provider Abstraction with Tool Calling
+
+```python
+import json
+from dataclasses import dataclass
+from abc import ABC, abstractmethod
+from typing import Callable
+
+
+@dataclass
+class LLMResponse:
+    text: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    tool_calls: list[dict] | None = None
+
+
+class LLMProvider(ABC):
+    @abstractmethod
+    def chat(self, messages: list[dict], tools: list[dict] | None = None) -> LLMResponse:
+        pass
+
+
+class MockProvider(LLMProvider):
+    def __init__(self, response: str, tool_calls: list[dict] | None = None):
+        self.response = response
+        self.tool_calls = tool_calls
+        self.call_count = 0
+
+    def chat(self, messages: list[dict], tools: list[dict] | None = None) -> LLMResponse:
+        self.call_count += 1
+        return LLMResponse(
+            text=self.response,
+            model="mock",
+            input_tokens=100,
+            output_tokens=50,
+            tool_calls=self.tool_calls,
+        )
+
+
+def run_tool_call(tool_name: str, arguments: dict, user_id: str) -> dict:
+    if tool_name == "check_refund_status":
+        return {"status": "processing", "order_id": arguments["order_id"]}
+    if tool_name == "create_refund":
+        return {"status": "created", "order_id": arguments["order_id"]}
+    return {"error": "unknown tool"}
+
+
+def chat_with_tools(provider, messages, tools, user_id, max_iterations=3):
+    for _ in range(max_iterations):
+        response = provider.chat(messages, tools)
+        if response.tool_calls:
+            for call in response.tool_calls:
+                args = json.loads(call["function"]["arguments"])
+                result = run_tool_call(call["function"]["name"], args, user_id)
+                messages.append({"role": "tool", "content": json.dumps(result), "tool_call_id": call["id"]})
+        else:
+            return response
+    return response
+
+
+provider = MockProvider(
+    response="Your refund is processing.",
+    tool_calls=[{
+        "id": "call_1",
+        "function": {
+            "name": "check_refund_status",
+            "arguments": json.dumps({"order_id": "123"}),
+        },
+    }],
+)
+messages = [{"role": "user", "content": "What is the refund status?"}]
+result = chat_with_tools(provider, messages, tools=[], user_id="user_1")
+print(result)
+```
+
+**Extend lab milestones:**
+
+1. Add streaming.
+2. Add retry policy.
+3. Add error handling.
+4. Add cost tracking.
+5. Add token budget guard.
+6. Add tool result validation.
+7. Add fallback provider.
+8. Add observability logging.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: không có timeout">
+**Triệu chứng:** Request treo làm worker bị giữ, user chờ vô hạn và queue nghẽn. Luôn đặt timeout theo route/task.
+
+**Fix:** Đặt timeout theo route/task. Dùng `timeout` parameter trong SDK.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: đổi embedding model mà không re-embed corpus">
-Embedding spaces khác nhau. Query vector mới so với document vectors cũ có thể làm retrieval hỏng âm thầm.
+<Callout type="warning" title="Pitfall 2: không có tool result validation">
+**Triệu chứng:** Tool result có thể bị injection, sai format, hoặc không có permission. Validate tool result trước khi dùng.
+
+**Fix:** Validate tool arguments, check permission, execute tool, validate result.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: để model tool call trực tiếp thành action">
-Model đề xuất arguments; app phải validate, authorize, execute và audit. Đặc biệt với email, payment, database writes.
+<Callout type="danger" title="Pitfall 3: retry không idempotency">
+**Triệu chứng:** Retry gọi tool 2 lần, user nhận duplicate email/refund. Tool actions cần idempotency key.
+
+**Fix:** Dùng idempotency key: `operation_id = hash(user_id + action_type + business_id)`.
 </Callout>
 
-Checklist:
+---
 
-1. Có provider abstraction không?
-2. Response schema có normalized `finish_reason`/usage không?
-3. Tool args có schema validation không?
-4. Tool action có authorization không?
-5. Streaming có handle disconnect/error không?
-6. Embeddings có lưu model/version/dimension không?
-7. Retrieval có eval recall@k/MRR không?
-8. Vision input có privacy/cost preprocessing không?
-9. Batch jobs có request IDs và partial retry không?
-10. Có mock/contract tests không?
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Streaming | TTFT giảm | parsing phức tạp |
+| Batch | 50% off | 24h latency |
+| Vision | multimodal | 1MB per image |
+| Tool calling | actions | idempotency, permission |
+| Provider abstraction | switch/fallback | complexity |
+| Long context | recall tốt | cost/latency |
+| Embeddings | semantic search | cost, storage |
+| Retry | reliability | cost, retry storm |
+| Cache | cost giảm | tenant isolation |
+| Provider switch | cost/quality | API differences |
+
+---
 
 ## Practice exercises
 
-1. Viết `ChatProvider` protocol và `MockProvider`.
-2. Normalize response từ 2 provider giả định.
-3. Thiết kế tool calling state machine cho `search_docs` và `send_email`.
-4. Tạo embedding store nhỏ và tính cosine top-k.
-5. Tính recall@3 cho 20 queries.
-6. Thiết kế SSE event format cho streaming.
-7. Viết batch job schema với request IDs.
-8. Tạo provider capability matrix cho 3 providers bạn dùng.
+1. Viết provider abstraction với 2 providers.
+2. Implement tool calling state machine với 2 tools.
+3. Add streaming parser.
+4. Add retry policy với error matrix.
+5. Add cost tracking.
+6. Add token budget guard.
+7. Add fallback provider.
+8. Add observability logging.
+9. Add batch API.
+10. Add vision API.
+
+---
 
 ## Knowledge check
 
-1. Vì sao model ability khác API feature?
-2. Provider abstraction nên normalize những gì?
-3. Tool calling flow production gồm bước nào?
-4. Vì sao vẫn validate structured output dù provider hỗ trợ schema?
-5. Đổi embedding model cần làm gì?
-6. Streaming production có failure modes nào?
-7. Batch API cần xử lý partial failures ra sao?
-8. Contract tests cho provider wrapper kiểm tra gì?
+1. Provider contract gồm những gì?
+2. Tool calling là state machine vì sao?
+3. Embeddings dùng cho task nào?
+4. Streaming giảm metric nào?
+5. Batch API giảm gì?
+6. Vision API cần chú ý gì?
+7. Provider abstraction giúp gì?
+8. Token budget guard kiểm tra gì?
+9. Cost estimation cần gì?
+10. Retry không idempotency rủi ro gì?
+
+---
 
 ## Answer key
 
-1. Model có năng lực nội tại; API quyết định cách expose tools/schema/streaming/limits.
-2. Text, model, finish_reason, usage, errors, tool calls, stream events.
-3. Model proposes, app validates, authorizes, executes, sanitizes observation, sends back, validates final.
-4. Provider/schema không kiểm tra hết business logic, permissions, citations và semantic correctness.
-5. Re-embed corpus, cập nhật metadata/index và rerun retrieval eval.
-6. Disconnect, partial output, stream error, missing final usage, cancellation, unsafe partial text.
-7. Track item IDs, reconcile outputs/errors, retry failed items idempotently.
-8. Normalized schema, error mapping, streaming events, usage extraction, edge cases.
+1. Model, params, context, token, cost, error, latency, tool calling.
+2. Model output tool call args, app validates, executes, returns result.
+3. Semantic search, RAG, classification, clustering, similarity.
+4. TTFT (time-to-first-token).
+5. 50% off, 24h latency.
+6. Image resolution, count, format, size, tokens.
+7. Switch provider, test, fallback, cost tracking.
+8. Input tokens + output tokens <= context window.
+9. Input tokens, output tokens, input price, output price.
+10. Retry gọi tool 2 lần, duplicate side effects.
 
-## Mini-project: Multi-provider API gateway
+---
 
-**Task:** Build provider-agnostic gateway hỗ trợ chat, stream, embeddings và mock tool calling.
+## Mini-project: Provider wrapper with tool calling
+
+**Task:** Build provider wrapper với tool calling, streaming, retry, cost tracking, observability.
 
 **Deliverables:**
 
-- `ChatProvider` interface.
-- At least 1 real adapter or 2 mock adapters.
-- Normalized `LLMResponse`.
-- Streaming event schema.
-- Embedding endpoint with model metadata.
-- Tool calling execution loop mock.
-- Contract tests.
-- Usage logging.
+- Provider abstraction.
+- Tool calling state machine.
+- Streaming parser.
+- Retry policy with error matrix.
+- Cost tracking.
+- Token budget guard.
+- Observability logging.
+- Fallback provider.
 
 **Success criteria:**
 
-- App layer không phụ thuộc provider SDK cụ thể.
-- Có test không cần gọi API thật.
-- Có handle error/rate limit mock.
-- Có log usage/cost/latency.
-- Có README mô tả cách thêm provider mới.
+- Tool calling có validation.
+- Tool calling có idempotency.
+- Streaming có buffer.
+- Retry có error matrix.
+- Cost có tracking.
+- Logs có request_id, prompt_version, model, tokens, cost.
+- Fallback có provider switch.
+
+---
 
 ## Điểm cần nhớ
 
-- AI API là contract, không chỉ endpoint.
-- Provider khác nhau về schema, tools, streaming, token accounting và data policy.
-- Tool calling phải được app validate/authorize/execute.
-- Embedding model định nghĩa vector space; đổi model cần re-embed và re-evaluate.
-- Streaming cải thiện UX nhưng cần handle partial states.
-- Provider abstraction + contract tests là nền cho multi-LLM orchestration.
+- Provider API là một contract, không phải "hộp đen".
+- Tool calling là state machine, không phải function call.
+- Streaming giảm TTFT, tăng UX.
+- Batch giảm cost, tăng latency.
+- Embeddings cần model, version, dimensions.
+- Provider abstraction giúp switch, test, fallback, cost tracking.
+- Token budget guard chặn context overflow.
+- Cost tracking cần input/output tokens, model, price.
+- Observability cần logs, metrics, traces.
+
+---
 
 ## Next chapter bridge
 
-Gọi API được rồi, production cần xử lý token limits, retries, rate limits, caching, fallback, cost và observability. Chương tiếp theo: **API Integration Patterns**.
+API call production không chỉ là gọi provider. Cần middleware, retry, cache, rate limit, fallback. Chương tiếp theo: **API Integration Patterns** — middleware ordering, token budget, retry matrix, caching, fallback, circuit breaker, observability.

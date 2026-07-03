@@ -268,7 +268,7 @@ Nếu bạn không lưu teacher model, prompt version, temperature và generatio
 
 ---
 
-## 9. Implementation Playbook (Thực thi)
+## Implementation Playbook: Teacher-Student Labeling Pipeline
 
 Ví dụ dưới đây minh họa bước tạo teacher labels cho task intent classification. Trong production, bạn sẽ thêm retry, rate limit, schema validation và data governance.
 
@@ -331,43 +331,35 @@ Sau đó student có thể được train theo supervised fine-tuning hoặc cla
 
 ---
 
-## 10. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
 <Callout type="danger" title="Pitfall 1: Student học cả hallucination của teacher">
 **Triệu chứng:** Student trả lời tự tin nhưng sai giống các lỗi hiếm của teacher.
 
-**Nguyên nhân:** Teacher outputs được dùng trực tiếp làm ground truth mà không lọc/human review.
-
-**Cách khắc phục:** Validate bằng rules/schema, review sample theo class, thêm ground truth thật, và loại các teacher answers có confidence thấp hoặc không kiểm chứng được.
+**Fix:** Validate bằng rules/schema, review sample theo class, thêm ground truth thật, và loại các teacher answers có confidence thấp hoặc không kiểm chứng được.
 </Callout>
 
 <Callout type="warning" title="Pitfall 2: Dataset quá hẹp">
 **Triệu chứng:** Student rất tốt trên eval nội bộ nhưng fail khi user hỏi khác wording.
 
-**Nguyên nhân:** Distillation dataset chỉ chứa happy path, thiếu edge cases, adversarial inputs, multilingual/noisy text.
-
-**Cách khắc phục:** Kết hợp production logs, synthetic hard cases, data augmentation và continuous eval từ traffic mới.
+**Fix:** Kết hợp production logs, synthetic hard cases, data augmentation và continuous eval từ traffic mới.
 </Callout>
 
 <Callout type="warning" title="Pitfall 3: Chỉ đo agreement với teacher">
 **Triệu chứng:** Student agree 95% với teacher nhưng vẫn sai theo ground truth.
 
-**Nguyên nhân:** Teacher không hoàn hảo. Agreement cao chỉ cho thấy student bắt chước teacher, không đảm bảo đúng.
-
-**Cách khắc phục:** Đánh giá trên ground truth/human labels, business metrics và failure cost. Teacher agreement chỉ là một metric phụ.
+**Fix:** Đánh giá trên ground truth/human labels, business metrics và failure cost. Teacher agreement chỉ là một metric phụ.
 </Callout>
 
 <Callout type="danger" title="Pitfall 4: Legal/license issues với synthetic data">
 **Triệu chứng:** Dataset distillation bị chặn bởi legal trước production.
 
-**Nguyên nhân:** Điều khoản provider/model không cho phép dùng output để train model cạnh tranh hoặc redistributable artifact.
-
-**Cách khắc phục:** Kiểm tra terms trước khi generate dữ liệu. Lưu nguồn dữ liệu, provider, license và hạn chế sử dụng trong dataset card/model card.
+**Fix:** Kiểm tra terms trước khi generate dữ liệu. Lưu nguồn dữ liệu, provider, license và hạn chế sử dụng trong dataset card/model card.
 </Callout>
 
 ---
 
-## 11. Cost & Performance Unit Economics
+## Cost / Performance / Distillation Unit Economics
 
 | Thành phần | Chi phí | Lợi ích |
 |---|---|---|
@@ -427,6 +419,8 @@ Distillation đáng làm khi request volume đủ lớn, task ổn định, và 
 - Student không nên học dữ liệu teacher chưa kiểm chứng; quality filtering và ground truth eval là bắt buộc.
 - Distillation phù hợp cho task hẹp, volume cao, latency/cost-sensitive như routing, classification, extraction và support automation.
 - Production pattern tốt thường là student-first + confidence threshold + teacher fallback + shadow evaluation.
+
+---
 
 ## Next chapter bridge
 

@@ -1,68 +1,46 @@
 Multi-Agent Systems không tự động thông minh hơn vì có nhiều agent. Đây là **coordination architecture**: đổi single-agent simplicity lấy specialization, parallelism, critique, và governance complexity. Một hệ thống nhiều agent có thể tốt hơn, nhưng cũng có thể tốn hơn, chậm hơn và mâu thuẫn hơn nếu thiết kế sai.
 
-## Why this matters
+---
 
-Multi-agent có ích khi:
+## 1. The Incident (Tình huống sự cố)
 
-- work tự phân rã được,
-- specialists có tools/knowledge khác,
-- parallel research có giá trị,
-- critique/review cải thiện quality,
-- human checkpoints cần handoff rõ,
-- risk levels khác nhau cần policies khác.
+<Callout type="danger" title="Báo cáo sự cố: 3 agents research cùng đọc 1 source, tạo báo cáo mâu thuẫn, tốn 450 USD">
+**Bối cảnh:** Một team build "research agent" với 3 specialist agents: Planner, Searcher, Writer. Mỗi agent có budget riêng, gọi tool riêng, không có shared state. Mục tiêu: tạo báo cáo thị trường.
 
-Multi-agent fail khi:
+**Sự cố:** Planner chia task, 3 Searcher chạy song song cùng tìm "thị trường X". Mỗi Searcher tìm 1 source, đọc 1 source, nhưng không có shared state. 3 Searcher đọc cùng 1 source, nhưng không biết nhau. Writer tổng hợp, nhưng 3 Searcher đưa ra 3 claims khác nhau (cùng source, khác cách diễn giải).
 
-- agents duplicate work,
-- agents reinforce hallucination của nhau,
-- communication nhiễu,
-- cost multiply,
-- không ai own final quality,
-- deadlock/loop,
-- supervisor route sai.
+1. Không có shared state — agents không biết nhau đã làm gì.
+2. Không có communication contract — agents chat free-form, không có structured handoff.
+3. Không có budget per role — 3 agents × 10 steps × tool calls = 450 USD.
+4. Không có deduplication — agents duplicate work.
+5. Không có verifier — Writer tổng hợp mâu thuẫn không ai phát hiện.
 
-<Callout type="info" title="More agents does not mean more intelligence">
-Multi-agent thêm specialization và parallelism, nhưng cũng thêm coordination overhead, duplicated work, contradiction, latency và cost.
+**Hậu quả:** Báo cáo có 3 claims mâu thuẫn, 450 USD cho 1 task, và team phải tắt multi-agent để thiết kế lại shared state, communication contract và budget per role.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: multi-agent không tự động thông minh hơn. Nó thêm specialization và parallelism, nhưng cũng thêm coordination overhead, duplicated work, contradiction, latency và cost. More agents does not mean more intelligence.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Giải thích khi nào multi-agent có ích.
-2. So sánh supervisor-worker, pipeline, peer-to-peer, debate và blackboard patterns.
-3. Thiết kế agent roles và communication contracts.
-4. Mô hình hóa multi-agent workflows bằng state graphs.
-5. Dùng LangGraph-style stateful graphs ở mức conceptual.
-6. Thêm human-in-the-loop checkpoints.
-7. Đánh giá multi-agent systems.
-8. Phòng coordination failures.
-9. Thiết kế cost controls cho multi-agent.
-10. Build code review multi-agent workflow.
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Agent components và function calling.
-- State machines và graph workflows.
-- Tool authorization và safety.
-- Observability basics.
-
-## Core intuition: multi-agent is coordination design
+## 2. Architecture Blueprint (Multi-Agent Coordination)
 
 ```text
-Goal
-  ↓
-Coordinator / graph
-  ↓
-Specialist agents (roles, tools, budgets)
-  ↓
-Artifacts / shared state
-  ↓
-Synthesizer / verifier
-  ↓
-Final output
+[ Goal ]
+        │
+        ▼
+[ Coordinator / graph ]
+        │
+        ▼
+[ Specialist agents (roles, tools, budgets) ]
+        │
+        ▼
+[ Artifacts / shared state ]
+        │
+        ▼
+[ Synthesizer / verifier ]
+        │
+        ▼
+[ Final output ]
 ```
 
 Câu hỏi thiết kế:
@@ -74,7 +52,11 @@ Câu hỏi thiết kế:
 5. Khi nào cần human?
 6. Budget/cost chia thế nào?
 
-## Pattern taxonomy
+Output của multi-agent design không phải là "nhiều agents". Output là một tập roles, contracts, state, và budgets có kiểm soát.
+
+---
+
+## 3. Pattern Taxonomy
 
 ### Supervisor → worker
 
@@ -86,16 +68,7 @@ Supervisor
  └── Verifier
 ```
 
-Pros:
-
-- central control,
-- dễ audit,
-- clear final decision.
-
-Cons:
-
-- supervisor bottleneck,
-- bad routing hại toàn bộ work.
+Pros: central control, dễ audit, clear final decision. Cons: supervisor bottleneck, bad routing hại toàn bộ work.
 
 ### Pipeline
 
@@ -103,15 +76,7 @@ Cons:
 Planner → Researcher → Writer → Reviewer → Finalizer
 ```
 
-Pros:
-
-- predictable,
-- dễ eval stage-by-stage.
-
-Cons:
-
-- error propagation,
-- ít adaptive.
+Pros: predictable, dễ eval stage-by-stage. Cons: error propagation, ít adaptive.
 
 ### Peer-to-peer
 
@@ -119,15 +84,7 @@ Cons:
 Agent A ↔ Agent B ↔ Agent C
 ```
 
-Pros:
-
-- linh hoạt.
-
-Cons:
-
-- khó kiểm soát,
-- communication overhead,
-- loop risk.
+Pros: linh hoạt. Cons: khó kiểm soát, communication overhead, loop risk.
 
 ### Debate / adversarial
 
@@ -135,33 +92,21 @@ Cons:
 Proposer → Critic → Judge
 ```
 
-Pros:
-
-- tốt cho review,
-- surfacing weaknesses.
-
-Cons:
-
-- có thể optimize rhetoric thay vì truth,
-- judge model có thể bias.
+Pros: tốt cho review, surfacing weaknesses. Cons: có thể optimize rhetoric thay vì truth, judge model có thể bias.
 
 ### Blackboard / shared workspace
 
-Agents đọc/ghi shared state.
+Agents đọc/ghi shared state. Pros: tốt cho research/code, persistent artifact. Cons: state conflicts, cần ownership rules.
 
-Pros:
+<Callout type="warning" title="State graph tốt hơn free-form multi-agent">
+Workflow có branches, validation gates và human checkpoints rõ thường dễ test/debug hơn multi-agent tự do chat với nhau. Đừng dùng peer-to-peer khi pipeline đủ.
+</Callout>
 
-- tốt cho research/code,
-- persistent artifact.
+---
 
-Cons:
+## 4. Role Design
 
-- state conflicts,
-- cần ownership rules.
-
-## Role design
-
-Mỗi agent cần:
+Mỗi agent cần role schema rõ:
 
 ```json
 {
@@ -187,7 +132,11 @@ Thiết kế role tốt nghĩa là agent biết:
 - output contract gì,
 - khi nào escalate.
 
-## Communication contracts
+Role không có `cannot` không phải role — đó là agent có thể làm mọi thứ.
+
+---
+
+## 5. Communication Contracts
 
 Tránh free-form chatter. Dùng structured messages:
 
@@ -214,7 +163,11 @@ Structured contracts giúp:
 - avoid ambiguity,
 - test role compliance.
 
-## LangGraph-style stateful graphs
+Free-form chat giữa agents gây ambiguity, khó trace và khó test role compliance. Đừng để agents chat tự do — dùng contract.
+
+---
+
+## 6. LangGraph-style Stateful Graphs
 
 Concepts:
 
@@ -252,11 +205,11 @@ Shared state:
 }
 ```
 
-<Callout type="tip" title="State graph tốt hơn free-form multi-agent">
-Workflow có branches, validation gates và human checkpoints rõ thường dễ test/debug hơn multi-agent tự do chat với nhau.
-</Callout>
+State graph giúp control flow rõ, test được, và có checkpoint để resume. Đó là lý do LangGraph-style graphs tốt hơn free-form multi-agent cho production.
 
-## Human-in-the-loop checkpoints
+---
+
+## 7. Human-in-the-Loop Checkpoints
 
 Yêu cầu human khi:
 
@@ -283,7 +236,13 @@ Checkpoint schema:
 }
 ```
 
-## Use case: Code Review Agent
+Human checkpoint không phải là "model hỏi user". Nó là runtime gate: agent đề xuất, human approve, runtime execute. Đừng để model tự quyết high-risk actions.
+
+---
+
+## 8. Use Cases: Code Review và Research
+
+### Code Review Agent
 
 Agents:
 
@@ -292,8 +251,6 @@ Agents:
 3. Improver — đề xuất patch.
 4. Tester — chạy tests trong sandbox.
 5. Judge — tổng hợp, cite evidence.
-
-Workflow:
 
 ```text
 Input PR/diff
@@ -311,34 +268,17 @@ Judge summarizes with evidence
 Human approves
 ```
 
-Important:
+Important: Improver không merge trực tiếp, Tester chạy trong sandbox, Security critic dùng explicit checklist, Judge cite test output và diffs.
 
-- Improver không merge trực tiếp.
-- Tester chạy trong sandbox.
-- Security critic dùng explicit checklist.
-- Judge cite test output và diffs.
+### Research Agent
 
-## Use case: Research Agent
+Agents: Planner, Searcher, Paper reader, Evidence extractor, Synthesizer, Skeptic/verifier, Citation checker.
 
-Agents:
+Failure risks: citation laundering, source duplication, low-quality sources, unsupported synthesis, conflicting evidence bị ignore.
 
-- Planner,
-- Searcher,
-- Paper reader,
-- Evidence extractor,
-- Synthesizer,
-- Skeptic/verifier,
-- Citation checker.
+---
 
-Failure risks:
-
-- citation laundering,
-- source duplication,
-- low-quality sources,
-- unsupported synthesis,
-- conflicting evidence bị ignore.
-
-## Multi-agent metrics
+## 9. Multi-Agent Metrics
 
 | Metric | Meaning |
 |---|---|
@@ -353,7 +293,11 @@ Failure risks:
 | Latency per workflow | UX |
 | Loop/deadlock rate | orchestration quality |
 
-## Production concerns
+Multi-agent metrics khác single-agent: thêm role compliance, handoff validity, duplicate work rate, contradiction rate. Đừng chỉ đo final task success.
+
+---
+
+## 10. Production Concerns
 
 - shared state locking,
 - parallel branch timeouts,
@@ -369,25 +313,12 @@ Failure risks:
 - confidentiality giữa agents nếu cần.
 
 <Callout type="warning" title="Multi-agent cost multiply nhanh">
-3 agents × 10 steps × tool calls có thể tốn nhiều hơn single-agent 5x. Cần budget per role và per workflow.
+3 agents × 10 steps × tool calls có thể tốn nhiều hơn single-agent 5x. Cần budget per role và per workflow. Nếu không có budget per role, multi-agent sẽ tiêu tiền nhanh hơn nhiều single-agent.
 </Callout>
 
-## Implementation lab: code review multi-agent graph
+---
 
-Build graph:
-
-```text
-Reviewer → Improver → Tester → Judge
-```
-
-Minimum features:
-
-- input: Python hoặc JavaScript code,
-- reviewer outputs issues,
-- improver proposes patch,
-- tester chạy tests trong Docker/mock sandbox,
-- judge produces final report,
-- human approval simulated.
+## Implementation Playbook: Code Review Multi-Agent Graph
 
 ```python
 from dataclasses import dataclass, field
@@ -424,38 +355,7 @@ def judge_node(state: ReviewState) -> ReviewState:
     return state
 ```
 
-Deliverables:
-
-- graph diagram,
-- role prompts,
-- state schema,
-- test suite với seeded bugs,
-- trace of 5 code review tasks,
-- failure analysis.
-
-Evaluation:
-
-- reviewer có tìm seeded bugs không?
-- improver có tránh unrelated changes không?
-- tests có chạy thật không?
-- judge cite evidence không?
-- unsafe operations có bị block không?
-
-## Common mistakes & debugging checklist
-
-<Callout type="warning" title="Mistake 1: over-agentify simple workflow">
-Nếu deterministic 3 bước giải quyết được, đừng tạo 5 agents. Multi-agent không tự động tốt hơn.
-</Callout>
-
-<Callout type="warning" title="Mistake 2: không có communication contract">
-Free-form chat giữa agents gây ambiguity, khó trace và khó test role compliance.
-</Callout>
-
-<Callout type="danger" title="Mistake 3: không budget per role">
-Multi-agent có thể tiêu tiền nhanh hơn nhiều single-agent. Cần budget per role và per workflow.
-</Callout>
-
-Checklist:
+Production checklist:
 
 1. Mỗi role có objective/tools/output contract không?
 2. Communication có structured contract không?
@@ -468,6 +368,45 @@ Checklist:
 9. Có deadlock/loop detection không?
 10. Tool permissions per role không?
 
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Over-agentify simple workflow">
+**Triệu chứng:** 3 bước deterministic được tạo thành 5 agents, cost tăng, latency tăng, không thêm value.
+
+**Fix:** Nếu deterministic 3 bước giải quyết được, đừng tạo 5 agents. Multi-agent không tự động tốt hơn. Dùng least autonomy principle.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Không có communication contract">
+**Triệu chứng:** Agents chat free-form, handoff mơ hồ, khó trace, contradiction rate cao.
+
+**Fix:** Dùng structured messages. Mỗi handoff có artifact_type, claims, source, confidence, open_questions. Validate handoff, trace artifacts, test role compliance.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Không budget per role">
+**Triệu chứng:** Multi-agent tiêu tiền nhanh hơn nhiều single-agent, không có budget per role, cost失控.
+
+**Fix:** Mỗi role có budget_usd. Mỗi workflow có budget. Cần budget per role và per workflow. Nếu không, multi-agent sẽ tốn nhiều hơn single-agent 5x.
+</Callout>
+
+---
+
+## Cost / Scalability / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Multi-agent thay vì single-agent | specialization, parallelism | coordination overhead, cost |
+| Parallel branches | latency giảm | cost multiply, deadlock |
+| Debate/critic | surface weaknesses | optimize rhetoric, judge bias |
+| Human checkpoints | safety | latency, SLA |
+| Shared state | dedup, trace | state conflicts, locking |
+| No budget per role | đơn giản | cost失控 |
+
+Multi-agent là coordination architecture, không phải magic intelligence. Mỗi agent thêm cost, nhưng cũng thêm control. Đừng thêm agents — thêm roles, contracts, và budgets.
+
+---
+
 ## Practice exercises
 
 1. Thiết kế supervisor-worker cho research agent.
@@ -477,6 +416,8 @@ Checklist:
 5. So sánh pipeline vs debate cho code review.
 6. Thiết kế human checkpoints cho email-sending agent.
 7. Viết metrics dashboard cho multi-agent system.
+
+---
 
 ## Knowledge check
 
@@ -488,6 +429,8 @@ Checklist:
 6. Multi-agent metrics khác single-agent thế nào?
 7. Vì sao multi-agent cost multiply nhanh?
 
+---
+
 ## Answer key
 
 1. Khi work phân rã được, cần specialists, parallel research, critique hoặc human checkpoints rõ.
@@ -498,29 +441,7 @@ Checklist:
 6. Thêm role compliance, handoff validity, duplicate work rate, contradiction rate.
 7. Nhiều agents × steps × tool calls, không có budget per role sẽ失控.
 
-## Mini-project: Code Review Multi-Agent System
-
-**Task:** Build multi-agent code review graph.
-
-**Deliverables:**
-
-- Graph diagram.
-- Role schemas cho reviewer/improver/tester/judge.
-- State schema.
-- Sandbox/mock test runner.
-- 10 code samples với seeded bugs.
-- Trace per review.
-- Metrics: bug detection rate, false positive rate, cost per review.
-- Human approval simulation.
-
-**Success criteria:**
-
-- Reviewer phát hiện được seeded bugs.
-- Improver không tạo unrelated changes.
-- Tests chạy trong sandbox.
-- Judge cite evidence.
-- Unsafe operations blocked.
-- Cost per review measured.
+---
 
 ## Điểm cần nhớ
 
@@ -530,6 +451,8 @@ Checklist:
 - State graphs giúp control flow rõ và test được.
 - Human checkpoints cho high-risk actions.
 - Multi-agent cần budget per role và metrics coordination-specific.
+
+---
 
 ## Next chapter bridge
 

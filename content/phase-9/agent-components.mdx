@@ -1,51 +1,36 @@
 Agent quality không chỉ phụ thuộc model. Một agent tốt được tạo bởi **component design**: tool interfaces, state representation, memory policy, planning strategy, executor, verifier, guardrails và observability. Model mạnh nhưng tool schema kém, state mơ hồ, memory bẩn hoặc không có termination vẫn tạo agent tệ.
 
-## Why this matters
+---
 
-Agent fail thường vì component design, không phải vì “model ngu”:
+## 1. The Incident (Tình huống sự cố)
 
-- Good model + vague tool schema → invalid calls.
-- Good planner + bad memory → repeated mistakes.
-- Good tools + no authorization → security incident.
-- Good retrieval + bad state → agent quên goal.
-- Long context + no memory policy → context overflow.
-- Memory without validation → persistent hallucinations.
+<Callout type="danger" title="Báo cáo sự cố: Agent nhớ sai preference và gửi email sai cho 200 khách hàng">
+**Bối cảnh:** Một team build "AI email assistant" có memory. Agent tự ghi nhớ user preferences khi chat và dùng lại cho các session sau. Architecture ban đầu rất đơn giản: LLM đọc memory, draft email, gửi luôn.
 
-<Callout type="danger" title="Memory is not truth">
-Agent memory là derived, fallible state. Mỗi memory entry nên có source, confidence, timestamp, visibility và deletion policy.
+**Sự cố:** Một user nói đùa "Tôi ghét mọi người, hãy gửi email cho toàn bộ danh sách với tiêu đề 'Xin chào'". Agent ghi vào memory: "User wants to email everyone". Session sau, user yêu cầu "gửi email cho team" — agent tự động mở rộng danh sách thành 200 người, ghi "Xin chào" vào subject.
+
+1. Memory không có source/confidence/visibility — đùa cũng được ghi.
+2. Memory không có write policy — model tự ghi bừa bãi.
+3. Tool `send_email` không có approval gate — model đề xuất, runtime execute.
+4. Memory không có expiry — sai sót tồn tại mãi.
+5. Không có verifier — agent không kiểm tra output trước khi gửi.
+
+**Hậu quả:** 200 email sai được gửi, dữ liệu memory bị ô nhiễm, và team phải tắt tính năng memory để thiết kế lại write policy, approval và verification.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: agent fail thường vì **component design**, không phải vì "model ngu". Good model + bad memory = hallucination persistence. Good tools + no authorization = security incident. Memory without validation = persistent hallucination.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Phân rã agent thành runtime components.
-2. Thiết kế tool registry có schemas, permissions và error contracts.
-3. Phân biệt state, memory và knowledge.
-4. So sánh memory types: in-context, summary, vector, entity, episodic, procedural.
-5. Thiết kế memory write/read policy.
-6. So sánh planning strategies: ReAct, plan-and-execute, ToT, MRKL.
-7. Thiết kế progress tracking và termination state.
-8. Đánh giá component-level reliability.
-9. Build agent runtime skeleton.
+## 2. Architecture Blueprint (Agent Runtime Components)
 
-## Prerequisites
-
-Bạn nên biết:
-
-- What agents are: control loop, state/action/policy.
-- Function/tool calling basics.
-- RAG/memory concepts.
-- JSON schema và validation.
-
-## Core intuition: agent = runtime components + model policy
-
-Architecture:
+Một agent production không phải là một LLM call. Nó là một runtime có nhiều components:
 
 ```text
-User Goal
-  ↓
-Agent Runtime
+[ User Goal ]
+        │
+        ▼
+[ Agent Runtime ]
   ├── Model / policy
   ├── Tool registry
   ├── State store
@@ -55,11 +40,16 @@ Agent Runtime
   ├── Verifier
   ├── Guardrails
   └── Observability
+        │
+        ▼
+[ Tools / APIs / RAG / Code sandbox / External systems ]
 ```
 
-LLM chọn hành động, nhưng runtime xác định hành động nào tồn tại, được phép, được log và được dừng khi nguy hiểm.
+LLM chọn hành động, nhưng runtime xác định hành động nào tồn tại, được phép, được log và được dừng khi nguy hiểm. Output của agent design không phải là một prompt đẹp; output là một tập components có contract rõ.
 
-## Component 1: Model as policy
+---
+
+## 3. Model as Policy
 
 Model đóng vai policy:
 
@@ -78,11 +68,13 @@ Model capability ảnh hưởng agent:
 | Latency | loop speed |
 | Cost | budget exhaustion risk |
 
-Nhưng model không nên được quyền execute trực tiếp. Nó chỉ propose action.
+Nhưng model không nên được quyền execute trực tiếp. Nó chỉ propose action. Runtime quyết định có execute hay không.
 
-## Component 2: Tool registry
+---
 
-Tool registry là catalog actions agent có thể dùng.
+## 4. Tool Registry
+
+Tool registry là catalog actions agent có thể dùng. Nó là **action surface** và **security boundary**.
 
 Tool metadata nên có:
 
@@ -111,7 +103,7 @@ Tool metadata nên có:
 }
 ```
 
-## Tool categories by risk
+Tool categories by risk:
 
 | Category | Examples | Risk | Controls |
 |---|---|---|---|
@@ -123,16 +115,18 @@ Tool metadata nên có:
 | Admin/security | permissions, deploys | critical | usually human-gated |
 
 <Callout type="warning" title="Tool description là part of policy">
-Model chọn tool dựa vào name/description/schema. Tool description mơ hồ là nguyên nhân phổ biến của wrong tool selection.
+Model chọn tool dựa vào name/description/schema. Tool description mơ hồ là nguyên nhân phổ biến của wrong tool selection. Nếu tool catalog không encode auth/side-effect/risk, model có thể đề xuất actions runtime không được phép.
 </Callout>
 
-## Component 3: State
+---
 
-State là tiến độ hiện tại của run.
+## 5. State
+
+State là tiến độ hiện tại của run. Đừng nhầm với memory.
 
 ```text
-State = current task progress
-Memory = reusable information across steps/sessions
+State    = current task progress
+Memory   = reusable information across steps/sessions
 Knowledge = external factual corpus
 ```
 
@@ -166,9 +160,13 @@ Example:
 }
 ```
 
-## Component 4: Memory
+Chat history không đủ cho agent state. Bạn cần plan, steps, observations, errors, budgets, approvals và status.
 
-Memory là thông tin dùng lại ngoài immediate step.
+---
+
+## 6. Memory
+
+Memory là thông tin dùng lại ngoài immediate step. Nó là **derived, fallible state** — không phải truth.
 
 | Type | Scope | Example | Risk |
 |---|---|---|---|
@@ -179,18 +177,22 @@ Memory là thông tin dùng lại ngoài immediate step.
 | Episodic memory | event history | previous runs | retention/privacy |
 | Procedural memory | workflows | how to handle refunds | bad policy persistence |
 
-## Memory write policy
+<Callout type="danger" title="Memory is not truth">
+Agent memory là derived, fallible state. Mỗi memory entry nên có source, confidence, timestamp, visibility và deletion policy. Nếu không, memory trở thành hallucination persistence layer.
+</Callout>
 
-Không cho model tự ghi memory bừa bãi.
+---
 
-Questions:
+## 7. Memory Write Policy
 
-1. What can be stored?
-2. Who can read it later?
-3. How long is it retained?
-4. How is it corrected/deleted?
-5. Is user consent needed?
-6. Does it store evidence/source?
+Không cho model tự ghi memory bừa bãi. Mỗi memory entry phải có:
+
+- What can be stored?
+- Who can read it later?
+- How long is it retained?
+- How is it corrected/deleted?
+- Is user consent needed?
+- Does it store evidence/source?
 
 Memory entry schema:
 
@@ -207,7 +209,11 @@ Memory entry schema:
 }
 ```
 
-## Component 5: Planning
+Memory không có source/confidence dễ trở thành hallucination persistence. Đùa cũng được ghi, sai sót tồn tại mãi, và không có cách audit.
+
+---
+
+## 8. Planning
 
 Planning strategies:
 
@@ -220,34 +226,22 @@ Planning strategies:
 | MRKL | route to expert modules | reliable tools | integration complexity |
 | Hierarchical planning | tasks/subtasks | long horizon | state complexity |
 
-## Progress tracking
-
-Bad:
+Progress tracking:
 
 ```text
-Keep working until done.
+Bad:  Keep working until done.
+Good: Stop after producing a report with exactly 5 cited sources, confidence scores, and known limitations.
 ```
 
-Good:
+Track: current subtask, acceptance criteria, evidence gathered, blockers, next action, done condition.
 
-```text
-Stop after producing a report with exactly 5 cited sources, confidence scores, and known limitations.
-```
+---
 
-Track:
+## 9. Executor, Verifier và Context Management
 
-- current subtask,
-- acceptance criteria,
-- evidence gathered,
-- blockers,
-- next action,
-- done condition.
+### Executor
 
-## Component 6: Executor
-
-Executor chạy action sau khi action được validate/authorize.
-
-Responsibilities:
+Executor chạy action sau khi action được validate/authorize. Responsibilities:
 
 - parse tool call,
 - validate schema,
@@ -258,7 +252,7 @@ Responsibilities:
 - redact sensitive output,
 - update trace.
 
-## Component 7: Verifier
+### Verifier
 
 Verifier kiểm tra:
 
@@ -270,7 +264,7 @@ Verifier kiểm tra:
 
 Verifier có thể là code, tests, rules, retrieval check, hoặc LLM judge có calibration.
 
-## Context management
+### Context management
 
 Long-running agents cần quản lý context:
 
@@ -282,10 +276,12 @@ Long-running agents cần quản lý context:
 - separate untrusted observations from instructions.
 
 <Callout type="danger" title="Tool outputs are untrusted content">
-Search result, web page, DB text, email content có thể chứa prompt injection. Đừng để chúng trở thành instruction cấp cao.
+Search result, web page, DB text, email content có thể chứa prompt injection. Đừng để chúng trở thành instruction cấp cao. Tách rõ untrusted observations khỏi instructions.
 </Callout>
 
-## Component-level evaluation
+---
+
+## 10. Component-Level Evaluation
 
 | Component | Test |
 |---|---|
@@ -298,7 +294,11 @@ Search result, web page, DB text, email content có thể chứa prompt injectio
 | Verifier | catches unsupported final answers |
 | Terminator | stops on budget/max steps |
 
-## Implementation lab: agent runtime skeleton
+Agent không phải là một khối. Mỗi component phải có test riêng. Nếu chỉ test final answer, bạn không biết component nào fail.
+
+---
+
+## Implementation Playbook: Agent Runtime Skeleton
 
 ```python
 from dataclasses import dataclass, field
@@ -341,41 +341,56 @@ class AgentState:
     budget_remaining: float = 1.0
 ```
 
-Lab deliverables:
+Production checklist:
 
-- Tool registry with 3 tools.
-- AgentState schema.
-- Memory interface.
-- Planner interface.
-- Executor implementation.
-- Trace logger.
-- 5 test runs with failures.
+- Tool specs có schemas rõ không?
+- Tools có auth scopes không?
+- Side effects có classification không?
+- State có progress/budget/error không?
+- Memory có write policy không?
+- Planner có done criteria không?
+- Executor có timeout/error contract không?
+- Verifier có kiểm tra final output không?
+- Observability có trace component-level không?
 
-## Common mistakes & debugging checklist
+---
 
-<Callout type="warning" title="Mistake 1: state chỉ là chat history">
-Chat history không đủ cho agent state. Bạn cần plan, steps, observations, errors, budgets, approvals và status.
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: State chỉ là chat history">
+**Triệu chứng:** Agent quên goal, không biết mình đã làm gì, không biết còn budget bao nhiêu.
+
+**Fix:** Chat history không đủ cho agent state. Bạn cần plan, steps, observations, errors, budgets, approvals và status trong state schema.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: memory không có source/confidence">
-Memory không có source/confidence dễ trở thành hallucination persistence layer.
+<Callout type="warning" title="Pitfall 2: Memory không có source/confidence">
+**Triệu chứng:** Agent ghi nhớ sai, đùa, hoặc hallucination và dùng lại cho session sau.
+
+**Fix:** Mỗi memory entry phải có source, confidence, timestamp, visibility và deletion policy. Không cho model tự ghi memory bừa bãi.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: tool registry không có permissions">
-Nếu tool catalog không encode auth/side-effect/risk, model có thể đề xuất actions runtime không được phép.
+<Callout type="danger" title="Pitfall 3: Tool registry không có permissions">
+**Triệu chứng:** Model đề xuất action có side effect (email, refund, deploy) và runtime execute ngay.
+
+**Fix:** Tool catalog phải encode auth/side-effect/risk. Mỗi tool có auth_scope, side_effect, requires_approval và timeout. Runtime validate, authorize, audit trước khi execute.
 </Callout>
 
-Checklist:
+---
 
-1. Tool specs có schemas rõ không?
-2. Tools có auth scopes không?
-3. Side effects có classification không?
-4. State có progress/budget/error không?
-5. Memory có write policy không?
-6. Planner có done criteria không?
-7. Executor có timeout/error contract không?
-8. Verifier có kiểm tra final output không?
-9. Observability có trace component-level không?
+## Cost / Latency / Reliability Unit Economics
+
+| Component | Chi phí chính | Tối ưu |
+|---|---|---|
+| Model policy | token cost, latency | model routing, budget-aware |
+| Tool registry | integration/observability | shared specs, validation |
+| Memory store | storage, retrieval cost | write policy, TTL, selective recall |
+| Planner | extra LLM calls | plan-and-execute, budget-aware |
+| Verifier | extra LLM calls | code/tests cho deterministic, LLM judge cho open |
+| Context | token cost | summarize, compress, retrieve selectively |
+
+Agent quality đến từ component design, không chỉ model quality. Mỗi component thêm cost, nhưng cũng thêm control. Đừng cắt component để giảm cost — bạn sẽ mất control.
+
+---
 
 ## Practice exercises
 
@@ -385,6 +400,8 @@ Checklist:
 4. Thiết kế memory write policy cho personal assistant.
 5. So sánh ReAct vs plan-and-execute cho 5 tasks.
 6. Viết component tests cho tool authorization.
+
+---
 
 ## Knowledge check
 
@@ -396,6 +413,8 @@ Checklist:
 6. Verifier kiểm tra gì?
 7. Vì sao tool outputs là untrusted content?
 
+---
+
 ## Answer key
 
 1. State là tiến độ run hiện tại; memory là thông tin reusable qua bước/session.
@@ -406,27 +425,7 @@ Checklist:
 6. Goal completion, schema, evidence, safety, citations, done criteria.
 7. Vì chúng có thể chứa prompt injection hoặc dữ liệu không đáng tin.
 
-## Mini-project: Agent runtime components
-
-**Task:** Build framework-free agent runtime skeleton.
-
-**Deliverables:**
-
-- Tool registry with 5 tools.
-- AgentState schema.
-- Memory store interface.
-- Planner/executor/verifier interfaces.
-- Trace logger.
-- Component test suite.
-- Failure report for invalid tool args, unauthorized tool, timeout.
-
-**Success criteria:**
-
-- Invalid args blocked.
-- Unauthorized tools blocked.
-- State updates deterministic.
-- Memory writes require source/confidence.
-- Trace logs every component action.
+---
 
 ## Điểm cần nhớ
 
@@ -436,6 +435,8 @@ Checklist:
 - Memory phải có source, confidence, visibility và retention.
 - Planning strategy phải phù hợp task horizon và budget.
 - Executor/verifier/guardrails là lớp kiểm soát agent behavior.
+
+---
 
 ## Next chapter bridge
 

@@ -295,7 +295,7 @@ PostgreSQL vẫn là nơi query quyền truy cập và dashboard; MongoDB giữ 
 
 ---
 
-## 9. Implementation Playbook (Thực thi)
+## Implementation Playbook: Polyglot AI Request Flow
 
 Một flow AI request dùng polyglot persistence có thể như sau:
 
@@ -413,43 +413,35 @@ Stretch goal: thêm Row-Level Security cho các bảng enterprise-critical và b
 
 ---
 
-## 10. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
 <Callout type="warning" title="Pitfall 1: Cache invalidation làm AI trả lời dữ liệu cũ">
 **Triệu chứng:** User đã cập nhật document nhưng chatbot vẫn trả lời theo nội dung cũ.
 
-**Nguyên nhân:** Cache key không bao gồm document version/checksum hoặc không xóa cache khi ingestion hoàn tất.
-
-**Cách khắc phục:** Đưa `document_version`, `retrieved_context_ids` hoặc `knowledge_base_version` vào cache key. Với dữ liệu nhạy cảm, dùng TTL ngắn và explicit invalidation.
+**Fix:** Đưa `document_version`, `retrieved_context_ids` hoặc `knowledge_base_version` vào cache key. Với dữ liệu nhạy cảm, dùng TTL ngắn và explicit invalidation.
 </Callout>
 
 <Callout type="danger" title="Pitfall 2: Shared cache key gây data leak">
 **Triệu chứng:** Hai tenant hỏi cùng một câu và nhận response có thông tin của nhau.
 
-**Nguyên nhân:** Cache key chỉ hash prompt text, không bao gồm tenant, role, memory/context scope.
-
-**Cách khắc phục:** Cache key phải encode security boundary. Nếu không chứng minh được response an toàn để share, mặc định cache theo tenant/user scope.
+**Fix:** Cache key phải encode security boundary. Nếu không chứng minh được response an toàn để share, mặc định cache theo tenant/user scope.
 </Callout>
 
 <Callout type="warning" title="Pitfall 3: Eventual consistency làm dashboard lệch tạm thời">
 **Triệu chứng:** User vừa dùng AI xong nhưng dashboard usage chưa cập nhật.
 
-**Nguyên nhân:** Raw events đi qua queue/DynamoDB rồi mới aggregate sang PostgreSQL, có độ trễ.
-
-**Cách khắc phục:** Ghi rõ freshness SLA trên dashboard. Với billing nghiêm ngặt, dùng bảng transactional `model_calls` làm source of truth và event pipeline làm analytics phụ trợ.
+**Fix:** Ghi rõ freshness SLA trên dashboard. Với billing nghiêm ngặt, dùng bảng transactional `model_calls` làm source of truth và event pipeline làm analytics phụ trợ.
 </Callout>
 
 <Callout type="warning" title="Pitfall 4: Hot keys và hot partitions">
 **Triệu chứng:** Một tenant lớn làm Redis/DynamoDB chậm cho toàn hệ thống.
 
-**Nguyên nhân:** Tất cả counter/event ghi vào cùng một key hoặc partition.
-
-**Cách khắc phục:** Shard hot keys theo time bucket/random suffix, tách quota enterprise, và theo dõi per-tenant load để giới hạn blast radius.
+**Fix:** Shard hot keys theo time bucket/random suffix, tách quota enterprise, và theo dõi per-tenant load để giới hạn blast radius.
 </Callout>
 
 ---
 
-## 11. Cost & Performance Unit Economics
+## Cost / Performance / Polyglot Unit Economics
 
 | Thành phần | Đơn vị chi phí | Tối ưu |
 |---|---|---|
@@ -515,6 +507,8 @@ Bạn vừa hoàn thành chuyên đề **SQL & Databases for AI Engineers**:
 5. **NoSQL for AI:** biết khi nào dùng Redis, MongoDB, DynamoDB và cách kết hợp chúng với PostgreSQL an toàn.
 
 Nếu Phase 13 giúp bạn thiết kế hệ thống AI quy mô lớn, Phase 14 giúp bạn xây tầng dữ liệu đủ chắc để hệ thống đó có thể được quan sát, kiểm toán, tối ưu và mở rộng.
+
+---
 
 ## Next phase bridge
 

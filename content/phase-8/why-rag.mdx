@@ -1,42 +1,58 @@
-RAG — Retrieval-Augmented Generation — không phải là “nhét document vào prompt”. RAG là architecture pattern để nối một frozen language model với **external knowledge** dưới ràng buộc về recall, grounding, latency, cost, privacy và update frequency. Nếu fine-tuning thay đổi hành vi model, RAG thay đổi **nguồn bằng chứng tại inference time**.
+RAG — Retrieval-Augmented Generation — không phải là "nhét document vào prompt". RAG là architecture pattern để nối một frozen language model với **external knowledge** dưới ràng buộc về recall, grounding, latency, cost, privacy và update frequency. Nếu fine-tuning thay đổi hành vi model, RAG thay đổi **nguồn bằng chứng tại inference time**.
 
-## Why this matters
+---
 
-LLM có nhiều giới hạn tự nhiên:
+## 1. The Incident (Tình huống sự cố)
 
-- Có knowledge cutoff.
-- Không biết tài liệu private của công ty bạn.
-- Có thể hallucinate khi thiếu context.
-- Không tự biết dữ liệu mới cập nhật hôm nay.
-- Fine-tuning không phải cách tốt để nhét facts thay đổi liên tục.
+<Callout type="danger" title="Báo cáo sự cố: Chatbot nội bộ hallucinate chính sách đã cũ, 3 tháng sau vẫn dùng">
+**Bối cảnh:** Một team build chatbot nội bộ. Họ có 500 policy documents. Thay vì RAG, họ fine-tune LLM để "nhét" knowledge vào model. Mục tiêu: chatbot trả lời câu hỏi chính sách.
 
-RAG giải quyết bằng cách đưa evidence liên quan vào prompt đúng lúc.
+**Sự cố:** Policy documents thay đổi hàng tuần. Team fine-tuned LLM với 500 policies. 3 tháng sau, 200 policies đã thay đổi. Chatbot trả lời tự tin bằng chính sách cũ, nhưng sai. User hỏi: "Policy refund có 30 ngày hay 60 ngày?" Chatbot trả lời: "30 ngày." (Policy cũ.) Policy mới: "60 ngày." User khiếu nại, team không biết vì sao.
 
-<Callout type="info" title="Giảng viên nói thẳng">
-RAG quality bị chặn bởi retrieval quality. Nếu evidence đúng không vào context, generator không thể trả lời grounded một cách đáng tin cậy.
+**Hậu quả:** 12 user khiếu nại, 3 support ticket, 1 user bị từ chối refund sai vì dựa vào chatbot.
+
+**Bài học rút ra:** Fine-tuning không phải database. Bạn không thể "nhét" knowledge vào model và hy vọng nó cập nhật. Khi policy đổi, bạn cần retrain, không thể retrain mỗi tuần. RAG là cách: retrieve evidence tại inference time, không nhét knowledge vào model.
+
+1. Fine-tuning không đảm bảo model nhớ facts chính xác, không dễ xóa dữ liệu, và không tốt cho knowledge thay đổi liên tục.
+2. LLM có knowledge cutoff, không biết tài liệu private của công ty bạn, không biết dữ liệu mới cập nhật hôm nay.
+3. RAG giải quyết bằng cách đưa evidence liên quan vào prompt đúng lúc — không phải retrain.
 </Callout>
 
-## Learning objectives
+---
 
-Sau chương này, bạn sẽ có thể:
+## 2. Architecture Blueprint (The RAG Loop)
 
-1. Giải thích parametric memory vs external memory.
-2. Mô tả RAG loop end-to-end.
-3. Phân biệt RAG, fine-tuning và long-context prompting.
-4. Nhận diện RAG failure taxonomy.
-5. Thiết kế grounding, citation và abstention behavior.
-6. Build tiny RAG từ scratch để hiểu cơ chế.
+```text
+[ User query ]
+        │
+        ▼
+[ Query understanding / normalization ]
+        │
+        ▼
+[ Retrieve relevant chunks ]
+        │
+        ▼
+[ Rerank / filter / pack context ]
+        │
+        ▼
+[ Prompt LLM with evidence ]
+        │
+        ▼
+[ Generate grounded answer ]
+        │
+        ▼
+[ Citations + abstention + validation ]
+```
 
-## Prerequisites
+Hai câu hỏi cốt lõi:
+1. Retriever có lấy đúng evidence không?
+2. Generator có dùng evidence đúng không?
 
-Bạn nên biết:
+RAG quality bị chặn bởi retrieval quality. Nếu evidence đúng không vào context, generator không thể trả lời grounded một cách đáng tin cậy.
 
-- Embeddings, cosine similarity, transformer basics.
-- Prompt engineering và structured output.
-- API integration và logging.
-- Basic database/search concepts.
+---
 
-## Core intuition: LLM memory vs external memory
+## 3. LLM Memory vs External Memory
 
 ```text
 Parametric memory = knowledge encoded trong model weights
@@ -46,30 +62,9 @@ RAG               = retrieve external evidence at inference time
 
 Model weights khó cập nhật liên tục. Documents/databases cập nhật dễ hơn. RAG dùng retrieval để chọn phần external memory phù hợp với query.
 
-## The RAG loop
+---
 
-```text
-User query
-  ↓
-Query understanding / normalization
-  ↓
-Retrieve relevant chunks
-  ↓
-Rerank / filter / pack context
-  ↓
-Prompt LLM with evidence
-  ↓
-Generate grounded answer
-  ↓
-Citations + abstention + validation
-```
-
-Hai câu hỏi cốt lõi:
-
-1. Retriever có lấy đúng evidence không?
-2. Generator có dùng evidence đúng không?
-
-## RAG vs fine-tuning
+## 4. RAG vs Fine-Tuning
 
 | Need | RAG | Fine-tuning |
 |---|---|---|
@@ -90,10 +85,12 @@ Need both → RAG + fine-tuned/instruct model
 ```
 
 <Callout type="warning" title="Fine-tuning không phải database">
-Fine-tuning không đảm bảo model nhớ facts chính xác, không dễ xóa dữ liệu, và không tốt cho knowledge thay đổi liên tục.
+Fine-tuning không đảm bảo model nhớ facts chính xác, không dễ xóa dữ liệu, và không tốt cho knowledge thay đổi liên tục. Nếu bạn muốn "nhét" facts vào model, RAG là câu trả lời.
 </Callout>
 
-## RAG vs long-context prompting
+---
+
+## 5. RAG vs Long-Context Prompting
 
 Long-context model cho phép đưa nhiều text hơn, nhưng:
 
@@ -110,9 +107,11 @@ Large corpus → retrieval first
 Small known context → long-context may be enough
 ```
 
-## What RAG actually optimizes
+---
 
-RAG không làm LLM “biết” tài liệu. Nó tăng xác suất model trả lời đúng bằng cách đưa evidence liên quan vào conditional context.
+## 6. What RAG Actually Optimizes
+
+RAG không làm LLM "biết" tài liệu. Nó tăng xác suất model trả lời đúng bằng cách đưa evidence liên quan vào conditional context.
 
 ```text
 P(answer | question)                 # no RAG
@@ -121,7 +120,9 @@ P(answer | question, retrieved_docs) # RAG
 
 Nếu retrieved_docs sai, model có thể trả lời sai tự tin hơn.
 
-## RAG failure taxonomy
+---
+
+## 7. RAG Failure Taxonomy
 
 | Failure | Mô tả | Symptom |
 |---|---|---|
@@ -137,7 +138,9 @@ Nếu retrieved_docs sai, model có thể trả lời sai tự tin hơn.
 | Stale docs | index cũ | answer outdated |
 | Permission leak | retrieve doc user không được xem | security incident |
 
-## Grounding and abstention
+---
+
+## 8. Grounding and Abstention
 
 Grounding nghĩa là answer phải dựa trên evidence đã retrieve.
 
@@ -155,10 +158,12 @@ Nhưng prompt-only không đủ. Cần:
 - no-answer test cases.
 
 <Callout type="danger" title="Không có evidence thì phải biết im lặng">
-Một RAG system production phải có behavior “I don’t know”. Nếu nó luôn trả lời, nó sẽ hallucinate khi retrieval fail.
+Một RAG system production phải có behavior "I don't know". Nếu nó luôn trả lời, nó sẽ hallucinate khi retrieval fail.
 </Callout>
 
-## Tiny RAG from scratch: mental model
+---
+
+## 9. Tiny RAG from Scratch
 
 ```python
 import numpy as np
@@ -183,7 +188,9 @@ chunks = [
 
 Điều cần hiểu: RAG không bắt đầu ở LLM. Nó bắt đầu ở evidence selection.
 
-## Implementation lab: tiny RAG from scratch
+---
+
+## Implementation Playbook: Tiny RAG from Scratch
 
 **Goal:** build RAG nhỏ không dùng framework để hiểu cơ chế.
 
@@ -204,29 +211,44 @@ Record:
 | Query | Expected doc | Retrieved top-3 | Answer correct | Citation correct |
 |---|---|---|---|---|
 
-## Common mistakes & debugging checklist
+---
 
-<Callout type="warning" title="Mistake 1: gọi RAG nhưng không log retrieved chunks">
-Nếu answer sai mà bạn không biết chunks nào được retrieve, bạn không thể phân biệt retrieval failure và generation failure.
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Gọi RAG nhưng không log retrieved chunks">
+**Triệu chứng:** Answer sai, không biết chunks nào được retrieve, không phân biệt retrieval failure và generation failure.
+
+**Fix:** Log retrieved chunk IDs. Nếu answer sai, bạn có thể phân biệt retrieval failure (chunks sai) và generation failure (chunks đúng, answer sai).
 </Callout>
 
-<Callout type="warning" title="Mistake 2: dùng top-k bất kỳ không eval">
-`top_k=5` không thần kỳ. Cần đo recall@k trên query set thật.
+<Callout type="warning" title="Pitfall 2: Dùng top-k bất kỳ không eval">
+**Triệu chứng:** `top_k=5` không thần kỳ, nhưng không có recall@k, không biết k có đủ không.
+
+**Fix:** `top_k=5` không thần kỳ. Cần đo recall@k trên query set thật. Benchmark recall@k và answer faithfulness theo corpus/task.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: bỏ qua access control trong retrieval">
-Không được retrieve docs user không có quyền rồi nhờ LLM giữ bí mật. Permission filter phải xảy ra trước context construction.
+<Callout type="danger" title="Pitfall 3: Bỏ qua access control trong retrieval">
+**Triệu chứng:** User retrieve docs không có quyền, data leak.
+
+**Fix:** Không được retrieve docs user không có quyền rồi nhờ LLM giữ bí mật. Permission filter phải xảy ra trước context construction.
 </Callout>
 
-Checklist:
+---
 
-1. Có source documents là source of truth không?
-2. Có log retrieved chunk IDs không?
-3. Có expected relevant docs cho eval không?
-4. Có citations không?
-5. Có no-answer behavior không?
-6. Có document version metadata không?
-7. Có permission filters không?
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| RAG thay vì fine-tuning | cập nhật dễ, không retrain | retrieval cost + LLM cost |
+| RAG + fine-tuned model | cả behavior lẫn facts | cost cả train lẫn retrieval |
+| Long-context thay RAG | không cần retrieval | token cost, latency, lost-in-the-middle |
+| Abstention (I don't know) | không hallucinate | user UX cần fallback |
+| Citation validation | không cite sai | extra LLM calls |
+| Access control | không leak | filter complexity |
+
+RAG không thay thế fine-tuning; hai kỹ thuật giải quyết vấn đề khác nhau. RAG phù hợp với private/fresh knowledge, fine-tuning phù hợp với style/format/domain adaptation.
+
+---
 
 ## Practice exercises
 
@@ -236,6 +258,8 @@ Checklist:
 4. So sánh RAG vs fine-tuning cho policy docs thay đổi hàng tuần.
 5. Viết prompt RAG có citations và abstention.
 
+---
+
 ## Knowledge check
 
 1. Parametric memory khác external memory thế nào?
@@ -244,7 +268,9 @@ Checklist:
 4. Long-context có thay thế RAG không?
 5. Retrieval miss ảnh hưởng answer thế nào?
 6. Vì sao citations cần validation?
-7. “I don’t know” quan trọng khi nào?
+7. "I don't know" quan trọng khi nào?
+
+---
 
 ## Answer key
 
@@ -256,25 +282,7 @@ Checklist:
 6. Model có thể fabricate citation hoặc cite chunk không support claim.
 7. Khi context thiếu evidence hoặc retrieval confidence thấp.
 
-## Mini-project: Tiny grounded QA system
-
-**Task:** Build mini RAG trên 20 markdown docs.
-
-**Deliverables:**
-
-- Chunked docs với metadata.
-- Embeddings + cosine retrieval.
-- RAG prompt có citations.
-- 30-query eval set.
-- Metrics: recall@3, answer correctness, citation correctness.
-- Failure analysis 5 cases.
-
-**Success criteria:**
-
-- Retrieved chunks được log.
-- Answer có citations.
-- System biết nói insufficient information.
-- Có phân biệt retrieval failure vs generation failure.
+---
 
 ## Điểm cần nhớ
 
@@ -283,6 +291,8 @@ Checklist:
 - Retrieval quality giới hạn answer quality.
 - RAG không thay thế fine-tuning; hai kỹ thuật giải quyết vấn đề khác nhau.
 - Production RAG cần grounding, abstention, citations, eval và access control.
+
+---
 
 ## Next chapter bridge
 

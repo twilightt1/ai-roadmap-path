@@ -1,76 +1,34 @@
 Agentic AI Production không phải tối đa hóa autonomy. Nó là **bounded autonomy**: cho AI đủ khả năng tiến triển task, nhưng giới hạn actions, cost, permissions, time, data access và failure modes. Đây là chương capstone của Phase 9 — nơi tất cả agent concepts gặp production constraints.
 
-## Why this matters
+---
 
-Agent production fail hard hơn chatbot vì chúng:
+## 1. The Incident (Tình huống sự cố)
 
-- thực hiện hành động lặp lại,
-- dùng tools có side effects,
-- persist state,
-- truy cập sensitive data,
-- chạy lâu,
-- phối hợp nhiều agents,
-- tích lũy cost,
-- trông competent ngay cả khi off-track.
+<Callout type="danger" title="Báo cáo sự cố: Agent research tốn 2,800 USD trong 4 giờ, không có kill switch">
+**Bối cảnh:** Một team build "research agent" production. Agent có planner, search tool, RAG, source extractor, synthesizer. Mục tiêu: tạo báo cáo thị trường. Architecture ban đầu rất đơn giản: agent chạy đến khi "xong", không có budget, không có kill switch.
 
-<Callout type="danger" title="Production question không phải 'agent có làm được không?'">
-Câu hỏi đúng là: 'Agent có làm task an toàn, observable, lặp lại được, trong budget, và recover khi sai không?'
+**Sự cố:** Một user thử câu hỏi mơ hồ: "Tìm hiểu mọi thứ về thị trường X". Agent chạy, không có done condition rõ. Nó tìm source, đọc, tìm tiếp, đọc tiếp, đổi query, tìm lại. 4 giờ sau, agent vẫn chạy. 2.8 triệu token, 8,000 lần search tool, 2,800 USD.
+
+1. Không có max steps, max tokens, max cost, max wall-clock.
+2. Không có kill switch — không có cách dừng ngay ongoing run.
+3. Không có budget per tenant/agent.
+4. Không có alert on abnormal spend.
+5. Agent trông competent ngay cả khi off-track.
+
+**Hậu quả:** Hóa đơn API tăng 2,800 USD trong 4 giờ, agent phải tắt khẩn cấp, và team phải thiết kế lại toàn bộ budget, kill switch, và audit trail.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: production question không phải "agent có làm được không?" — câu hỏi đúng là "Agent có làm task an toàn, observable, lặp lại được, trong budget, và recover khi sai không?" Agent production fail hard hơn chatbot vì chúng thực hiện hành động lặp lại, dùng tools có side effects, persist state, truy cập sensitive data, chạy lâu, và tích lũy cost.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Định nghĩa bounded autonomy.
-2. Thiết kế production agent architecture.
-3. Implement task decomposition và progress tracking.
-4. Định nghĩa recovery policies.
-5. Thêm human escalation.
-6. Thiết kế audit trails.
-7. Implement cost và step controls.
-8. Đánh giá agent reliability.
-9. Monitor agent behavior trong production.
-10. Tạo production readiness checklist.
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Agent control loop và components.
-- Function calling/tool use safety.
-- Multi-agent coordination.
-- Observability và security basics.
-
-## Core intuition: bounded autonomy
+## 2. Architecture Blueprint (Production Agent Architecture)
 
 ```text
-Give agent enough ability to make progress.
-Constrain actions, cost, permissions, time, data, and failure modes.
-```
-
-Production agent là hệ thống có guardrails, không phải hệ thống tự do.
-
-## Bounded autonomy dimensions
-
-| Dimension | Control |
-|---|---|
-| Time | max runtime |
-| Steps | max actions |
-| Cost | token/tool budget |
-| Tools | allowlist |
-| Data | ACL filters |
-| Side effects | approval gates |
-| Scope | task boundaries |
-| Confidence | escalation threshold |
-| Memory | write policy |
-| Output | validation |
-
-## Production agent architecture
-
-```text
-Client / User
-  ↓
-Agent API
+[ Client / User ]
+        │
+        ▼
+[ Agent API ]
   ├── Auth / tenant policy
   ├── Task classifier
   ├── Risk classifier
@@ -85,11 +43,42 @@ Agent API
   ├── Audit log
   ├── Cost/rate limiter
   └── Observability
-      ↓
-Tools / APIs / RAG / Code sandbox / External systems
+        │
+        ▼
+[ Tools / APIs / RAG / Code sandbox / External systems ]
 ```
 
-## Task decomposition
+Production agent là hệ thống có guardrails, không phải hệ thống tự do. Runtime quyết định: max steps, max cost, max time, kill switch, audit trail, approval gates, và termination.
+
+---
+
+## 3. Bounded Autonomy
+
+```text
+Give agent enough ability to make progress.
+Constrain actions, cost, permissions, time, data, and failure modes.
+```
+
+Bounded autonomy dimensions:
+
+| Dimension | Control |
+|---|---|
+| Time | max runtime |
+| Steps | max actions |
+| Cost | token/tool budget |
+| Tools | allowlist |
+| Data | ACL filters |
+| Side effects | approval gates |
+| Scope | task boundaries |
+| Confidence | escalation threshold |
+| Memory | write policy |
+| Output | validation |
+
+Mỗi dimension là một control. Production agent không phải là agent có thể làm mọi thứ — đó là agent có thể làm một số thứ, trong một số giới hạn, với một số guardrails.
+
+---
+
+## 4. Task Decomposition và Progress Tracking
 
 Production agent chuyển goal thành subtasks có structure:
 
@@ -127,9 +116,7 @@ Good:
 Stop after producing a report with exactly 5 cited sources, confidence scores, and known limitations.
 ```
 
-## Progress tracking
-
-Track mỗi step:
+Progress trace cho bạn biết agent đang ở đâu, còn budget bao nhiêu, có stuck không, và khi nào nên escalate.
 
 ```json
 {
@@ -144,14 +131,9 @@ Track mỗi step:
 }
 ```
 
-Progress trace cho bạn biết:
+---
 
-- agent đang ở đâu,
-- còn budget bao nhiêu,
-- có stuck không,
-- khi nào nên escalate.
-
-## Error recovery policies
+## 5. Error Recovery Policies
 
 | Error | Recovery |
 |---|---|
@@ -167,10 +149,12 @@ Progress trace cho bạn biết:
 | Missing data | ask user or abstain |
 
 <Callout type="warning" title="Recovery phải là policy">
-Đừng để model tự invent unlimited recovery behavior. Mỗi recovery path nên được code явно với budget riêng.
+Đừng để model tự invent unlimited recovery behavior. Mỗi recovery path nên được code rõ với budget riêng. Nếu không, model có thể invent recovery path tốn tiền, không an toàn, hoặc loop.
 </Callout>
 
-## Human escalation
+---
+
+## 6. Human Escalation
 
 Escalate khi:
 
@@ -197,7 +181,11 @@ Escalation payload:
 }
 ```
 
-## Audit trails
+Human escalation không phải là "model hỏi user". Nó là runtime gate: agent đề xuất, human approve, runtime execute.
+
+---
+
+## 7. Audit Trails
 
 Agent audit logs phải gồm:
 
@@ -233,7 +221,11 @@ Agent audit logs phải gồm:
 }
 ```
 
-## Safety controls
+Without audit trail, agent debugging is storytelling. Bạn không thể reproduce failure, không thể audit, không thể improve.
+
+---
+
+## 8. Safety Controls
 
 ### Action confirmation
 
@@ -275,12 +267,12 @@ Not allowed: access host filesystem.
 - kill switch.
 
 <Callout type="danger" title="Kill switch là feature production">
-Agent cần có kill switch dừng ngay ongoing run khi phát hiện anomaly, cost spike hoặc security concern.
+Agent cần có kill switch dừng ngay ongoing run khi phát hiện anomaly, cost spike hoặc security concern. Kill switch không optional — nó là feature production.
 </Callout>
 
-## Agent observability
+---
 
-Metrics:
+## 9. Agent Observability
 
 | Metric | Meaning |
 |---|---|
@@ -309,7 +301,9 @@ Dashboards:
 - repeated recovery loops,
 - evaluation regression.
 
-## Evaluation framework
+---
+
+## 10. Evaluation Framework
 
 ### Unit tests
 
@@ -352,7 +346,9 @@ Dashboards:
 - cost-exhaustion attacks,
 - cross-tenant access attempts.
 
-## Production readiness checklist
+---
+
+## 11. Production Readiness Checklist
 
 ### Runtime
 
@@ -410,30 +406,9 @@ Dashboards:
 - cost eval,
 - latency eval.
 
-## Implementation lab: production research agent skeleton
+---
 
-Build agent với:
-
-- planner,
-- search tool,
-- RAG/KB tool,
-- source extractor,
-- synthesizer,
-- verifier,
-- human escalation mock,
-- budget controls,
-- audit trace.
-
-Required features:
-
-- task decomposition,
-- parallel research branches,
-- citation tracking,
-- confidence scoring,
-- no-answer behavior,
-- max cost/step controls,
-- source quality scoring,
-- final report with limitations.
+## Implementation Playbook: Production Research Agent Skeleton
 
 ```python
 from dataclasses import dataclass, field
@@ -461,67 +436,7 @@ def should_escalate(state: ResearchState) -> bool:
     return False
 ```
 
-Deliverables:
-
-- architecture diagram,
-- state schema,
-- tool schemas,
-- agent trace examples,
-- eval set với 20 research tasks,
-- red-team tests,
-- production readiness checklist.
-
-## Acceptance criteria
-
-| Area | Target |
-|---|---|
-| Citation coverage | every factual claim cited |
-| Unsupported claim rate | near zero |
-| Budget enforcement | 100% |
-| Step limit enforcement | 100% |
-| Escalation correctness | tested |
-| Prompt injection resistance | tested |
-| Trace completeness | all runs logged |
-
-## Eval dataset categories
-
-Include ít nhất:
-
-- 10 simple research tasks,
-- 10 multi-hop research tasks,
-- 5 ambiguous tasks,
-- 5 adversarial prompt-injection tasks,
-- 5 no-answer/insufficient-evidence tasks,
-- 5 source-conflict tasks,
-- 5 budget-constrained tasks.
-
-## Failure report template
-
-```text
-Top 5 failed tasks:
-- what happened
-- failure category
-- trace excerpt
-- root cause
-- mitigation
-- metric impact after fix
-```
-
-## Common mistakes & debugging checklist
-
-<Callout type="warning" title="Mistake 1: không có kill switch">
-Agent chạy dài không có cách dừng ngay sẽ tạo cost spike và nguy cơ security.
-</Callout>
-
-<Callout type="warning" title="Mistake 2: không version agent/prompt">
-Khi agent behavior regression, bạn cần biết agent version, prompt version và model nào tạo ra.
-</Callout>
-
-<Callout type="danger" title="Mistake 3: agent trông competent khi off-track">
-Agent có thể output tự tin nhưng sai. Cần verifier独立, không chỉ tin final answer.
-</Callout>
-
-Checklist:
+Production checklist:
 
 1. Có max steps/time/cost không?
 2. Có kill switch không?
@@ -534,6 +449,46 @@ Checklist:
 9. Agent/prompt/model có version không?
 10. Có monitor cost/escalation/failure không?
 
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Không có kill switch">
+**Triệu chứng:** Agent chạy dài không có cách dừng ngay, cost spike, không có cách dừng.
+
+**Fix:** Agent cần kill switch dừng ngay ongoing run khi phát hiện anomaly, cost spike hoặc security concern. Kill switch là feature production.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Không version agent/prompt">
+**Triệu chứng:** Agent behavior regression, không biết agent version, prompt version, model nào tạo ra.
+
+**Fix:** Mỗi run có agent_version, prompt_version, model. Khi agent fail, bạn có thể reproduce failure, so sánh versions, và biết regression.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Agent trông competent khi off-track">
+**Triệu chứng:** Agent output tự tin nhưng sai, không có verifier độc lập, không ai phát hiện.
+
+**Fix:** Agent có thể output tự tin nhưng sai. Cần verifier độc lập, không chỉ tin final answer. Đừng để model tự chấm điểm mình.
+</Callout>
+
+---
+
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Bounded autonomy | an toàn, observable | hạn chế adaptive |
+| Kill switch | dừng ngay anomaly | implementation overhead |
+| Human escalation | safety | latency, SLA |
+| Audit trail | reproduce, audit | storage, log cost |
+| Budget per role | cost control | over-budget stops |
+| Red-team tests | find weaknesses | cost, time |
+| Verifier độc lập | catch off-track | extra LLM calls |
+
+Production agent = bounded autonomy, không maximum autonomy. Mỗi control thêm cost, nhưng cũng thêm safety. Đừng cắt control để giảm cost — bạn sẽ mất safety.
+
+---
+
 ## Practice exercises
 
 1. Thiết kế bounded autonomy policy cho email agent.
@@ -543,6 +498,8 @@ Checklist:
 5. Viết production readiness checklist cho support agent.
 6. Thiết kế eval dataset với 7 categories.
 7. Viết kill switch mechanism.
+
+---
 
 ## Knowledge check
 
@@ -554,6 +511,8 @@ Checklist:
 6. Cost controls gồm những gì?
 7. Agent evaluation có những levels nào?
 
+---
+
 ## Answer key
 
 1. Cho agent đủ khả năng tiến triển task nhưng giới hạn actions/cost/permissions/time/data/failure.
@@ -564,44 +523,18 @@ Checklist:
 6. Max tokens/calls/time/parallel, per-tenant/agent budgets, alerts, kill switch.
 7. Unit, scenario, regression, human, red-team.
 
-## Mini-project: Production Research Agent
-
-**Task:** Build production-grade research agent skeleton.
-
-**Deliverables:**
-
-- Architecture diagram.
-- Bounded autonomy policy.
-- Task decomposition schema.
-- Tool schemas with auth.
-- Audit trail schema.
-- Budget/step controls.
-- Human escalation mock.
-- Eval set 20 tasks across 7 categories.
-- Red-team tests.
-- Failure report.
-- Production readiness checklist.
-
-**Success criteria:**
-
-- Every factual claim cited.
-- Unsupported claim rate near zero.
-- Budget enforcement 100%.
-- Step limit enforcement 100%.
-- Escalation correctness tested.
-- Prompt injection resistance tested.
-- Trace complete for all runs.
-- Kill switch works.
-- Eval can run with one command.
+---
 
 ## Điểm cần nhớ
 
 - Production agent = bounded autonomy, không maximum autonomy.
 - Task decomposition cần acceptance criteria và done condition.
-- Error recovery là policy, không để model tự Invent.
+- Error recovery là policy, không để model tự invent.
 - Audit trails và traces là bắt buộc cho agent production.
 - Cost/step/time controls và kill switch là feature, không optional.
 - Agent evaluation cần unit/scenario/regression/human/red-team levels.
+
+---
 
 ## Phase 9 wrap-up
 
@@ -616,6 +549,8 @@ Bạn đã hoàn thành module **AI Agents & Agentic Systems**:
 Nguyên tắc xuyên suốt Phase 9:
 
 > Agent không hoàn thành khi nó chạy đúng một lần. Agent chỉ production-ready khi bạn giới hạn được autonomy, inspect được trajectory, evaluate được success, control được tools, reproduce được failures và improve bằng evidence.
+
+---
 
 ## Next phase bridge
 

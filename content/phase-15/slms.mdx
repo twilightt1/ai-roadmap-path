@@ -206,7 +206,7 @@ Bạn giảm server cost, nhưng tăng chi phí QA trên nhiều thiết bị, m
 
 ---
 
-## 8. Implementation Playbook (Thực thi)
+## Implementation Playbook: Local SLM Benchmark via Ollama
 
 Dưới đây là skeleton benchmark local models qua Ollama cho project **Local LLM Setup**.
 
@@ -272,43 +272,81 @@ Mục tiêu không phải chứng minh SLM luôn tốt hơn. Mục tiêu là tì
 
 ---
 
-## 9. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## Project Guide: Local LLM Setup (Phase 15 Easy)
+
+Mục tiêu project: cài đặt Ollama, chạy nhiều SLM local và benchmark latency, memory và quality.
+
+### Requirements
+
+- Cài đặt Ollama trên máy local.
+- Pull ít nhất 3 model: một SLM nhỏ (1B-3B), một SLM trung (7B), một optional frontier baseline.
+- Viết script Python gọi Ollama API để chạy 3 task: classification, extraction, rewrite.
+- Đo latency, memory usage và JSON validity.
+
+### Suggested stack
+
+```text
+Ollama
+Python + requests
+```
+
+### Benchmark plan
+
+```text
+Task 1: Intent classification
+  - input: support ticket text
+  - output: JSON {"intent": "...", "confidence": 0.0-1.0}
+
+Task 2: Field extraction
+  - input: email/invoice text
+  - output: JSON {"company": "...", "amount": ..., "due_date": "..."}
+
+Task 3: Rewrite
+  - input: informal complaint
+  - output: professional rewrite
+```
+
+### Acceptance criteria
+
+- Có bảng so sánh 3+ model trên 3 task.
+- Mỗi model có latency, memory peak và quality score.
+- Có ít nhất 1 trường hợp model nhỏ vượt model lớn (nếu có) hoặc ghi chú vì sao.
+- Có ghi chú về license và context window.
+- Có đề xuất: model nào nên dùng cho task nào.
+
+Stretch goal: thêm GGUF quantized variant (Q4 vs Q8) và so sánh quality/memory.
+
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
 <Callout type="warning" title="Pitfall 1: Demo prompt quá dễ">
 **Triệu chứng:** SLM trông rất tốt trong demo nhưng thất bại với dữ liệu thật.
 
-**Nguyên nhân:** Prompt demo sạch, ngắn và không có lỗi chính tả, trong khi production input dài, lộn xộn, đa ngôn ngữ và thiếu ngữ cảnh.
-
-**Cách khắc phục:** Tạo eval set từ logs production đã ẩn danh. Bao gồm edge cases, noisy inputs và negative examples.
+**Fix:** Tạo eval set từ logs production đã ẩn danh. Bao gồm edge cases, noisy inputs và negative examples.
 </Callout>
 
 <Callout type="warning" title="Pitfall 2: Context window quá nhỏ">
 **Triệu chứng:** SLM trả lời tốt với câu ngắn nhưng thất bại khi cần đọc nhiều tài liệu.
 
-**Nguyên nhân:** Model nhỏ thường có context limit thấp hơn hoặc suy giảm chất lượng ở context dài.
-
-**Cách khắc phục:** Dùng RAG compression, reranking, chunk selection tốt hơn; hoặc route long-context tasks sang model lớn.
+**Fix:** Dùng RAG compression, reranking, chunk selection tốt hơn; hoặc route long-context tasks sang model lớn.
 </Callout>
 
 <Callout type="danger" title="Pitfall 3: Bỏ qua license">
 **Triệu chứng:** Model đã tích hợp xong nhưng legal/compliance chặn trước release.
 
-**Nguyên nhân:** License không cho commercial use, có điều khoản redistribution hoặc output usage không phù hợp.
-
-**Cách khắc phục:** Kiểm tra license trước khi benchmark sâu. Ghi license vào model registry và ADR deployment.
+**Fix:** Kiểm tra license trước khi benchmark sâu. Ghi license vào model registry và ADR deployment.
 </Callout>
 
 <Callout type="warning" title="Pitfall 4: Không có fallback policy">
 **Triệu chứng:** SLM trả lời sai chắc nịch trong các case khó.
 
-**Nguyên nhân:** Hệ thống ép mọi request qua SLM để tiết kiệm chi phí, không đo uncertainty hoặc complexity.
-
-**Cách khắc phục:** Dùng confidence score, rule-based guard, self-check, hoặc router để escalate sang model lớn khi input vượt khả năng SLM.
+**Fix:** Dùng confidence score, rule-based guard, self-check, hoặc router để escalate sang model lớn khi input vượt khả năng SLM.
 </Callout>
 
 ---
 
-## 10. Cost & Performance Unit Economics
+## Cost / Performance / SLM Unit Economics
 
 | Chiến lược | Lợi ích | Trade-off |
 |---|---|---|
@@ -367,6 +405,8 @@ Nhưng nếu SLM làm tăng retry, khiếu nại hoặc escalation thủ công, 
 - Chọn SLM phải dựa trên quality target, latency SLA, hardware, context length, license và fallback policy.
 - Benchmark SLM cần dữ liệu production thật, không chỉ demo prompt sạch.
 - Hybrid architecture thường tốt nhất: SLM xử lý phần dễ, model lớn xử lý phần khó/rủi ro cao.
+
+---
 
 ## Next chapter bridge
 

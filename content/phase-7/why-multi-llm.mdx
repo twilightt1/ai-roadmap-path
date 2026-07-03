@@ -1,58 +1,48 @@
-Multi-LLM Architecture không phải là “gọi nhiều model cho vui”. Đây là chiến lược production để cân bằng **quality, latency, cost, reliability, context length, compliance, modality và capability**. Ở quy mô sản phẩm thật, model choice không nên là hằng số hard-code; nó phải là một **runtime policy** được đo, log, kiểm thử và govern.
+Multi-LLM Architecture không phải là "gọi nhiều model cho vui". Đây là chiến lược production để cân bằng **quality, latency, cost, reliability, context length, compliance, modality và capability**. Ở quy mô sản phẩm thật, model choice không nên là hằng số hard-code; nó phải là một **runtime policy** được đo, log, kiểm thử và govern.
 
-## Why this matters
+---
 
-Single-model architecture đơn giản nhưng dễ vỡ:
+## 1. The Incident (Tình huống sự cố)
 
-- Provider outage làm toàn bộ app chết.
-- Một model giỏi reasoning nhưng chậm/đắt cho task đơn giản.
-- Một model rẻ trả JSON kém làm pipeline extraction fail.
-- Tenant enterprise có data policy không cho gửi dữ liệu sang provider nhất định.
-- Task vision/code/long-context cần capability khác nhau.
-- Model version update có thể làm prompt cũ regression.
+<Callout type="danger" title="Báo cáo sự cố: Startup lỗ 18,000 USD/tháng vì hard-code frontier model cho mọi request">
+**Bối cảnh:** Một team build "AI chatbot support" cho SaaS. Architecture ban đầu rất đơn giản: `model = "gpt-4o"`, hard-code cho mọi request. App chạy ngon, user happy, nhưng đội ngũ không để ý đến chi phí.
 
-<Callout type="warning" title="Multi-LLM không phải redundancy đơn giản">
-Nếu bạn chỉ gọi provider B khi provider A lỗi, đó mới là fallback. Multi-LLM architecture thật sự cần routing policy, quality measurement, cost accounting, observability và governance.
+**Sự cố:** 1.2 triệu request/tháng, 90% là simple classification (phân loại câu hỏi, routing intent). 10% là reasoning thực sự. Mỗi request trung bình 1,800 token, 2 USD/1M token. Hóa đơn API tăng 18,000 USD/tháng.
+
+1. Không có routing — model mạnh nhất cho mọi request.
+2. Không có task classification — 90% là simple task, không cần frontier model.
+3. Không có cost tracking — không biết ai tiêu tiền, không biết ai đang lãng phí.
+4. Không có capability matrix — không biết model nào phù hợp cho task nào.
+5. Không có fallback policy — chỉ phụ thuộc vào một provider.
+
+**Hậu quả:** Startup lỗ tiền. Đội ngũ phải tắt chatbot, thiết kế lại toàn bộ routing, cost tracking, và model selection. Hóa đơn giảm 18,000 USD/tháng xuống 4,200 USD/tháng sau khi 90% simple task được chuyển sang model rẻ.
 </Callout>
 
-## Learning objectives
+Bài học rút ra: model choice là một quyết định production, không phải hard-code. Nếu không có routing, cost tracking, và capability matrix, bạn đang lãng phí tiền và không biết ai tiêu. Một model không tối ưu cho mọi task.
 
-Sau chương này, bạn sẽ có thể:
+---
 
-1. Giải thích vì sao model selection nên là runtime policy.
-2. Phân biệt single-model, fallback-only và true multi-LLM architecture.
-3. Xác định routing dimensions: task, cost, latency, quality, context, compliance, modality.
-4. Thiết kế model capability matrix.
-5. Hiểu hidden complexity của multi-provider systems.
-6. Thiết kế evaluation loop cho model/provider choice.
-7. Nhận diện risks: schema drift, prompt portability, data-policy mismatch.
+## 2. Architecture Blueprint (Model Choice as Runtime Policy)
 
-## Prerequisites
-
-Bạn nên biết:
-
-- Phase 6 LLM fundamentals: context, latency, token cost.
-- Provider abstraction và API contracts.
-- Prompt engineering và structured output.
-- Retry/fallback/observability basics.
-- Secure API integration: data policy, secrets, logging.
-
-## Core intuition: model choice is a policy decision
-
-Một request production nên đi qua decision layer:
+Một request production không phải là một LLM call. Nó là một **decision layer**:
 
 ```text
-User request
-  ↓
-Task / risk / modality classifier
-  ↓
-Candidate model set
-  ↓
-Constraints: cost, latency, compliance, context, tools
-  ↓
-Selected provider/model
-  ↓
-Validation + fallback + trace
+[ User request ]
+        │
+        ▼
+[ Task / risk / modality classifier ]
+        │
+        ▼
+[ Candidate model set ]
+        │
+        ▼
+[ Constraints: cost, latency, compliance, context, tools ]
+        │
+        ▼
+[ Selected provider/model ]
+        │
+        ▼
+[ Validation + fallback + trace ]
 ```
 
 Thay vì:
@@ -67,7 +57,13 @@ Bạn muốn:
 model = router.select(request, tenant_policy, budget, eval_scores)
 ```
 
-## Single-model vs fallback-only vs true multi-LLM
+Runtime quyết định: model nào, budget nào, fallback nào, trace nào, và policy nào. Một model không tối ưu cho mọi task, cost, latency, context và compliance.
+
+---
+
+## 3. Single-model vs Fallback-only vs True Multi-LLM
+
+Không phải mọi "gọi nhiều model" là multi-LLM. Đừng nhầm lẫn.
 
 | Architecture | Ý tưởng | Ưu điểm | Hạn chế |
 |---|---|---|---|
@@ -75,13 +71,15 @@ model = router.select(request, tenant_policy, budget, eval_scores)
 | Fallback-only | model B khi model A lỗi | tăng reliability | không tối ưu cost/task quality |
 | True multi-LLM | route theo task/policy/metrics | tối ưu quality-cost-latency | cần router, eval, observability |
 
-<Callout type="info" title="Giảng viên nói thẳng">
-Multi-LLM chỉ có giá trị nếu bạn đo được quyết định của router. Nếu không log vì sao request dùng model nào, bạn chỉ đang thêm complexity mà không có governance.
+<Callout type="warning" title="Multi-LLM không phải redundancy đơn giản">
+Nếu bạn chỉ gọi provider B khi provider A lỗi, đó mới là fallback. Multi-LLM architecture thật sự cần routing policy, quality measurement, cost accounting, observability và governance.
 </Callout>
 
-## Why one model is never optimal for all tasks
+---
 
-Các task khác nhau có requirements khác nhau:
+## 4. Why One Model is Never Optimal for All Tasks
+
+Các task khác nhau có requirements khác nhau. Một model frontier có thể làm mọi thứ "đủ tốt", nhưng unit economics có thể chết nếu bạn dùng nó cho hàng triệu tasks đơn giản.
 
 | Task | Điều quan trọng | Model phù hợp |
 |---|---|---|
@@ -92,11 +90,13 @@ Các task khác nhau có requirements khác nhau:
 | Sensitive internal docs | privacy/data residency | private/local/compliant provider |
 | High-volume extraction | cost, schema reliability | structured-output reliable model |
 
-Một model frontier có thể làm mọi thứ “đủ tốt”, nhưng unit economics có thể chết nếu bạn dùng nó cho hàng triệu tasks đơn giản.
+Một model không tối ưu cho mọi task. Đó là lý do bạn cần capability matrix.
 
-## Capability matrix design
+---
 
-Capability matrix là registry mô tả model/provider theo dimensions đo được.
+## 5. Capability Matrix Design
+
+Capability matrix là registry mô tả model/provider theo dimensions đo được. Nó là nền của routing và fallback.
 
 | Dimension | What to measure | Example |
 |---|---|---|
@@ -127,65 +127,15 @@ Example registry row:
 }
 ```
 
-## Multi-LLM architecture patterns
+<Callout type="warning" title="Capability matrix là dữ liệu, không phải marketing">
+Benchmark marketing của provider không phải eval score. Eval score phải đo trên data nội bộ của bạn. Nếu không có eval, routing chỉ là opinion.
+</Callout>
 
-### Static model selection
+---
 
-Mỗi feature dùng một model cố định.
+## 6. Hidden Complexity of Multi-Provider Systems
 
-```text
-/support-classifier → cheap model
-/legal-chat → strong model
-/vision-qa → vision model
-```
-
-Đơn giản nhưng kém linh hoạt.
-
-### User-tier routing
-
-```text
-free users → cheap model
-pro users → higher-quality model
-enterprise → compliant provider/private model
-```
-
-Tốt cho cost control, nhưng phải tránh làm quality quá tệ cho free tier.
-
-### Task-based routing
-
-Router phân loại task rồi chọn model.
-
-```text
-classification → small model
-reasoning → strong model
-code → code model
-image → multimodal model
-```
-
-### Verifier/judge model
-
-Một model sinh answer, model khác kiểm tra.
-
-```text
-generator → answer
-judge/verifier → pass/fail/score
-```
-
-Dùng cho high-risk workflows nhưng tăng cost/latency.
-
-### Specialist models
-
-Dùng model domain-specific:
-
-- embedding model cho retrieval,
-- reranker cho ranking,
-- code model cho code,
-- local model cho private data,
-- frontier model cho hard reasoning.
-
-## Hidden complexity of multi-provider systems
-
-Multi-provider không chỉ là đổi endpoint:
+Multi-provider không chỉ là đổi endpoint. Mỗi provider có khác biệt:
 
 | Difference | Production impact |
 |---|---|
@@ -198,7 +148,11 @@ Multi-provider không chỉ là đổi endpoint:
 | Model versioning khác | regression monitoring cần thiết |
 | Data policy khác | tenant routing phải enforce |
 
-## Prompt portability problem
+Đó là lý do multi-LLM cần provider abstraction layer. App không nên phụ thuộc provider-specific SDK.
+
+---
+
+## 7. Prompt Portability Problem
 
 Prompt tối ưu cho model A có thể kém trên model B:
 
@@ -207,9 +161,27 @@ Prompt tối ưu cho model A có thể kém trên model B:
 - model D over-refuse với safety wording,
 - model E bỏ qua examples dài.
 
-Vì vậy multi-LLM cần eval prompt trên từng target model.
+Vì vậy multi-LLM cần eval prompt trên từng target model. Prompt không portable là một rủi ro production.
 
-## Production decision framework
+---
+
+## 8. Multi-LLM Architecture Patterns
+
+| Pattern | Ý tưởng | Tradeoff |
+|---|---|---|
+| Static model selection | mỗi feature dùng một model cố định | đơn giản nhưng kém linh hoạt |
+| User-tier routing | free → cheap, pro → stronger, enterprise → compliant | cost control nhưng quality gap |
+| Task-based routing | router phân loại task rồi chọn model | tối ưu quality-cost |
+| Verifier/judge model | generator → answer, judge → pass/fail/score | tăng cost/latency cho high-risk |
+| Specialist models | embedding model cho retrieval, reranker cho ranking, code model cho code | chuyên biệt nhưng cần orchestration |
+
+<Callout type="warning" title="Verifier/judge model đổi quality lấy gì">
+Tăng cost/latency nhưng có thể tăng correctness/safety. Chỉ dùng cho high-risk workflows. Không phải mọi request cần judge.
+</Callout>
+
+---
+
+## 9. Production Decision Framework
 
 Trước khi thêm model mới, hỏi:
 
@@ -223,7 +195,9 @@ Trước khi thêm model mới, hỏi:
 8. Prompt có portable không?
 9. Observability có log model decision không?
 
-## Implementation lab: model capability scorecard
+---
+
+## 10. Implementation Playbook: Model Capability Scorecard
 
 ```python
 from dataclasses import dataclass
@@ -259,38 +233,58 @@ for m in sorted(models, key=lambda x: x.weighted_score(weights), reverse=True):
     print(m.name, round(m.weighted_score(weights), 3))
 ```
 
-Extend lab:
+**Production checklist:**
 
-1. Tạo 20 prompts cho classification, RAG, JSON extraction, code, multilingual.
-2. Chạy 3 models/providers.
-3. Log quality, latency, cost, JSON validity.
-4. Điền capability matrix.
-5. Viết recommendation model per task.
+- [ ] Có capability matrix cho từng model không?
+- [ ] Có eval score theo task không?
+- [ ] Có cost/latency thực tế không?
+- [ ] Có data policy per tenant không?
+- [ ] Có prompt tests cross-model không?
+- [ ] Có log route reason không?
+- [ ] Có fallback policy không?
+- [ ] Có monitor model regression không?
+- [ ] Có hard constraints cho compliance không?
+- [ ] Có provider abstraction layer không?
 
-## Common mistakes & debugging checklist
+---
 
-<Callout type="warning" title="Mistake 1: thêm nhiều model nhưng không có eval">
-Nếu không có task eval, routing chỉ là opinion. Multi-LLM cần metrics theo task, không chỉ benchmark marketing.
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: thêm nhiều model nhưng không có eval">
+**Triệu chứng:** Routing chỉ là opinion. Mỗi request có thể đến model sai, không biết ai tiêu tiền, không biết ai đang lãng phí.
+
+**Fix:** Multi-LLM cần metrics theo task, không chỉ benchmark marketing. Eval score phải đo trên data nội bộ của bạn.
 </Callout>
 
-<Callout type="warning" title="Mistake 2: quên prompt portability">
-Prompt chạy tốt trên model A có thể fail trên model B. Mỗi model route cần prompt compatibility tests.
+<Callout type="warning" title="Pitfall 2: quên prompt portability">
+**Triệu chứng:** Prompt chạy tốt trên model A có thể fail trên model B. Routing đổi model, output thay đổi đột ngột, không biết tại sao.
+
+**Fix:** Mỗi model route cần prompt compatibility tests. Prompt phải được eval trên từng target model.
 </Callout>
 
-<Callout type="danger" title="Mistake 3: routing bỏ qua data policy">
-Model tốt nhất về quality có thể không được phép nhận dữ liệu tenant. Compliance constraints phải là hard constraints, không phải soft score.
+<Callout type="danger" title="Pitfall 3: routing bỏ qua data policy">
+**Triệu chứng:** Model tốt nhất về quality có thể không được phép nhận dữ liệu tenant. Routing chỉ tối ưu quality, không có hard constraints.
+
+**Fix:** Compliance constraints phải là hard constraints, không phải soft score. Nếu tenant không cho external provider, route đó phải bị block tuyệt đối.
 </Callout>
 
-Checklist:
+---
 
-1. Có capability matrix cho từng model không?
-2. Có eval score theo task không?
-3. Có cost/latency thực tế không?
-4. Có data policy per tenant không?
-5. Có prompt tests cross-model không?
-6. Có log route reason không?
-7. Có fallback policy không?
-8. Có monitor model regression không?
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Frontier model cho mọi request | quality cao nhất | cost chết, không tối ưu |
+| Cheap model cho mọi request | cost thấp | quality thấp, hallucination |
+| Task-based routing | cost/quality cân bằng | cần router, eval, observability |
+| Verifier/judge model | correctness cao | cost/latency tăng |
+| No capability matrix | đơn giản | routing mù, không audit được |
+| No fallback | đơn giản | provider outage chết toàn app |
+| No route reason logging | đơn giản | debug không thể, audit không thể |
+
+Multi-LLM không miễn phí. Mỗi model thêm phải có eval, cost, fallback, và trace. Không có gì miễn phí trong production.
+
+---
 
 ## Practice exercises
 
@@ -300,6 +294,9 @@ Checklist:
 4. Viết decision memo: khi nào dùng frontier vs cheap vs local model.
 5. Tìm một prompt không portable giữa 2 models và phân tích vì sao.
 6. Thiết kế route logging schema.
+7. Viết decision framework cho 3 provider khác nhau.
+
+---
 
 ## Knowledge check
 
@@ -310,6 +307,9 @@ Checklist:
 5. Vì sao compliance phải là hard constraint?
 6. Verifier/judge model đổi quality lấy gì?
 7. Single-model architecture fail ở đâu?
+8. Hidden complexity của multi-provider systems là gì?
+
+---
 
 ## Answer key
 
@@ -320,27 +320,9 @@ Checklist:
 5. Vì vi phạm data policy/compliance không thể bù bằng quality cao.
 6. Tăng cost/latency nhưng có thể tăng correctness/safety.
 7. Outage, cost inefficiency, latency mismatch, capability mismatch, provider lock-in.
+8. Tokenizer khác, message schema khác, tool format khác, streaming event khác, safety filter khác, pricing khác, model versioning khác, data policy khác.
 
-## Mini-project: Model selection scorecard
-
-**Task:** Build scorecard cho 4 models/providers trong một AI product.
-
-**Deliverables:**
-
-- Capability matrix.
-- 50 eval prompts chia theo task.
-- Cost/latency measurements.
-- JSON/tool validity rate.
-- Data policy matrix.
-- Recommendation model per route.
-
-**Success criteria:**
-
-- Route decision dựa trên evidence.
-- Có hard constraints cho compliance.
-- Có route reason logging proposal.
-- Có fallback candidates.
-- Có report tradeoff quality/cost/latency.
+---
 
 ## Điểm cần nhớ
 
@@ -349,6 +331,8 @@ Checklist:
 - Capability matrix là nền của routing và fallback.
 - Prompt portability, schema drift và tokenizer differences là hidden complexity.
 - Model choice phải được đo, log và review như quyết định kiến trúc.
+
+---
 
 ## Next chapter bridge
 

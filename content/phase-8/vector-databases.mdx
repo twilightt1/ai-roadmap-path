@@ -1,46 +1,45 @@
-Vector Database không chỉ là nơi “lưu embeddings”. Nó là retrieval infrastructure: index type, similarity metric, metadata filtering, tenancy, latency, consistency, backup, hybrid search và operational behavior quyết định RAG có production được hay không.
+Vector Database không chỉ là nơi "lưu embeddings". Nó là retrieval infrastructure: index type, similarity metric, metadata filtering, tenancy, latency, consistency, backup, hybrid search và operational behavior quyết định RAG có production được hay không.
 
-## Why this matters
+---
 
-Local demo với 1,000 chunks khác hoàn toàn production với 10 triệu chunks:
+## 1. The Incident (Tình huống sự cố)
 
-- Exact scan quá chậm.
-- ANN index có thể trade recall lấy latency.
-- Metadata filter sai làm mất relevant docs hoặc leak tenant data.
-- Delete không propagate có thể retrieve tài liệu đã xóa.
-- Dense-only search miss exact IDs.
-- Managed vector DB có cost/vendor lock-in; self-host có ops burden.
+<Callout type="danger" title="Báo cáo sự cố: Post-filtering leak tenant data, 3,000 user thấy tài liệu tenant khác">
+**Bối cảnh:** Một team build multi-tenant RAG. Họ dùng vector DB, retrieve top-50, rồi post-filter theo tenant_id. Mục tiêu: tenant isolation, không leak.
 
-<Callout type="warning" title="Vector DB là search infrastructure">
-Đừng chọn vector DB chỉ vì tutorial. Hãy chọn theo workload: scale, filter semantics, hybrid search, tenancy, latency SLA, ops capability và cost.
+**Sự cố:** Vector DB search top-50, không filter. Post-filter theo tenant_id. Nhưng nếu tenant A có 50+ chunks, top-50 có thể toàn tenant A. Tenant B retrieve top-50, không có chunk nào, post-filter trả 0 results. Nhưng nếu tenant A có ít chunks, top-50 có thể chứa tenant B chunks. Tenant B retrieve top-50, post-filter trả tenant B chunks. **Tenant A user thấy tài liệu tenant B** vì post-filter sai.
+
+**Hậu quả:** 3,000 user thấy tài liệu tenant khác, 1 tenant khiếu nại, 1 incident report.
+
+1. Tenant filter phải là hard filter, không phải post-filter.
+2. Multi-tenant RAG không được dựa vào prompt để ngăn leak. Tenant/ACL filter phải xảy ra ở retrieval layer.
+3. Vector DB là search infrastructure, không chỉ storage. Đừng chọn vector DB chỉ vì tutorial.
 </Callout>
 
-## Learning objectives
+---
 
-Sau chương này, bạn sẽ có thể:
-
-1. Giải thích vector DB lưu gì ngoài vectors.
-2. Phân biệt exact search và approximate nearest neighbor.
-3. Hiểu HNSW ở mức trực giác và tuning parameters.
-4. So sánh FAISS, Chroma, Qdrant, Weaviate, Pinecone, LanceDB, pgvector.
-5. Thiết kế metadata filtering và tenant isolation.
-6. Hiểu hybrid search BM25 + dense.
-7. Quản lý index lifecycle: upsert, delete, rebuild, re-embed.
-8. Đánh giá vector DB bằng recall/latency/cost.
-
-## Prerequisites
-
-Bạn nên biết:
-
-- Embeddings và similarity metrics.
-- Chunking metadata.
-- Database indexes cơ bản.
-- RAG retrieval metrics.
-
-## Core intuition: nearest neighbor search at scale
+## 2. Architecture Blueprint (Vector Search at Scale)
 
 ```text
-query text → query vector → vector index → nearest candidate chunks → filters/rerank → top-k evidence
+[ Query text ]
+        │
+        ▼
+[ Embed query ]  ←  same model as document
+        │
+        ▼
+[ Vector index ]  ←  ANN: HNSW / IVF / PQ
+        │
+        ▼
+[ Metadata filters ]  ←  pre-filter: tenant_id, ACL, doc_type
+        │
+        ▼
+[ Top-k candidates ]
+        │
+        ▼
+[ Rerank ]  ←  optional
+        │
+        ▼
+[ Top-k evidence ]
 ```
 
 Vector DB tối ưu câu hỏi:
@@ -49,7 +48,9 @@ Vector DB tối ưu câu hỏi:
 Trong hàng triệu vectors, vectors nào gần query vector nhất, dưới metadata constraints nào?
 ```
 
-## What a vector DB stores
+---
+
+## 3. What a Vector DB Stores
 
 Một record production thường gồm:
 
@@ -72,7 +73,9 @@ Một record production thường gồm:
 
 Nếu DB chỉ lưu vector mà không lưu metadata, production RAG sẽ khó citation, filtering, debug và compliance.
 
-## Exact vs approximate search
+---
+
+## 4. Exact vs Approximate Search
 
 Exact search so query với mọi vector.
 
@@ -92,7 +95,9 @@ lower latency ↔ maybe lower recall
 
 Professor-level point: vector DB tuning là bài toán recall-latency-memory, không có setting tốt nhất cho mọi workload.
 
-## HNSW intuition
+---
+
+## 5. HNSW Intuition
 
 HNSW — Hierarchical Navigable Small World — xây graph liên kết vectors gần nhau. Search đi qua graph thay vì scan toàn bộ.
 
@@ -112,7 +117,9 @@ Key parameters:
 Tăng `efSearch` có thể cải thiện recall nhưng tăng latency. Hãy vẽ curve recall@k vs p95 latency thay vì chọn theo cảm giác.
 </Callout>
 
-## IVF and product quantization overview
+---
+
+## 6. IVF and Product Quantization Overview
 
 Một số index dùng clustering/quantization:
 
@@ -126,7 +133,9 @@ Tradeoff:
 - recall có thể giảm,
 - tuning phức tạp hơn.
 
-## Vector DB comparison
+---
+
+## 7. Vector DB Comparison
 
 | Option | Best for | Watch out |
 |---|---|---|
@@ -140,7 +149,9 @@ Tradeoff:
 | MongoDB Atlas | app already on MongoDB | feature/cost constraints |
 | Supabase Vector | Postgres ecosystem | scale depends Postgres setup |
 
-## Metadata filtering
+---
+
+## 8. Metadata Filtering
 
 Filtering examples:
 
@@ -151,7 +162,7 @@ doc_type = "policy"
 updated_at >= 2026-01-01
 ```
 
-### Pre-filter vs post-filter
+### Pre-filter vs Post-filter
 
 Pre-filter: filter trước hoặc trong vector search.
 
@@ -168,7 +179,9 @@ Post-filter: search rồi lọc.
 Multi-tenant RAG không được dựa vào prompt để ngăn leak. Tenant/ACL filter phải xảy ra ở retrieval layer.
 </Callout>
 
-## Hybrid search
+---
+
+## 9. Hybrid Search
 
 Dense embeddings mạnh semantic, sparse BM25 mạnh exact terms.
 
@@ -195,7 +208,9 @@ Dùng hybrid khi corpus có:
 - legal clauses,
 - acronyms.
 
-## Index lifecycle
+---
+
+## 10. Index Lifecycle
 
 Production index không static.
 
@@ -214,7 +229,9 @@ Operations:
 - backup metadata and source references,
 - verify deletes propagated.
 
-## Operational concerns
+---
+
+## 11. Operational Concerns
 
 Monitor:
 
@@ -228,7 +245,9 @@ Monitor:
 - delete propagation lag,
 - cost per million vectors.
 
-## Implementation lab: vector DB bakeoff
+---
+
+## Implementation Playbook: Vector DB Bakeoff
 
 **Goal:** compare vector store options on same corpus.
 
@@ -252,21 +271,7 @@ Result table:
 | DB | Recall@5 | p95 latency | Filter OK | Delete OK | Ops notes |
 |---|---:|---:|---|---|---|
 
-## Common mistakes & debugging checklist
-
-<Callout type="warning" title="Mistake 1: dùng vector-only cho docs có nhiều exact IDs">
-Dense search có thể miss error codes/API names. Hybrid search thường cần thiết cho enterprise docs.
-</Callout>
-
-<Callout type="warning" title="Mistake 2: không test metadata filters">
-Filter sai có thể làm mất relevant docs hoặc leak docs không được phép.
-</Callout>
-
-<Callout type="danger" title="Mistake 3: delete source doc nhưng vector vẫn còn">
-Nếu deleted content vẫn retrieve được, đó là data retention/security incident. Delete propagation phải được test.
-</Callout>
-
-Checklist:
+Production checklist:
 
 1. Metric config có đúng với embeddings không?
 2. Có tenant/ACL filters không?
@@ -277,6 +282,48 @@ Checklist:
 7. Có embedding version metadata không?
 8. Có latency/cost monitoring không?
 
+---
+
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+
+<Callout type="warning" title="Pitfall 1: Dùng vector-only cho docs có nhiều exact IDs">
+**Triệu chứng:** Dense search miss error codes/API names, retrieve không liên quan.
+
+**Fix:** Dense search có thể miss error codes/API names. Hybrid search thường cần thiết cho enterprise docs.
+</Callout>
+
+<Callout type="warning" title="Pitfall 2: Không test metadata filters">
+**Triệu chứng:** Filter sai, làm mất relevant docs hoặc leak docs không được phép.
+
+**Fix:** Filter sai có thể làm mất relevant docs hoặc leak docs không được phép. Test metadata filters với tenant isolation.
+</Callout>
+
+<Callout type="danger" title="Pitfall 3: Delete source doc nhưng vector vẫn còn">
+**Triệu chứng:** Deleted content vẫn retrieve được, data retention/security incident.
+
+**Fix:** Nếu deleted content vẫn retrieve được, đó là data retention/security incident. Delete propagation phải được test.
+</Callout>
+
+---
+
+## Cost / Latency / Reliability Unit Economics
+
+| Quyết định | Lợi ích | Chi phí/rủi ro |
+|---|---|---|
+| Exact search | chính xác | chậm khi N lớn |
+| ANN index | nhanh | recall có thể giảm |
+| HNSW | recall tốt | memory cao |
+| IVF + PQ | memory thấp | recall giảm, tuning phức tạp |
+| Pre-filter | security | recall/latency tùy DB |
+| Post-filter | dễ implement | leak risk, top-k thiếu |
+| Hybrid search | cả exact lẫn semantic | score normalization, tuning |
+| Managed vector DB | không ops | cost, vendor lock-in |
+| Self-host | kiểm soát | ops burden |
+
+Vector DB là search infrastructure, không chỉ storage. Đừng chọn vector DB chỉ vì tutorial. Hãy chọn theo workload.
+
+---
+
 ## Practice exercises
 
 1. Thiết kế vector record schema production.
@@ -285,6 +332,8 @@ Checklist:
 4. Thiết kế tenant filter cho vector search.
 5. Implement RRF merge cho sparse+dense results.
 6. Viết test case cho delete propagation.
+
+---
 
 ## Knowledge check
 
@@ -296,6 +345,8 @@ Checklist:
 6. Khi đổi embedding model cần làm gì với index?
 7. Vì sao post-filter có thể nguy hiểm cho security?
 
+---
+
 ## Answer key
 
 1. Text/payload, metadata, doc/chunk IDs, tenant/ACL, version, embedding model info.
@@ -306,24 +357,7 @@ Checklist:
 6. Re-embed và rebuild/update index, không trộn vector spaces.
 7. Unauthorized candidates có thể được retrieve trước khi lọc và top-k sau lọc có thể thiếu kết quả.
 
-## Mini-project: Vector DB selection report
-
-**Task:** Chọn vector DB cho enterprise RAG.
-
-**Deliverables:**
-
-- Requirements: scale, filters, tenancy, hybrid, latency, cost.
-- Comparison table ít nhất 4 DBs.
-- Test plan: recall@k, p95 latency, ACL filter, delete propagation.
-- Recommendation.
-- Migration/rebuild plan.
-
-**Success criteria:**
-
-- Chọn theo workload, không theo hype.
-- Có security filter requirements.
-- Có hybrid search stance.
-- Có operational plan cho upsert/delete/rebuild.
+---
 
 ## Điểm cần nhớ
 
@@ -333,6 +367,8 @@ Checklist:
 - Metadata filtering là security-critical.
 - Hybrid search thường cần cho enterprise docs.
 - Index lifecycle phải xử lý updates, deletes, re-embedding và backups.
+
+---
 
 ## Next chapter bridge
 

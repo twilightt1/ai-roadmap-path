@@ -278,7 +278,7 @@ Phù hợp khi:
 
 ---
 
-## 9. Implementation Playbook (Thực thi)
+## Implementation Playbook: TTFT vs Streaming Benchmark
 
 Đây là skeleton benchmark phân tách TTFT và streaming latency khi gọi một OpenAI-compatible inference server như vLLM.
 
@@ -348,43 +348,35 @@ Nếu bạn chỉ benchmark một request đơn lẻ, bạn chưa đo production
 
 ---
 
-## 10. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
 <Callout type="warning" title="Pitfall 1: Chỉ đo tokens/sec trung bình">
 **Triệu chứng:** Benchmark báo throughput cao nhưng user vẫn thấy app chậm.
 
-**Nguyên nhân:** Tokens/sec trung bình che giấu TTFT và queue time. Người dùng cảm nhận rất rõ thời gian chờ token đầu tiên.
-
-**Cách khắc phục:** Theo dõi TTFT, TPOT, queue time, total latency và p95/p99 riêng biệt. Tối ưu theo bottleneck thật.
+**Fix:** Theo dõi TTFT, TPOT, queue time, total latency và p95/p99 riêng biệt. Tối ưu theo bottleneck thật.
 </Callout>
 
 <Callout type="warning" title="Pitfall 2: KV cache OOM khi tăng context window">
 **Triệu chứng:** Server chạy ổn ở context 4K nhưng OOM ở 16K dù weights không đổi.
 
-**Nguyên nhân:** KV cache tăng theo sequence length và concurrency. Context window lớn không miễn phí.
-
-**Cách khắc phục:** Đặt `max_model_len` thực tế, dùng context compression/RAG reranking, giới hạn concurrency, và chọn engine quản lý KV cache tốt như vLLM.
+**Fix:** Đặt `max_model_len` thực tế, dùng context compression/RAG reranking, giới hạn concurrency, và chọn engine quản lý KV cache tốt như vLLM.
 </Callout>
 
 <Callout type="danger" title="Pitfall 3: Batching làm tail latency xấu đi">
 **Triệu chứng:** Throughput tăng nhưng p99 latency vượt SLA.
 
-**Nguyên nhân:** Scheduler ưu tiên nhồi batch để tối đa tokens/sec, khiến request nhỏ bị xếp sau request dài hoặc batch quá lớn.
-
-**Cách khắc phục:** Tách pool theo workload, giới hạn max batch tokens, dùng priority queue cho interactive traffic và đo p95/p99 chứ không chỉ average.
+**Fix:** Tách pool theo workload, giới hạn max batch tokens, dùng priority queue cho interactive traffic và đo p95/p99 chứ không chỉ average.
 </Callout>
 
 <Callout type="warning" title="Pitfall 4: Tensor parallelism sai hạ tầng">
 **Triệu chứng:** Thêm GPU nhưng tokens/sec không tăng hoặc giảm.
 
-**Nguyên nhân:** Communication giữa GPU qua PCIe chậm, không có NVLink/NVSwitch, hoặc model size chưa đủ lớn để bù overhead.
-
-**Cách khắc phục:** Benchmark single GPU vs multi-GPU. Dùng tensor parallelism khi interconnect đủ nhanh; nếu không, chạy nhiều replica độc lập có thể tốt hơn.
+**Fix:** Benchmark single GPU vs multi-GPU. Dùng tensor parallelism khi interconnect đủ nhanh; nếu không, chạy nhiều replica độc lập có thể tốt hơn.
 </Callout>
 
 ---
 
-## 11. Cost & Performance Unit Economics
+## Cost / Performance / Latency Unit Economics
 
 | Bottleneck | Dấu hiệu | Đòn bẩy tối ưu | Tác động kinh tế |
 |---|---|---|---|
@@ -441,6 +433,8 @@ Inference optimization chủ yếu tăng “output tokens generated per hour” 
 - KV cache giảm recomputation nhưng tiêu tốn VRAM theo context length và concurrency.
 - Continuous batching là chìa khóa để tăng throughput khi nhiều request có độ dài khác nhau.
 - Speculative decoding, Flash Attention và parallelism chỉ có giá trị khi được benchmark trên workload thật.
+
+---
 
 ## Next chapter bridge
 

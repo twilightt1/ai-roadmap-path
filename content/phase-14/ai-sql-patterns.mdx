@@ -312,7 +312,7 @@ Một pattern tốt cho RAG production là filter mạnh trước: `tenant_id`, 
 
 ---
 
-## 10. Implementation Playbook (Thực thi)
+## Implementation Playbook: pgvector Semantic Search Skeleton
 
 Dưới đây là skeleton cho project **pgvector Semantic Search**.
 
@@ -422,43 +422,35 @@ Stretch goal: thêm hybrid search bằng cách kết hợp full-text search Post
 
 ---
 
-## 11. Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
+## Post-Mortem & Troubleshooting (SRE/Gỡ lỗi)
 
 <Callout type="warning" title="Pitfall 1: Sai distance operator">
 **Triệu chứng:** Search trả về chunks có vẻ không liên quan dù embeddings đúng.
 
-**Nguyên nhân:** Embedding model được tối ưu cho cosine similarity nhưng query dùng L2, hoặc ngược lại.
-
-**Cách khắc phục:** Đọc documentation của embedding model, thống nhất operator/index ops, và viết regression test với vài query/chunk kỳ vọng.
+**Fix:** Đọc documentation của embedding model, thống nhất operator/index ops, và viết regression test với vài query/chunk kỳ vọng.
 </Callout>
 
 <Callout type="warning" title="Pitfall 2: Embedding dimension mismatch">
 **Triệu chứng:** Insert lỗi khi đổi embedding model.
 
-**Nguyên nhân:** Cột `vector(1536)` nhưng model mới sinh vector 3072 chiều.
-
-**Cách khắc phục:** Version embeddings theo model. Không overwrite cùng một cột nếu migration chưa rõ. Có thể tạo bảng embeddings riêng với `embedding_model` và dimension tương ứng.
+**Fix:** Version embeddings theo model. Không overwrite cùng một cột nếu migration chưa rõ. Có thể tạo bảng embeddings riêng với `embedding_model` và dimension tương ứng.
 </Callout>
 
 <Callout type="danger" title="Pitfall 3: Thiếu tenant filter trong semantic search">
 **Triệu chứng:** RAG trả kết quả đúng về mặt ngữ nghĩa nhưng sai quyền truy cập.
 
-**Nguyên nhân:** Vector search được chạy top-k toàn cục rồi mới filter tenant ở application layer.
-
-**Cách khắc phục:** Đưa `tenant_id` và access control vào SQL query. Với multi-tenant nghiêm ngặt, cân nhắc Row-Level Security (RLS), schema tách riêng hoặc index theo tenant.
+**Fix:** Đưa `tenant_id` và access control vào SQL query. Với multi-tenant nghiêm ngặt, cân nhắc Row-Level Security (RLS), schema tách riêng hoặc index theo tenant.
 </Callout>
 
 <Callout type="warning" title="Pitfall 4: Vector index không được dùng">
 **Triệu chứng:** Query vẫn chậm sau khi tạo HNSW/IVFFlat index.
 
-**Nguyên nhân:** Operator trong `ORDER BY` không khớp index ops, thiếu `LIMIT`, hoặc query expression khác với index definition.
-
-**Cách khắc phục:** Dùng `EXPLAIN ANALYZE`, kiểm tra operator class (`vector_cosine_ops`, `vector_l2_ops`, `vector_ip_ops`) và đảm bảo query có `ORDER BY embedding <operator> query LIMIT k`.
+**Fix:** Dùng `EXPLAIN ANALYZE`, kiểm tra operator class (`vector_cosine_ops`, `vector_l2_ops`, `vector_ip_ops`) và đảm bảo query có `ORDER BY embedding <operator> query LIMIT k`.
 </Callout>
 
 ---
 
-## 12. Cost & Performance Unit Economics
+## Cost / Performance / Retrieval Unit Economics
 
 | Lựa chọn | Lợi ích | Chi phí/Trade-off |
 |---|---|---|
@@ -509,6 +501,8 @@ Nguyên tắc thực dụng: nếu đội nhỏ, dữ liệu vừa phải và me
 - pgvector giúp semantic search sống gần relational metadata, giảm rủi ro join/filter sai.
 - Với pgvector: `<->` là L2 distance, `<#>` là negative inner product, `<=>` là cosine distance.
 - Vector search production luôn phải đi cùng metadata filtering, indexing và security boundary.
+
+---
 
 ## Next chapter bridge
 
