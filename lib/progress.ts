@@ -2,6 +2,7 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 import { phases, allProjects } from "./roadmap-data";
+import { QUIZ_PASS_THRESHOLD } from "./quiz-types";
 
 /**
  * Progress tracking store — localStorage-based, không cần auth.
@@ -14,6 +15,7 @@ const STORAGE_KEY = "ai-roadmap:progress:v1";
 const COMPLETED_KEY = "ai-roadmap:completed:v1";
 const STARTED_KEY = "ai-roadmap:started:v1";
 const PROJECT_FEATURES_KEY = "ai-roadmap:project-features:v1";
+const QUIZ_RESULTS_KEY = "ai-roadmap:quiz-results:v1";
 
 export type ProgressStats = {
   /** 0..100 */
@@ -47,9 +49,22 @@ export type ProgressStats = {
   daysSinceStart: number;
 };
 
+/** Kết quả làm quiz của một topic — key bằng topicKey(phaseSlug, topicId). */
+export type QuizResult = {
+  /** Số câu đúng. */
+  score: number;
+  /** Tổng số câu. */
+  total: number;
+  /** ISO timestamp khi vượt qua ngưỡng pass lần đầu, hoặc null nếu chưa pass. */
+  passedAt: string | null;
+  /** Số lần đã nộp bài. */
+  attempts: number;
+};
+
 type StoreState = {
   completed: Set<string>;
   projectFeatures: Set<string>;
+  quizResults: Map<string, QuizResult>;
   startedAt: string | null;
   lastVisit: string | null;
 };
@@ -57,6 +72,7 @@ type StoreState = {
 const emptyState: StoreState = {
   completed: new Set(),
   projectFeatures: new Set(),
+  quizResults: new Map(),
   startedAt: null,
   lastVisit: null,
 };
@@ -74,9 +90,13 @@ function loadState(): StoreState {
     const projectFeatures = featuresRaw
       ? new Set<string>(JSON.parse(featuresRaw) as string[])
       : new Set<string>();
+    const quizRaw = localStorage.getItem(QUIZ_RESULTS_KEY);
+    const quizResults = quizRaw
+      ? new Map<string, QuizResult>(Object.entries(JSON.parse(quizRaw) as Record<string, QuizResult>))
+      : new Map<string, QuizResult>();
     const lastVisit = localStorage.getItem(STORAGE_KEY);
     const startedAt = localStorage.getItem(STARTED_KEY);
-    return { completed, projectFeatures, lastVisit, startedAt };
+    return { completed, projectFeatures, quizResults, lastVisit, startedAt };
   } catch {
     return emptyState;
   }
@@ -87,6 +107,7 @@ function persistState(s: StoreState) {
   try {
     localStorage.setItem(COMPLETED_KEY, JSON.stringify([...s.completed]));
     localStorage.setItem(PROJECT_FEATURES_KEY, JSON.stringify([...s.projectFeatures]));
+    localStorage.setItem(QUIZ_RESULTS_KEY, JSON.stringify(Object.fromEntries(s.quizResults)));
     const now = new Date().toISOString();
     localStorage.setItem(STORAGE_KEY, now);
     if (!s.startedAt) localStorage.setItem(STARTED_KEY, now);
@@ -259,11 +280,43 @@ export function useProgress() {
     [state.projectFeatures]
   );
 
+  const setQuizResult = useCallback(
+    (phaseSlug: string, topicId: string, score: number, total: number) => {
+      const key = topicKey(phaseSlug, topicId);
+      const prev = state.quizResults.get(key);
+      const passed = total > 0 && score / total >= QUIZ_PASS_THRESHOLD;
+      const nextResults = new Map(state.quizResults);
+      nextResults.set(key, {
+        score,
+        total,
+        // Giữ passedAt cũ nếu đã pass rồi; đặt mới nếu pass lần đầu.
+        passedAt: passed ? prev?.passedAt ?? new Date().toISOString() : prev?.passedAt ?? null,
+        attempts: (prev?.attempts ?? 0) + 1,
+      });
+      const nextCompleted = new Set(state.completed);
+      if (passed) nextCompleted.add(key);
+      setState({
+        ...state,
+        completed: nextCompleted,
+        quizResults: nextResults,
+        lastVisit: new Date().toISOString(),
+      });
+    },
+    []
+  );
+
+  const getQuizResult = useCallback(
+    (phaseSlug: string, topicId: string): QuizResult | undefined =>
+      store.quizResults.get(topicKey(phaseSlug, topicId)),
+    [store.quizResults]
+  );
+
   const reset = useCallback(() => {
     setState({ ...emptyState, lastVisit: new Date().toISOString() });
     if (typeof window !== "undefined") {
       localStorage.removeItem(COMPLETED_KEY);
       localStorage.removeItem(PROJECT_FEATURES_KEY);
+      localStorage.removeItem(QUIZ_RESULTS_KEY);
       localStorage.removeItem(STARTED_KEY);
     }
   }, []);
@@ -292,6 +345,8 @@ export function useProgress() {
     setFeature,
     isFeatureDone,
     isProjectDone: isProjectDoneCb,
+    setQuizResult,
+    getQuizResult,
     projectStats,
     startedAt: store.startedAt,
     lastVisit: store.lastVisit,

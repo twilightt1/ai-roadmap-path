@@ -7,10 +7,12 @@ import {
   getTopicContent,
   getTableOfContents,
 } from "@/lib/content";
+import { getQuiz } from "@/lib/quiz";
 import { accentMap } from "@/lib/theme";
 import { PhaseIcon } from "@/components/shared/phase-icon";
 import { MdxContent } from "@/components/roadmap/mdx-content";
 import { TocSidebar } from "@/components/roadmap/toc-sidebar";
+import { QuizCard } from "@/components/quiz/quiz-card";
 import { Reveal } from "@/components/shared/reveal";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2 } from "lucide-react";
@@ -52,6 +54,7 @@ export default async function TopicPage({ params }: Props) {
   const source = await getTopicContent(phase.number, t.id);
   const hasContent = source !== null;
   const toc = hasContent ? getTableOfContents(source) : [];
+  const quiz = hasContent ? await getQuiz(phase.number, t.id) : null;
 
   const phaseLabel = phase.isCapstone ? "Capstone" : `Phase ${phase.number}`;
 
@@ -163,6 +166,13 @@ export default async function TopicPage({ params }: Props) {
               <ArrowLeft className="h-4 w-4" /> Quay lại phase
             </Link>
           </div>
+        </div>
+      )}
+
+      {/* Quiz cuối bài (chỉ khi có quiz) */}
+      {quiz && (
+        <div className="mt-12">
+          <QuizCard quiz={quiz} phaseSlug={phase.slug} topicId={t.id} />
         </div>
       )}
 
