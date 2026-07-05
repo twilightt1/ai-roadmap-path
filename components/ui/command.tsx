@@ -60,7 +60,9 @@ function CommandDialog({
         )}
         showCloseButton={showCloseButton}
       >
-        {children}
+        <Command className="overflow-visible">
+          {children}
+        </Command>
       </DialogContent>
     </Dialog>
   )
