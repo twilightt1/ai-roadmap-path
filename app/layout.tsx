@@ -69,7 +69,7 @@ export default function RootLayout({
         <ThemeProvider>
           <ScrollProgress />
           <Navbar />
-          <main className="flex-1">{children}</main>
+          <main className="flex-1" data-pagefind-body>{children}</main>
           <Footer />
           <SearchCommand />
         </ThemeProvider>
