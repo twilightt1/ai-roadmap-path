@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao client-side inference không phải security boundary?",
+      "options": [
+        "Vì user có thể sửa client, bypass JS/mobile checks hoặc gọi API trực tiếp; server vẫn phải enforce policy",
+        "Vì client luôn đáng tin cậy",
+        "Vì client-side inference không bao giờ bị tấn công",
+        "Vì server không thể enforce policy nếu có client-side"
+      ],
+      "answerIndex": 0,
+      "explanation": "User có thể sửa client, bypass JS/mobile checks hoặc gọi API trực tiếp — server vẫn phải enforce policy, client-side không phải security boundary."
+    },
+    {
+      "id": "q2",
+      "prompt": "Data gravity ảnh hưởng edge inference thế nào?",
+      "options": [
+        "Edge luôn nhanh hơn bất kể vị trí dữ liệu",
+        "Nếu dữ liệu/state nằm xa edge, edge phải gọi về origin làm latency tổng không giảm",
+        "Data gravity làm edge inference luôn rẻ hơn",
+        "Data gravity không liên quan đến latency"
+      ],
+      "answerIndex": 1,
+      "explanation": "Nếu dữ liệu/state nằm xa edge, edge phải gọi về origin để lấy dữ liệu — latency tổng không giảm, nên data gravity rất quan trọng."
+    },
+    {
+      "id": "q3",
+      "prompt": "Khi nào async worker là placement phù hợp nhất?",
+      "options": [
+        "Khi tác vụ luôn hoàn thành dưới 100ms",
+        "Khi cần trả lời realtime dưới 50ms",
+        "Khi tác vụ dài, dễ timeout, cần queue, batching, retry/resume hoặc progress UI",
+        "Khi không quan tâm đến retry"
+      ],
+      "answerIndex": 2,
+      "explanation": "Async worker phù hợp khi tác vụ dài, dễ timeout, cần queue, batching, retry/resume hoặc progress UI — thay vì giữ HTTP request mở."
+    },
+    {
+      "id": "q4",
+      "prompt": "Server-side inference có lợi thế gì với model proprietary?",
+      "options": [
+        "Phân phối weights cho mọi user để chạy cục bộ",
+        "Loại bỏ cần audit và logging",
+        "Giảm hoàn toàn chi phí vận hành",
+        "Model weights không bị phân phối cho user, dễ kiểm soát access, logging và update"
+      ],
+      "answerIndex": 3,
+      "explanation": "Server-side inference giữ model weights không bị phân phối cho user, dễ kiểm soát access, logging và update — an toàn cho model proprietary."
+    },
+    {
+      "id": "q5",
+      "prompt": "Hybrid inference nghĩa là gì?",
+      "options": [
+        "Dùng nhiều vị trí inference cho các phần khác nhau: client/edge cho nhẹ, server cho nhạy cảm, worker cho dài",
+        "Chỉ chạy inference trên một vị trí duy nhất",
+        "Luôn chạy toàn bộ inference trên client",
+        "Luôn chạy toàn bộ inference trên server"
+      ],
+      "answerIndex": 0,
+      "explanation": "Hybrid inference dùng nhiều vị trí cho các phần khác nhau: client/edge cho task nhẹ, server cho dữ liệu nhạy cảm, worker cho tác vụ dài."
+    }
+  ]
+}

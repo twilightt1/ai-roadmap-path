@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao task dài không nên chạy trong HTTP request đồng bộ?",
+      "options": [
+        "Vì HTTP không hỗ trợ tác vụ dài",
+        "Vì request đồng bộ không tốn tài nguyên",
+        "Vì task đồng bộ luôn cho kết quả chính xác hơn async",
+        "Vì nó giữ worker/thread lâu, dễ timeout, làm nghẽn endpoint khác và tạo retry storm"
+      ],
+      "answerIndex": 3,
+      "explanation": "Task dài trong HTTP request đồng bộ giữ worker/thread lâu, dễ timeout, làm nghẽn endpoint khác và tạo retry storm — nên tách ra async task."
+    },
+    {
+      "id": "q2",
+      "prompt": "At-least-once delivery của queue dẫn đến yêu cầu gì cho worker?",
+      "options": [
+        "Worker phải idempotent vì cùng job có thể được deliver/chạy lại",
+        "Worker không cần xử lý duplicate vì queue đảm bảo exactly-once",
+        "Worker phải luôn retry vô hạn khi lỗi",
+        "Worker phải trả kết quả ngay trong cùng request"
+      ],
+      "answerIndex": 0,
+      "explanation": "Queue delivery thường at-least-once, nên worker phải idempotent — cùng job có thể được deliver hoặc chạy lại mà không gây tác dụng phụ sai."
+    },
+    {
+      "id": "q3",
+      "prompt": "Dead letter queue dùng để làm gì?",
+      "options": [
+        "Lưu job thành công để phân tích sau",
+        "Lưu job fail nhiều lần để điều tra thay vì retry vô hạn",
+        "Tăng tốc độ xử lý job mới",
+        "Lưu trữ prompt cache của user"
+      ],
+      "answerIndex": 1,
+      "explanation": "Dead letter queue lưu job fail nhiều lần để điều tra thay vì retry vô hạn — tránh retry storm với LLM calls đắt tiền."
+    },
+    {
+      "id": "q4",
+      "prompt": "Polling quá dày gây vấn đề gì?",
+      "options": [
+        "Giảm tải hệ thống vì client chờ lâu",
+        "Làm queue xử lý nhanh hơn",
+        "Tạo tải lớn lên API/DB chỉ để hỏi trạng thái, có thể tự DDoS hệ thống",
+        "Không gây vấn đề gì nếu polling đúng"
+      ],
+      "answerIndex": 2,
+      "explanation": "Polling quá dày tạo tải lớn lên API/DB chỉ để hỏi trạng thái, có thể tự DDoS hệ thống — nên dùng backoff hoặc thay bằng SSE/webhook."
+    },
+    {
+      "id": "q5",
+      "prompt": "Backpressure trong async AI architecture là gì?",
+      "options": [
+        "Cơ chế tăng tốc worker khi queue rỗng",
+        "Phương pháp nén gradient khi training",
+        "Cách ép model sinh câu dài hơn",
+        "Cơ chế giới hạn/reject/degrade khi queue quá tải để bảo vệ hệ thống và ngân sách"
+      ],
+      "answerIndex": 3,
+      "explanation": "Backpressure là cơ chế giới hạn, reject hoặc degrade khi queue quá tải để bảo vệ hệ thống và ngân sách — tránh lan truyền lỗi."
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Provider contract (thỏa thuận với AI provider) gồm những thành phần nào?",
+      "options": [
+        "Chỉ model và giá mỗi token",
+        "Chỉ model và context window",
+        "Chỉ API key và endpoint URL",
+        "Model, params, context, token, cost, error, latency, tool calling"
+      ],
+      "answerIndex": 3,
+      "explanation": "Provider API là một contract đầy đủ: model, params, context window, token limits, cost, error codes, latency và tool calling — không chỉ là model và giá."
+    },
+    {
+      "id": "q2",
+      "prompt": "Streaming response giảm metric nào đáng kể so với non-streaming?",
+      "options": [
+        "TTFT (time-to-first-token)",
+        "Cost mỗi request",
+        "Tổng số token sinh ra",
+        "Độ dài context window"
+      ],
+      "answerIndex": 0,
+      "explanation": "Streaming giảm TTFT (time-to-first-token) vì user nhận token đầu tiên ngay khi model sinh ra, cải thiện UX thay vì đợi toàn bộ response."
+    },
+    {
+      "id": "q3",
+      "prompt": "Batch API đánh đổi điều gì để giảm cost?",
+      "options": [
+        "Tăng accuracy, giảm latency",
+        "Giảm cost ~50% nhưng tăng latency lên đến 24h",
+        "Giảm context window, tăng token",
+        "Loại bỏ cần retry policy"
+      ],
+      "answerIndex": 1,
+      "explanation": "Batch API cho giảm giá (~50%) nhưng tăng latency (lên tới 24h) — phù hợp workload không cần real-time."
+    },
+    {
+      "id": "q4",
+      "prompt": "Token budget guard kiểm tra điều kiện gì trước khi gọi provider?",
+      "options": [
+        "Input tokens == output tokens",
+        "Output tokens không vượt price",
+        "Input tokens + output tokens <= context window",
+        "Cost <= latency budget"
+      ],
+      "answerIndex": 2,
+      "explanation": "Token budget guard đảm bảo tổng input + output tokens không vượt context window để chặn context overflow trước khi gọi provider."
+    },
+    {
+      "id": "q5",
+      "prompt": "Retry không có idempotency khi gọi tool có side effects gây rủi ro gì?",
+      "options": [
+        "Tăng latency không đáng kể",
+        "Làm mất context window",
+        "Giảm cost nhưng tăng token",
+        "Tool bị gọi 2 lần, tạo duplicate side effects"
+      ],
+      "answerIndex": 3,
+      "explanation": "Khi retry không idempotent, tool có side effect có thể bị gọi 2 lần, tạo ra duplicate side effects (ví dụ charge tiền 2 lần)."
+    }
+  ]
+}

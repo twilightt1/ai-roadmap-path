@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vector DB lưu gì ngoài chính vector?",
+      "options": [
+        "Chỉ vector",
+        "Chỉ doc ID",
+        "Text/payload, metadata, doc/chunk IDs, tenant/ACL, version, embedding model info",
+        "Chỉ embedding dimension"
+      ],
+      "answerIndex": 2,
+      "explanation": "Vector DB lưu text/payload, metadata, doc/chunk IDs, tenant/ACL, version và embedding model info — cần cho filtering, citations, ACL và lifecycle."
+    },
+    {
+      "id": "q2",
+      "prompt": "Tradeoff cốt lõi của ANN (Approximate Nearest Neighbor) index là gì?",
+      "options": [
+        "Tăng recall nhưng tăng latency",
+        "Không có tradeoff",
+        "Tăng cả latency và recall",
+        "Giảm latency nhưng có thể giảm recall"
+      ],
+      "answerIndex": 3,
+      "explanation": "ANN index đánh đổi recall lấy latency/memory — nhanh hơn brute-force nhưng có thể bỏ sót neighbors thật, cần tune parameters bằng eval."
+    },
+    {
+      "id": "q3",
+      "prompt": "HNSW dùng ý tưởng gì để search nhanh?",
+      "options": [
+        "Graph neighbors nhiều tầng để navigate tới vectors gần query",
+        "Brute-force tính distance tới mọi vector",
+        "Sắp xếp vector theo timestamp",
+        "Hash vector thành bucket cố định"
+      ],
+      "answerIndex": 0,
+      "explanation": "HNSW (Hierarchical Navigable Small World) xây graph neighbors nhiều tầng, navigate từ tầng thô tới tầng chi tiết để tới vectors gần query nhanh."
+    },
+    {
+      "id": "q4",
+      "prompt": "Metadata filter trong vector DB nguy hiểm ở điểm nào?",
+      "options": [
+        "Filter luôn giảm latency",
+        "Filter sai gây miss relevant docs hoặc leak unauthorized docs",
+        "Filter không ảnh hưởng security",
+        "Filter tự động sync ACL"
+      ],
+      "answerIndex": 1,
+      "explanation": "Metadata filter sai có thể miss relevant docs (giảm quality) hoặc leak unauthorized docs (vi phạm ACL) — filter là security-critical, cần test kỹ."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao post-filter có thể nguy hiểm cho security trong vector DB?",
+      "options": [
+        "Post-filter luôn nhanh hơn pre-filter",
+        "Post-filter không cần metadata",
+        "Unauthorized candidates có thể được retrieve trước khi lọc; top-k sau lọc có thể thiếu kết quả",
+        "Post-filter loại bỏ cần ACL"
+      ],
+      "answerIndex": 2,
+      "explanation": "Post-filter retrieve top-k trước rồi mới lọc ACL — unauthorized candidates chiếm slot, và sau lọc top-k có thể thiếu kết quả hợp lệ; nên dùng pre-filter."
+    }
+  ]
+}

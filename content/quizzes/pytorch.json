@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "`requires_grad=True` làm gì trong PyTorch?",
+      "options": [
+        "Đóng băng parameter không cho update",
+        "Khởi tạo tensor bằng 0",
+        "Chuyển tensor sang GPU",
+        "Yêu cầu PyTorch track operations để tính gradient"
+      ],
+      "answerIndex": 3,
+      "explanation": "`requires_grad=True` yêu cầu PyTorch track operations trên tensor để autograd tính gradient sau này."
+    },
+    {
+      "id": "q2",
+      "prompt": "`model.train()` và `model.eval()` khác gì?",
+      "options": [
+        "Bật/tắt behavior như dropout/batchnorm (train bật, eval tắt)",
+        "model.train() huấn luyện, model.eval() chỉ đo accuracy",
+        "model.train() tăng learning rate, model.eval() giảm learning rate",
+        "Cả hai giống nhau, chỉ khác tên gọi"
+      ],
+      "answerIndex": 0,
+      "explanation": "Hai mode bật/tắt behavior phụ thuộc training: dropout và batchnorm hoạt động ở train, tắt ở eval."
+    },
+    {
+      "id": "q3",
+      "prompt": "`torch.no_grad()` dùng khi nào?",
+      "options": [
+        "Khi train để tăng tốc gradient",
+        "Validation/inference để không lưu computation graph",
+        "Khi khởi tạo weight",
+        "Khi muốn tăng gradient magnitude"
+      ],
+      "answerIndex": 1,
+      "explanation": "Validation/inference dùng `torch.no_grad()` để không xây và lưu computation graph, tiết kiệm memory."
+    },
+    {
+      "id": "q4",
+      "prompt": "`state_dict` là gì?",
+      "options": [
+        "Dict chứa hyperparameter của optimizer",
+        "Dict chứa dataset labels",
+        "Dict chứa tensor parameters/buffers của model",
+        "Dict chứa loss history"
+      ],
+      "answerIndex": 2,
+      "explanation": "`state_dict` là dict chứa tensor parameters và buffers của model — dùng để save/load checkpoint."
+    },
+    {
+      "id": "q5",
+      "prompt": "DataLoader giúp gì trong training?",
+      "options": [
+        "Lưu checkpoint",
+        "Định nghĩa architecture của model",
+        "Tính gradient tự động",
+        "Batching, shuffling, multiprocessing data loading"
+      ],
+      "answerIndex": 3,
+      "explanation": "DataLoader lo batching, shuffling và multiprocessing data loading, chuẩn hóa input pipeline."
+    }
+  ]
+}

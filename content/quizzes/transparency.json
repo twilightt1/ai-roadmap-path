@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Model card khác system card thế nào?",
+      "options": [
+        "Model card mô tả sản phẩm AI end-to-end, system card mô tả một model",
+        "Model card mô tả một model/checkpoint; system card mô tả toàn bộ sản phẩm AI gồm model, RAG, tools, guardrails, logging và process",
+        "Cả hai là cùng một loại artifact",
+        "Model card chỉ cho training, system card chỉ cho inference"
+      ],
+      "answerIndex": 1,
+      "explanation": "Model card mô tả một model/checkpoint; system card mô tả toàn bộ sản phẩm AI end-to-end gồm model, RAG, tools, guardrails, logging và process."
+    },
+    {
+      "id": "q2",
+      "prompt": "SHAP/LIME giải thích loại model/workload nào tốt nhất?",
+      "options": [
+        "Large language model với hàng tỷ parameter",
+        "Reinforcement learning agent trong môi trường liên tục",
+        "Thường phù hợp nhất với tabular/classic ML hoặc classifiers có features rõ",
+        "Model generative video với hàng nghìn frame"
+      ],
+      "answerIndex": 2,
+      "explanation": "SHAP/LIME thường phù hợp nhất với tabular/classic ML hoặc classifiers có features rõ ràng, không phải mô hình LLM quy mô lớn."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao attention visualization không luôn là explanation causal?",
+      "options": [
+        "Attention luôn là explanation causal hoàn toàn",
+        "Attention chỉ có ý nghĩa trong quá trình training",
+        "Attention không liên quan gì tới output của model",
+        "Attention cho biết một cơ chế weighting trong model, nhưng không chứng minh feature/token đó là nguyên nhân quyết định output"
+      ],
+      "answerIndex": 3,
+      "explanation": "Attention cho biết cơ chế weighting trong model, nhưng không chứng minh feature/token đó là nguyên nhân quyết định output — nên không phải explanation causal."
+    },
+    {
+      "id": "q4",
+      "prompt": "User-facing explanation nên có những phần nào?",
+      "options": [
+        "Answer, evidence/citations, confidence, assumptions/limitations và next step/escalation",
+        "Chỉ câu trả lời cuối cùng",
+        "Chỉ raw chain-of-thought đầy đủ",
+        "Chỉ model version và prompt version"
+      ],
+      "answerIndex": 0,
+      "explanation": "User-facing explanation nên gồm answer, evidence/citations, confidence, assumptions/limitations và next step/escalation — không phải chỉ raw chain-of-thought."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao transparency cần versioning?",
+      "options": [
+        "Để giảm kích thước artifact lưu trữ",
+        "Vì model/prompt/data/policy thay đổi theo release; nếu artifact không versioned thì audit không biết output đến từ cấu hình nào",
+        "Versioning chỉ cần cho quá trình training",
+        "Để tăng throughput của hệ thống inference"
+      ],
+      "answerIndex": 1,
+      "explanation": "Model/prompt/data/policy thay đổi theo release; nếu artifact không versioned thì khi audit không biết output đến từ cấu hình nào — versioning là nền của auditability."
+    }
+  ]
+}

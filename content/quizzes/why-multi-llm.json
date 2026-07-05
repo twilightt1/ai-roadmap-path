@@ -5,23 +5,23 @@
       "prompt": "Vì sao multi-LLM không chỉ đơn thuần là một cơ chế fallback?",
       "options": [
         "Vì multi-LLM chỉ cần một model tốt nhất",
-        "Vì true multi-LLM gồm routing, eval, cost, observability, policy và governance",
+        "Vì tất cả LLM đều giống nhau",
         "Vì fallback không bao giờ cần thiết",
-        "Vì tất cả LLM đều giống nhau"
+        "Vì true multi-LLM gồm routing, eval, cost, observability, policy và governance"
       ],
-      "answerIndex": 1,
+      "answerIndex": 3,
       "explanation": "Multi-LLM thật sự gồm nhiều lớp: routing, eval, cost, observability, policy, governance — không chỉ là 'thay model khi model kia lỗi'."
     },
     {
       "id": "q2",
       "prompt": "Prompt portability problem là gì?",
       "options": [
-        "Prompt quá dài không fit context window",
         "Prompt tối ưu cho model này có thể không work trên model khác do tokenizer/safety/schema khác",
+        "Prompt quá dài không fit context window",
         "Prompt không thể tái sử dụng giữa các session",
         "Prompt bị mã hóa không thể đọc"
       ],
-      "answerIndex": 1,
+      "answerIndex": 0,
       "explanation": "Tokenizer, safety filter, message schema, instruction behavior khác nhau giữa các model → prompt tối ưu cho model A có thể hỏng trên model B."
     },
     {
@@ -41,11 +41,11 @@
       "prompt": "Verifier/judge model đánh đổi gì để có thể tăng correctness/safety?",
       "options": [
         "Đánh đổi accuracy lấy speed",
-        "Tăng cost/latency nhưng có thể tăng correctness/safety",
         "Giảm context length",
+        "Tăng cost/latency nhưng có thể tăng correctness/safety",
         "Loại bỏ routing"
       ],
-      "answerIndex": 1,
+      "answerIndex": 2,
       "explanation": "Verifier/judge model chạy thêm → tăng cost và latency, nhưng có thể tăng correctness/safety bằng cách kiểm tra output của model chính."
     },
     {
@@ -53,11 +53,11 @@
       "prompt": "Single-model architecture typically fails ở đâu?",
       "options": [
         "Chỉ khi model bị lỗi syntax",
-        "Outage, cost inefficiency, latency mismatch, capability mismatch, provider lock-in",
+        "Chỉ khi không có GPU",
         "Chỉ khi context quá dài",
-        "Chỉ khi không có GPU"
+        "Outage, cost inefficiency, latency mismatch, capability mismatch, provider lock-in"
       ],
-      "answerIndex": 1,
+      "answerIndex": 3,
       "explanation": "Single-model architecture dễ fail khi: outage (không có plan B), cost inefficiency, latency mismatch, capability mismatch, và provider lock-in."
     }
   ]

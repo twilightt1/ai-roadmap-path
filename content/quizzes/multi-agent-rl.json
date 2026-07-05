@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Markov Game thêm gì so với MDP?",
+      "options": [
+        "Chỉ thêm đúng một agent duy nhất vào môi trường",
+        "Loại bỏ hoàn toàn reward function",
+        "Thêm positional encoding cho từng state",
+        "Nhiều agents, joint actions, reward vector và policy riêng cho từng agent"
+      ],
+      "answerIndex": 3,
+      "explanation": "Markov Game mở rộng MDP bằng cách thêm nhiều agents, joint actions, reward vector và policy riêng cho từng agent."
+    },
+    {
+      "id": "q2",
+      "prompt": "CTDE nghĩa là gì?",
+      "options": [
+        "Centralized Training, Decentralized Execution: train dùng global info, execute mỗi agent dùng local observation",
+        "Centralized Training, Decentralized Evaluation: chỉ đánh giá phi tập trung",
+        "Concurrent Training, Distributed Execution: train song song hoàn toàn",
+        "Cooperative Training, Decentralized Execution: chỉ dùng cho cooperative game"
+      ],
+      "answerIndex": 0,
+      "explanation": "CTDE = Centralized Training, Decentralized Execution: huấn luyện với global information, nhưng khi chạy mỗi agent chỉ dùng local observation."
+    },
+    {
+      "id": "q3",
+      "prompt": "Nash equilibrium là gì ở mức trực giác?",
+      "options": [
+        "Trạng thái mọi agent đều đồng thuận về một chiến lược chung",
+        "Trạng thái strategy mà không agent nào muốn đơn phương đổi vì không có lợi hơn",
+        "Trạng thái mà một agent thắng tất cả các agent khác",
+        "Trạng thái reward bằng 0 cho mọi agent"
+      ],
+      "answerIndex": 1,
+      "explanation": "Nash equilibrium là trạng thái strategy mà không agent nào có động lực đơn phương đổi strategy, vì đổi cũng không lợi hơn."
+    },
+    {
+      "id": "q4",
+      "prompt": "Self-play có rủi ro overfit như thế nào?",
+      "options": [
+        "Self-play không có rủi ro overfit vì luôn đa dạng opponent",
+        "Agent học quá chậm và không bao giờ hội tụ",
+        "Agent có thể chỉ mạnh khi chơi với chính phiên bản của nó, nhưng yếu trước opponent/partner khác",
+        "Agent quên sạch mọi strategy đã học sau self-play"
+      ],
+      "answerIndex": 2,
+      "explanation": "Trong self-play, agent có thể chỉ mạnh khi đối đầu chính phiên bản của nó, nhưng yếu trước opponent/partner khác — đây là overfit đặc thù của self-play."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao inter-agent communication là attack surface?",
+      "options": [
+        "Vì communication giữa agents luôn được mã hóa an toàn",
+        "Vì communication không cần logging nên khó debug",
+        "Vì communication làm tăng reward khiến agent bị spam",
+        "Message giữa agents có thể chứa prompt injection, deception, collusion hoặc dữ liệu độc hại ảnh hưởng agent khác/evaluator"
+      ],
+      "answerIndex": 3,
+      "explanation": "Message giữa agents có thể chứa prompt injection, deception, collusion hoặc dữ liệu độc hại, ảnh hưởng agent khác và evaluator — nên là attack surface cần log/audit."
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "MDP gồm 5 thành phần nào?",
+      "options": [
+        "`S`, `A`, `P`, `R`, `γ`",
+        "`Q`, `V`, `π`, `R`, `γ`",
+        "State, action, reward, loss, optimizer",
+        "Model, data, loss, gradient, epoch"
+      ],
+      "answerIndex": 0,
+      "explanation": "MDP gồm 5 thành phần: states `S`, actions `A`, transition `P`, reward `R`, và discount factor `γ`."
+    },
+    {
+      "id": "q2",
+      "prompt": "Policy `π(a|s)` nghĩa là gì?",
+      "options": [
+        "Giá trị của state `s`",
+        "Xác suất hoặc quy tắc chọn action `a` khi ở state `s`",
+        "Reward khi thực hiện action `a` ở state `s`",
+        "Tổng reward tích lũy của một episode"
+      ],
+      "answerIndex": 1,
+      "explanation": "Policy `π(a|s)` là xác suất hoặc quy tắc chọn action `a` khi agent đang ở state `s`."
+    },
+    {
+      "id": "q3",
+      "prompt": "Khác biệt giữa `V(s)` và `Q(s,a)` là gì?",
+      "options": [
+        "`V` và `Q` là hai tên gọi của cùng một hàm",
+        "`V(s)` là giá trị của action, `Q(s,a)` là giá trị của state",
+        "`V(s)` là giá trị của state; `Q(s,a)` là giá trị của việc chọn action `a` trong state đó",
+        "`V(s)` chỉ dùng cho policy-based, `Q(s,a)` chỉ dùng cho supervised learning"
+      ],
+      "answerIndex": 2,
+      "explanation": "`V(s)` là giá trị (expected return) của state `s`; `Q(s,a)` là giá trị của việc chọn action `a` khi đang ở state `s`."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao exploration cần thiết trong RL?",
+      "options": [
+        "Để giảm variance của gradient estimator",
+        "Exploration không cần thiết trong RL",
+        "Để tăng reward ngay lập tức ở mọi episode",
+        "Nếu không exploration, agent có thể kẹt ở action nhìn có vẻ tốt ban đầu nhưng không tối ưu"
+      ],
+      "answerIndex": 3,
+      "explanation": "Nếu không exploration, agent có thể kẹt ở action trông tốt ban đầu nhưng thực ra không tối ưu — exploration giúp khám phá các action tốt hơn."
+    },
+    {
+      "id": "q5",
+      "prompt": "Advantage dương nghĩa là gì?",
+      "options": [
+        "Action tốt hơn baseline/expected value của state, nên policy nên tăng xác suất action đó",
+        "Action có value đúng bằng baseline",
+        "Action tệ hơn baseline của state",
+        "Reward của action bằng 0"
+      ],
+      "answerIndex": 0,
+      "explanation": "Advantage dương nghĩa là action tốt hơn baseline/expected value của state, nên policy nên tăng xác suất chọn action đó."
+    }
+  ]
+}

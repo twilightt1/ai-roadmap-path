@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Preprocessing nên tối ưu điều gì?",
+      "options": [
+        "Chuyển tất cả về chữ thường",
+        "Xóa càng nhiều nội dung càng tốt",
+        "Giữ toàn bộ raw text không thay đổi",
+        "Remove noise nhưng preserve signal"
+      ],
+      "answerIndex": 3,
+      "explanation": "Preprocessing đúng là giữ signal, bỏ noise — không phải xóa càng nhiều càng tốt."
+    },
+    {
+      "id": "q2",
+      "prompt": "Stemming khác lemmatization thế nào?",
+      "options": [
+        "Stemming cắt thô; lemmatization dùng ngữ pháp/từ điển",
+        "Cả hai giống hệt nhau",
+        "Stemming dùng ngữ pháp/từ điển; lemmatization cắt thô",
+        "Stemming chỉ cho tiếng Việt, lemmatization cho tiếng Anh"
+      ],
+      "answerIndex": 0,
+      "explanation": "Stemming cắt thô (vd 'running'→'run') có thể sai; lemmatization dùng ngữ pháp/từ điển để đưa về dạng chuẩn (lemma)."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao sentence segmentation quan trọng cho RAG?",
+      "options": [
+        "Giảm số token trong vocabulary",
+        "Chunk theo câu giữ meaning tốt hơn split ngẫu nhiên",
+        "Tăng tốc embedding model",
+        "Thay thế hoàn toàn tokenization"
+      ],
+      "answerIndex": 1,
+      "explanation": "Chunk theo câu giữ meaning tốt hơn split ngẫu nhiên — tránh cắt ngang ý, quan trọng cho RAG chunking."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao mask PII thay vì xóa?",
+      "options": [
+        "Xóa PII mất toàn bộ thông tin",
+        "Mask PII làm tăng accuracy",
+        "Giữ tín hiệu loại thông tin mà không lộ giá trị thật",
+        "Mask và xóa cho kết quả giống nhau"
+      ],
+      "answerIndex": 2,
+      "explanation": "Mask PII giữ tín hiệu loại thông tin (vd có email ở đây) mà không lộ giá trị thật — tốt cho privacy và vẫn giữ context."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao không nên lowercase mọi thứ cho transformer?",
+      "options": [
+        "Lowercase luôn làm model chậm hơn",
+        "Transformer không đọc được chữ thường",
+        "Lowercase làm tăng số token",
+        "Mất tín hiệu tên riêng, acronym, code identifier"
+      ],
+      "answerIndex": 3,
+      "explanation": "Lowercase mọi thứ mất tín hiệu tên riêng, acronym, code identifier — transformer học được từ tín hiệu hoa/thường."
+    }
+  ]
+}

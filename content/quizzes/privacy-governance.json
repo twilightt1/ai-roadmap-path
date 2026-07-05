@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Data minimization nghĩa là gì?",
+      "options": [
+        "Thu thập càng nhiều dữ liệu càng tốt để train model",
+        "Không lưu trữ bất kỳ dữ liệu nào bao giờ",
+        "Xóa toàn bộ dữ liệu ngay sau khi train xong",
+        "Chỉ thu thập, gửi, lưu và giữ dữ liệu thật sự cần thiết cho mục đích đã định"
+      ],
+      "answerIndex": 3,
+      "explanation": "Data minimization là nguyên tắc chỉ thu thập, gửi, lưu và giữ dữ liệu thật sự cần thiết cho mục đích đã định — dữ liệu không lưu thì không leak và không cần xóa."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao embeddings vẫn nằm trong phạm vi privacy governance?",
+      "options": [
+        "Vì embeddings là derived data từ nội dung cá nhân và có thể hỗ trợ retrieval/liên kết ngược tới dữ liệu cá nhân",
+        "Vì embeddings không chứa bất kỳ thông tin cá nhân nào",
+        "Vì embeddings luôn được mã hóa an toàn end-to-end",
+        "Vì embeddings không cần lưu trữ trên đĩa"
+      ],
+      "answerIndex": 0,
+      "explanation": "Embeddings là derived data từ nội dung cá nhân và có thể hỗ trợ retrieval hoặc liên kết ngược tới dữ liệu cá nhân, nên vẫn thuộc phạm vi privacy governance."
+    },
+    {
+      "id": "q3",
+      "prompt": "Right to erasure trong AI system cần xử lý những store nào?",
+      "options": [
+        "Chỉ cần xóa từ primary DB là đủ",
+        "Primary DB, conversations, memory, vector chunks/embeddings, caches, logs/traces, eval exports, provider records và backup theo policy",
+        "Chỉ cần xóa conversations và memory",
+        "Chỉ cần xóa trong vector database"
+      ],
+      "answerIndex": 1,
+      "explanation": "Right to erasure phải xử lý toàn bộ store: primary DB, conversations, memory, vector chunks/embeddings, caches, logs/traces, eval exports, provider records và backup theo policy — \"delete from DB\" không đủ."
+    },
+    {
+      "id": "q4",
+      "prompt": "Differential privacy bảo vệ ở mức nào?",
+      "options": [
+        "Bảo vệ toàn bộ raw data không bao giờ leak ra ngoài",
+        "Loại bỏ hoàn toàn cần access control trong hệ thống",
+        "Bảo vệ đóng góp của cá nhân trong aggregate/statistical outputs bằng noise có kiểm soát",
+        "Đảm bảo model không bao giờ hallucinate"
+      ],
+      "answerIndex": 2,
+      "explanation": "Differential privacy bảo vệ đóng góp của cá nhân trong aggregate/statistical outputs bằng cách thêm noise có kiểm soát, không phải bảo vệ raw data tuyệt đối."
+    },
+    {
+      "id": "q5",
+      "prompt": "Federated learning có đảm bảo raw data không bao giờ leak không?",
+      "options": [
+        "Có, federated learning đảm bảo tuyệt đối raw data không leak",
+        "Federated learning loại bỏ hoàn toàn cần encryption",
+        "Federated learning không cần raw data nên không có rủi ro",
+        "Không tuyệt đối. Updates/gradients vẫn có thể leak thông tin nếu không có secure aggregation/DP và threat model rõ"
+      ],
+      "answerIndex": 3,
+      "explanation": "Federated learning không đảm bảo tuyệt đối; updates/gradients vẫn có thể leak thông tin nếu thiếu secure aggregation/DP và threat model rõ ràng."
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Distributional hypothesis nói gì?",
+      "options": [
+        "Từ dài luôn có nghĩa phức tạp hơn từ ngắn",
+        "Từ xuất hiện trong context giống nhau thường có nghĩa liên quan",
+        "Từ hiếm quan trọng hơn từ phổ biến",
+        "Từ chỉ có nghĩa trong câu đầu tiên xuất hiện"
+      ],
+      "answerIndex": 1,
+      "explanation": "Distributional hypothesis: từ xuất hiện trong context giống nhau thường có nghĩa liên quan — nền tảng của word embeddings."
+    },
+    {
+      "id": "q2",
+      "prompt": "CBOW khác Skip-gram thế nào?",
+      "options": [
+        "CBOW predict context từ center; Skip-gram predict center từ context",
+        "Cả hai đều predict center từ context",
+        "CBOW predict center từ context; Skip-gram predict context từ center",
+        "CBOW dùng negative sampling, Skip-gram không"
+      ],
+      "answerIndex": 2,
+      "explanation": "CBOW predict center từ context (nhiều→1); Skip-gram predict context từ center (1→nhiều) — tốt cho từ hiếm."
+    },
+    {
+      "id": "q3",
+      "prompt": "FastText xử lý từ OOV bằng gì?",
+      "options": [
+        "Tăng vocabulary lên vô hạn",
+        "Dùng one-hot encoding",
+        "Bỏ qua từ OOV hoàn toàn",
+        "Character/subword n-grams"
+      ],
+      "answerIndex": 3,
+      "explanation": "FastText dùng character/subword n-grams, nên có thể dựng embedding cho từ OOV bằng cách ghép các mảnh subword."
+    },
+    {
+      "id": "q4",
+      "prompt": "Cosine similarity đo gì?",
+      "options": [
+        "Độ cùng hướng giữa hai vector",
+        "Độ lớn của tích hai vector",
+        "Số chiều chung của hai vector",
+        "Khoảng cách Euclidean giữa hai vector"
+      ],
+      "answerIndex": 0,
+      "explanation": "Cosine similarity đo độ cùng hướng (orientation) giữa hai vector, bỏ qua magnitude — hợp cho semantic similarity."
+    },
+    {
+      "id": "q5",
+      "prompt": "Static embedding (Word2Vec/GloVe) có hạn chế gì?",
+      "options": [
+        "Không thể tính cosine similarity",
+        "Một vector cố định cho mọi nghĩa của từ, không phụ thuộc context",
+        "Chỉ hoạt động với tiếng Anh",
+        "Phụ thuộc vào transformer architecture"
+      ],
+      "answerIndex": 1,
+      "explanation": "Static embedding cho một vector cố định cho mọi nghĩa của từ (vd 'bank' finansial vs sông) — không phân biệt theo context như contextual embeddings."
+    }
+  ]
+}

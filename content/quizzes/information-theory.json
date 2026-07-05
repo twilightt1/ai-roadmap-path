@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Entropy H(X) đo điều gì và khi nào đạt max theo bài?",
+      "options": [
+        "Đo độ chắc chắn; đạt max khi 1 outcome chắc chắn xảy ra",
+        "Đo độ không chắc chắn; phân phối uniform (đều) → entropy max, chắc chắn → 0",
+        "Đo số lượng outcome; nhiều outcome → entropy thấp",
+        "Đo độ lớn của phân phối; đạt max khi p(x) = 1"
+      ],
+      "answerIndex": 1,
+      "explanation": "Entropy H(X) = -Σ p log p đo độ không chắc chắn. Phân phối uniform (đều) → entropy max (khó đoán, cần nhiều bit). Phân phối chắc chắn (1 outcome) → entropy = 0."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao cross-entropy là loss tự nhiên cho classification theo bài?",
+      "options": [
+        "Vì cross-entropy tính nhanh hơn MSE",
+        "Vì cross-entropy luôn có giá trị nhỏ hơn MSE",
+        "Vì H(p,q) = H(p) + KL(p||q); với H(p) cố định, tối thiểu cross-entropy ≡ tối thiểu KL ≡ đưa prediction gần true (≡ MLE cho categorical)",
+        "Vì cross-entropy không cần đạo hàm"
+      ],
+      "answerIndex": 2,
+      "explanation": "H(p,q) = H(p) + KL(p||q). Vì H(p) cố định (true label không đổi), tối thiểu cross-entropy ≡ tối thiểu KL ≡ đưa prediction gần true. MLE cho categorical cũng tương đương tối thiểu cross-entropy."
+    },
+    {
+      "id": "q3",
+      "prompt": "Tại sao không nên dùng MSE cho classification theo bài?",
+      "options": [
+        "MSE không tính được cho phân phối categorical",
+        "MSE chỉ dùng được cho regression liên tục",
+        "MSE luôn cho loss lớn hơn cross-entropy",
+        "MSE qua sigmoid → gradient = 2(ŷ-y)·σ'(x); khi |x| lớn, σ'(x) ≈ 0 → gradient vanishing → không học"
+      ],
+      "answerIndex": 3,
+      "explanation": "MSE qua sigmoid → gradient = 2(ŷ-y)·σ'(x). Khi |x| lớn, σ'(x) ≈ 0 → gradient ≈ 0 → không học. Cross-entropy qua sigmoid/softmax cho gradient predicted - target (gọn, không vanishing)."
+    },
+    {
+      "id": "q4",
+      "prompt": "KL divergence có tính chất nào theo bài và vì sao không phải metric?",
+      "options": [
+        "Luôn ≥ 0, = 0 khi p = q, nhưng không đối xứng (KL(p||q) ≠ KL(q||p))",
+        "Luôn âm, đối xứng",
+        "Luôn = 1, không phụ thuộc p hay q",
+        "Đối xứng và có thể âm"
+      ],
+      "answerIndex": 0,
+      "explanation": "KL(p||q) = Σ p log(p/q) ≥ 0 luôn, = 0 khi p = q. Nhưng không đối xứng (KL(p||q) ≠ KL(q||p)) nên không phải metric. Forward KL yêu cầu q cover p, reverse KL yêu cầu q zero khi p zero."
+    },
+    {
+      "id": "q5",
+      "prompt": "Khác biệt giữa Mutual Information và correlation theo bài là gì?",
+      "options": [
+        "Giống nhau, chỉ khác công thức",
+        "Correlation chỉ đo phụ thuộc tuyến tính; Mutual Information đo mọi phụ thuộc (cả non-linear)",
+        "Mutual Information chỉ đo phụ thuộc tuyến tính; correlation đo mọi phụ thuộc",
+        "Cả hai chỉ đo phụ thuộc tuyến tính"
+      ],
+      "answerIndex": 1,
+      "explanation": "Correlation chỉ đo phụ thuộc tuyến tính (miss non-linear). Mutual Information đo mọi phụ thuộc — vd X = [-1,0,1], Y = X² có correlation = 0 nhưng MI > 0."
+    }
+  ]
+}

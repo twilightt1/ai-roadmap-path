@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Khi nói 'tool call là proposed action', ý nghĩa là gì?",
+      "options": [
+        "Model tự execute tool khi đề xuất",
+        "Model không bao giờ đề xuất tool",
+        "Tool call luôn được auto-execute",
+        "Model chỉ đề xuất action; runtime quyết định execute hay không"
+      ],
+      "answerIndex": 3,
+      "explanation": "Tool call là proposed action — model chỉ đề xuất action và args; runtime (app) quyết định có execute hay không sau khi validate và authorize."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao schema-valid chưa đủ để cho phép tool call?",
+      "options": [
+        "Vì authorization, business rules và risk policy là layer riêng",
+        "Schema validation không bao giờ đúng",
+        "Schema quá chậm",
+        "Schema không có field cần thiết"
+      ],
+      "answerIndex": 0,
+      "explanation": "Schema-valid chỉ đảm bảo format đúng — authorization, business rules và risk policy là layer riêng phải check trước khi execute tool call."
+    },
+    {
+      "id": "q3",
+      "prompt": "Parallel tool calls an toàn trong điều kiện nào?",
+      "options": [
+        "Khi tool có side effects và phụ thuộc nhau",
+        "Khi read-only/idempotent, độc lập, result size bounded, có timeout",
+        "Khi không có timeout",
+        "Khi tool mutate DB chung"
+      ],
+      "answerIndex": 1,
+      "explanation": "Parallel tool calls an toàn khi read-only/idempotent, độc lập (không phụ thuộc nhau), result size bounded và có timeout — tránh race condition và resource exhaustion."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao retry tool có side effects (như charge tiền) nguy hiểm?",
+      "options": [
+        "Retry luôn nhanh hơn",
+        "Retry giảm cost",
+        "Retry có thể tạo duplicate side effects nếu thiếu idempotency key",
+        "Retry không cần validation"
+      ],
+      "answerIndex": 2,
+      "explanation": "Retry tool có side effects có thể execute action 2 lần (ví dụ charge 2 lần) nếu thiếu idempotency key — cần idempotency và/hoặc approval trước retry."
+    },
+    {
+      "id": "q5",
+      "prompt": "Code execution sandbox cần những controls nào?",
+      "options": [
+        "Chỉ isolation process",
+        "Full network access",
+        "Chỉ timeout",
+        "Isolation, no network, resource limits, filesystem restrictions, output cap, secrets isolation"
+      ],
+      "answerIndex": 3,
+      "explanation": "Code sandbox cần isolation, no network, resource limits (CPU/memory), filesystem restrictions, output cap và secrets isolation — ngăn code model sinh ra thoát ra hoặc leak dữ liệu."
+    }
+  ]
+}

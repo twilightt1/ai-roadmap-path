@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Tại sao không nên để list/dict làm attribute class (vd `history = []`) theo bài?",
+      "options": [
+        "Nó bị chia sẻ giữa mọi instance — bug khi một instance sửa ảnh hưởng cái khác",
+        "Làm code chạy chậm hơn",
+        "Python không hỗ trợ attribute class kiểu này",
+        "Attribute class không truy cập được từ instance"
+      ],
+      "answerIndex": 0,
+      "explanation": "Attribute class dùng chung cho mọi instance. Nếu là mutable (list/dict), một instance append sẽ ảnh hưởng mọi instance khác. Sửa: khởi tạo trong __init__ bằng self.history = []."
+    },
+    {
+      "id": "q2",
+      "prompt": "Magic method __getitem__ có tác dụng gì theo bài?",
+      "options": [
+        "In object ra console khi debug",
+        "Biến object thành iterable, dùng được trong for và list comprehension",
+        "Tính độ dài của object",
+        "So sánh hai object bằng nhau"
+      ],
+      "answerIndex": 1,
+      "explanation": "Nếu class định nghĩa __getitem__, nó tự nhiên dùng được trong for x in obj và list comprehension. Đây là cách PyTorch Dataset hoạt động — cài __getitem__ + __len__, DataLoader lo batching."
+    },
+    {
+      "id": "q3",
+      "prompt": "@classmethod thường dùng cho mục đích gì theo bài?",
+      "options": [
+        "Định nghĩa attribute tính toán",
+        "Hàm tiện ích không cần instance",
+        "Alternative constructor (như from_dict, from_json)",
+        "Override method của class cha"
+      ],
+      "answerIndex": 2,
+      "explanation": "@classmethod nhận class (cls) làm tham số đầu, thường dùng cho alternative constructor như from_dict. cls là class hiện tại nên subclass kế thừa sẽ dùng đúng class con."
+    },
+    {
+      "id": "q4",
+      "prompt": "Mục đích của ABC + @abstractmethod trong LangChain/PyTorch là gì?",
+      "options": [
+        "Tăng tốc độ chạy của code",
+        "Tự động sinh code boilerplate",
+        "Ẩn chi tiết implementation khỏi user",
+        "Định nghĩa interface mà subclass phải cài — lập trình theo interface, không theo implementation"
+      ],
+      "answerIndex": 3,
+      "explanation": "ABC + @abstractmethod định nghĩa interface mà subclass phải cài. BaseLLM, BaseRetriever, BaseTool trong LangChain đều là ABC — kế thừa và cài abstract method để code plug-and-play với framework."
+    },
+    {
+      "id": "q5",
+      "prompt": "super() được dùng để làm gì khi override method?",
+      "options": [
+        "Gọi method của class cha mà không cần nhắc tên cha trực tiếp",
+        "Ẩn method của class cha hoàn toàn",
+        "Xóa method cha khỏi subclass",
+        "Tạo method mới không liên quan tới cha"
+      ],
+      "answerIndex": 0,
+      "explanation": "super() cho phép gọi method của class cha mà không cần nhắc tên cha trực tiếp. Khi override, thường gọi super().__init__(...) để tận dụng logic khởi tạo của cha."
+    }
+  ]
+}

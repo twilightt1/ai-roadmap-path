@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "RLHF pipeline chuẩn gồm những bước nào?",
+      "options": [
+        "SFT → deployment → reward model → PPO → evaluation",
+        "Base model → PPO → SFT → reward model → deployment",
+        "Reward model → preference data → SFT → base model → deployment",
+        "Base model → SFT → preference data → reward model → PPO/policy optimization → evaluation → deployment"
+      ],
+      "answerIndex": 3,
+      "explanation": "Pipeline chuẩn: base model → SFT → preference data → reward model → PPO/policy optimization → evaluation → deployment."
+    },
+    {
+      "id": "q2",
+      "prompt": "Reward model nhận input gì và output gì?",
+      "options": [
+        "Nhận prompt + response, output scalar reward score",
+        "Nhận reward score, output ra prompt tương ứng",
+        "Nhận token đơn lẻ, output ra policy distribution",
+        "Nhận scalar, output ra vector embedding"
+      ],
+      "answerIndex": 0,
+      "explanation": "Reward model nhận cặp prompt + response và output một scalar reward score, học từ pairwise preferences bằng Bradley-Terry loss."
+    },
+    {
+      "id": "q3",
+      "prompt": "KL penalty trong PPO RLHF dùng để làm gì?",
+      "options": [
+        "Tăng drift khỏi reference model để explore nhiều hơn",
+        "Giữ policy gần reference/SFT model, giảm drift, collapse và reward model exploitation",
+        "Tăng reward score lên mức tối đa",
+        "Loại bỏ hoàn toàn cần reward model"
+      ],
+      "answerIndex": 1,
+      "explanation": "KL penalty giữ policy gần reference/SFT model, giảm drift, tránh collapse và reward model exploitation trong quá trình tối ưu PPO."
+    },
+    {
+      "id": "q4",
+      "prompt": "DPO cần reward model explicit không?",
+      "options": [
+        "Có, DPO cần một reward model riêng như PPO",
+        "Có, DPO cần cả reward model và PPO chạy song song",
+        "Không. DPO tối ưu trực tiếp từ chosen/rejected pairs và reference model",
+        "Không, DPO không cần reference model"
+      ],
+      "answerIndex": 2,
+      "explanation": "DPO không cần reward model explicit; nó tối ưu trực tiếp từ chosen/rejected pairs và reference model, đơn giản hơn PPO."
+    },
+    {
+      "id": "q5",
+      "prompt": "`β` trong DPO ảnh hưởng điều gì?",
+      "options": [
+        "Số lượng training data cần thiết",
+        "Loại activation function được dùng",
+        "Kích thước parameter của model",
+        "Độ mạnh của preference optimization/KL-like regularization; beta cao thường update preference mạnh hơn"
+      ],
+      "answerIndex": 3,
+      "explanation": "`β` trong DPO điều khiển độ mạnh của preference optimization/KL-like regularization; beta cao thường khiến update preference mạnh hơn."
+    }
+  ]
+}

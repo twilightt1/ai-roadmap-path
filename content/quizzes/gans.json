@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vai trò của Generator và Discriminator trong GAN là gì?",
+      "options": [
+        "Generator phân biệt thật/giả, Discriminator sinh sample giả",
+        "Generator sinh sample giả từ noise/condition; Discriminator phân biệt sample thật và giả, cung cấp tín hiệu học cho Generator",
+        "Cả hai cùng sinh sample và so sánh với nhau",
+        "Generator nén ảnh, Discriminator giải nén ảnh"
+      ],
+      "answerIndex": 1,
+      "explanation": "Generator sinh sample giả từ noise/condition; Discriminator phân biệt sample thật và giả, cung cấp tín hiệu học cho Generator."
+    },
+    {
+      "id": "q2",
+      "prompt": "Mode collapse là gì?",
+      "options": [
+        "Khi Discriminator phân biệt đúng mọi sample",
+        "Khi Generator sinh ra ảnh quá sắc nét",
+        "Là khi Generator chỉ sinh một hoặc vài kiểu sample lặp lại, mất diversity dù input noise thay đổi",
+        "Khi training loss giảm về 0 quá nhanh"
+      ],
+      "answerIndex": 2,
+      "explanation": "Mode collapse là khi Generator chỉ sinh một hoặc vài kiểu sample lặp lại, mất diversity dù input noise thay đổi."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao GAN loss khó dùng làm metric chất lượng duy nhất?",
+      "options": [
+        "Vì GAN loss tính bằng tay nên dễ sai",
+        "Vì GAN loss luôn bằng 0 nên không có ý nghĩa",
+        "Vì GAN loss chỉ đo được chất lượng Discriminator",
+        "Vì GAN là trò chơi động giữa hai mạng; loss phản ánh cân bằng tương đối, không trực tiếp đo fidelity/diversity/safety"
+      ],
+      "answerIndex": 3,
+      "explanation": "GAN là trò chơi động giữa hai mạng; loss chỉ phản ánh cân bằng tương đối, không trực tiếp đo fidelity/diversity/safety, nên không dùng làm metric duy nhất."
+    },
+    {
+      "id": "q4",
+      "prompt": "DCGAN cải thiện Vanilla GAN bằng những design nào?",
+      "options": [
+        "Dùng convolution/transposed convolution, BatchNorm, LeakyReLU, Tanh output và normalization phù hợp cho ảnh",
+        "Dùng attention mechanism của Transformer thay hoàn toàn convolution",
+        "Dùng reinforcement learning thay vì adversarial loss",
+        "Dùng RNN thay vì MLP để xử lý chuỗi"
+      ],
+      "answerIndex": 0,
+      "explanation": "DCGAN dùng convolution/transposed convolution, BatchNorm, LeakyReLU, Tanh output và normalization phù hợp cho ảnh, giúp train GAN ổn định hơn trên image data."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao cần nearest-neighbor check với generated images?",
+      "options": [
+        "Để tăng độ sắc nét của ảnh sinh ra",
+        "Để kiểm tra generator có memorize/copy training data không, đặc biệt với dữ liệu nhạy cảm hoặc dataset nhỏ",
+        "Để giảm số bước training",
+        "Để chọn learning rate tối ưu"
+      ],
+      "answerIndex": 1,
+      "explanation": "Nearest-neighbor check giúp kiểm tra generator có memorize/copy training data không, đặc biệt quan trọng với dữ liệu nhạy cảm hoặc dataset nhỏ."
+    }
+  ]
+}

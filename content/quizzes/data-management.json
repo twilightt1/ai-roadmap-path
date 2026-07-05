@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao không nên commit trực tiếp dataset lớn vào Git?",
+      "options": [
+        "Vì Git không hỗ trợ lưu file binary",
+        "Vì Git tự động xóa file lớn sau 30 ngày",
+        "Vì Git tối ưu cho text diff nhỏ; dataset lớn làm repo nặng, clone chậm và khó quản lý lịch sử",
+        "Vì dataset trong Git không thể version được"
+      ],
+      "answerIndex": 2,
+      "explanation": "Git được tối ưu cho text diff nhỏ; dataset lớn làm repo nặng, clone chậm và khó quản lý lịch sử — nên dùng object storage + pointer."
+    },
+    {
+      "id": "q2",
+      "prompt": "DVC lưu gì trong Git và lưu gì trong object storage?",
+      "options": [
+        "Git lưu bytes thật của dataset; object storage lưu code",
+        "DVC chỉ lưu metadata trong object storage, không dùng Git",
+        "Cả Git và object storage đều lưu bytes thật của dataset",
+        "Git lưu pointer/hash `.dvc`; object storage lưu bytes thật của dataset/model"
+      ],
+      "answerIndex": 3,
+      "explanation": "Git lưu pointer/hash `.dvc` (metadata), còn object storage lưu bytes thật của dataset/model — tách nhỏ khỏi lớn."
+    },
+    {
+      "id": "q3",
+      "prompt": "Dataset fingerprint nên bao gồm những thành phần nào?",
+      "options": [
+        "Raw file hashes, cleaning code commit, config, split seed, schema version và hash của train/validation/test",
+        "Chỉ hash của file cleaned cuối cùng",
+        "Chỉ raw file hashes là đủ",
+        "Chỉ tên file và ngày tạo"
+      ],
+      "answerIndex": 0,
+      "explanation": "Fingerprint đầy đủ gồm raw file hashes, cleaning code commit, config, split seed, schema version và hash của train/validation/test để reproduce."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao train/test leakage nguy hiểm hơn lỗi schema đơn giản?",
+      "options": [
+        "Vì lỗi schema luôn làm sập training",
+        "Vì leakage làm benchmark đo trí nhớ thay vì năng lực generalization, dẫn đến score production sai lệch",
+        "Vì leakage chỉ ảnh hưởng đến tốc độ training",
+        "Vì schema error không bao giờ ảnh hưởng đến model"
+      ],
+      "answerIndex": 1,
+      "explanation": "Leakage làm benchmark đo trí nhớ thay vì năng lực generalization, dẫn đến score production sai lệch — nguy hiểm hơn lỗi schema đơn giản."
+    },
+    {
+      "id": "q5",
+      "prompt": "Khi checkout một commit cũ, lệnh nào thường cần chạy để đồng bộ dữ liệu với DVC?",
+      "options": [
+        "`git push` để đẩy dữ liệu lên remote",
+        "`dvc push` trước `git checkout`",
+        "`dvc pull` sau `git checkout` để lấy đúng file vật lý tương ứng với pointer trong commit",
+        "Không cần chạy gì thêm vì Git tự đồng bộ dữ liệu"
+      ],
+      "answerIndex": 2,
+      "explanation": "Sau `git checkout`, cần chạy `dvc pull` để lấy đúng file vật lý tương ứng với pointer trong commit cũ."
+    }
+  ]
+}

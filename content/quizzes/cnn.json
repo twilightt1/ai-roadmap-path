@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Convolution khác fully-connected ở điểm nào?",
+      "options": [
+        "Convolution nối mọi input với mọi output; fully-connected dùng kernel cục bộ",
+        "Convolution không có weight, fully-connected có weight",
+        "Cả hai đều dùng kernel cục bộ chia sẻ weight",
+        "Convolution dùng kernel cục bộ chia sẻ weight; fully-connected nối mọi input với mọi output"
+      ],
+      "answerIndex": 3,
+      "explanation": "Convolution dùng kernel cục bộ và chia sẻ weight giữa các vị trí; fully-connected nối mọi input với mọi output (weight riêng cho mỗi cặp)."
+    },
+    {
+      "id": "q2",
+      "prompt": "Padding trong convolution dùng để làm gì?",
+      "options": [
+        "Giữ/điều chỉnh kích thước output, bảo toàn biên",
+        "Thay thế activation function",
+        "Tăng số channel của output",
+        "Giảm spatial size nhanh hơn stride"
+      ],
+      "answerIndex": 0,
+      "explanation": "Padding giữ/điều chỉnh kích thước output và bảo toàn thông tin ở biên ảnh."
+    },
+    {
+      "id": "q3",
+      "prompt": "MaxPool làm gì trong CNN?",
+      "options": [
+        "Lấy giá trị trung bình trong vùng, tăng độ phân giải",
+        "Lấy giá trị max trong vùng, giảm size và tăng robustness nhỏ",
+        "Cộng tất cả giá trị trong vùng",
+        "Áp dụng kernel học được lên vùng"
+      ],
+      "answerIndex": 1,
+      "explanation": "MaxPool lấy giá trị max trong vùng, giảm spatial size và tăng robustness với các biến đổi nhỏ."
+    },
+    {
+      "id": "q4",
+      "prompt": "ResNet giải quyết vấn đề gì?",
+      "options": [
+        "Giảm số parameter để train nhanh hơn trên CPU",
+        "Thay thế convolution bằng fully-connected",
+        "Giúp train mạng sâu bằng residual path cho gradient",
+        "Loại bỏ hoàn toàn pooling layer"
+      ],
+      "answerIndex": 2,
+      "explanation": "ResNet dùng residual (skip) connection tạo đường đi tắt cho gradient, giúp train được mạng rất sâu."
+    },
+    {
+      "id": "q5",
+      "prompt": "PyTorch image tensor shape chuẩn là gì?",
+      "options": [
+        "(batch, height, width, channels)",
+        "(height, width, channels, batch)",
+        "(channels, height, width, batch)",
+        "(batch, channels, height, width)"
+      ],
+      "answerIndex": 3,
+      "explanation": "PyTorch dùng thứ tự NCHW: (batch, channels, height, width). Debug CNN thường bắt đầu từ shape này."
+    }
+  ]
+}

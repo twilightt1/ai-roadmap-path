@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Theo bài, *args và **kwargs thu thập thành kiểu dữ liệu gì?",
+      "options": [
+        "*args thành tuple, **kwargs thành dict",
+        "*args thành list, **kwargs thành dict",
+        "Cả hai đều thành dict",
+        "*args thành set, **kwargs thành tuple"
+      ],
+      "answerIndex": 0,
+      "explanation": "*args thu thập positional thừa thành tuple; **kwargs thu thập keyword thừa thành dict. Đây là thứ mọi AI SDK (OpenAI/LangChain) đều dùng đầy."
+    },
+    {
+      "id": "q2",
+      "prompt": "Thứ tự tham số đúng trong định nghĩa hàm theo bài là gì?",
+      "options": [
+        "*args → positional → default → **kwargs",
+        "positional → default → *args → **kwargs",
+        "default → positional → **kwargs → *args",
+        "**kwargs → positional → *args → default"
+      ],
+      "answerIndex": 1,
+      "explanation": "Thứ tự phải là positional → default/keyword → *args → **kwargs. Đặt sai (vd default sau *args không dùng keyword) sẽ SyntaxError."
+    },
+    {
+      "id": "q3",
+      "prompt": "Pattern `client.create(**kwargs)` khi wrap LLM API có lợi ích gì theo bài?",
+      "options": [
+        "Giảm số lượng tham số cần truyền",
+        "Làm code chạy nhanh hơn đáng kể",
+        "Thêm parameter mới mà không phá code cũ, forward thẳng xuống HTTP request",
+        "Bắt buộc phải truyền đủ mọi tham số"
+      ],
+      "answerIndex": 2,
+      "explanation": "API LLM có nhiều tham số tùy chọn. **kwargs cho phép thêm parameter mới mà không phá code cũ — API forward thẳng xuống HTTP request. Đây là lý do openai.create(**kwargs) linh hoạt."
+    },
+    {
+      "id": "q4",
+      "prompt": "Khi hàm `return loss, accuracy`, thực tế nó trả về gì?",
+      "options": [
+        "Hai giá trị riêng biệt cùng lúc",
+        "Một dict {loss, accuracy}",
+        "Một list [loss, accuracy]",
+        "Một tuple (loss, accuracy)"
+      ],
+      "answerIndex": 3,
+      "explanation": "Hàm trả nhiều giá trị thực ra là trả 1 tuple. Unpack bằng `loss, acc = fn()`, hoặc `loss, _ = fn()` để bỏ qua giá trị thứ 2."
+    },
+    {
+      "id": "q5",
+      "prompt": "Theo bài, khi nào nên dùng lambda và khi nào nên viết def?",
+      "options": [
+        "Lambda cho 1 biểu thức đơn giản; logic phức tạp hơn 1 dòng thì viết def",
+        "Luôn dùng lambda cho gọn code",
+        "Chỉ dùng def, không bao giờ dùng lambda",
+        "Lambda cho logic phức tạp, def cho đơn giản"
+      ],
+      "answerIndex": 0,
+      "explanation": "Lambda chỉ là 1 biểu thức, không có statement, khó debug. PEP 8 khuyến nghị: logic phức tạp hơn 1 dòng thì viết def thường."
+    }
+  ]
+}

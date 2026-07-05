@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao `DataParallel` cũ không phù hợp cho LLM training production?",
+      "options": [
+        "Vì nó không hỗ trợ GPU",
+        "Vì nó dồn nhiều việc về GPU chính và không tối ưu multi-process/all-reduce như DDP/FSDP",
+        "Vì nó chỉ chạy được trên CPU",
+        "Vì nó không lưu được checkpoint"
+      ],
+      "answerIndex": 1,
+      "explanation": "`DataParallel` cũ dồn nhiều việc về GPU chính và không tối ưu multi-process/all-reduce như DDP/FSDP — không phù hợp production."
+    },
+    {
+      "id": "q2",
+      "prompt": "ZeRO-3/FSDP giảm VRAM bằng cách nào?",
+      "options": [
+        "Xóa bớt layer của model trước khi train",
+        "Nén trọng số xuống 2-bit",
+        "Shard weights, gradients và optimizer states qua nhiều GPU thay vì nhân bản đầy đủ",
+        "Tắt optimizer states hoàn toàn"
+      ],
+      "answerIndex": 2,
+      "explanation": "ZeRO-3/FSDP shard weights, gradients và optimizer states qua nhiều GPU thay vì nhân bản đầy đủ — giảm VRAM mỗi GPU."
+    },
+    {
+      "id": "q3",
+      "prompt": "Gradient checkpointing đánh đổi gì?",
+      "options": [
+        "Giảm VRAM bằng cách xóa weights, đổi lại giảm accuracy",
+        "Đánh đổi accuracy để lấy throughput",
+        "Tăng VRAM để train nhanh hơn",
+        "Giảm VRAM bằng cách tính lại activation, đổi lại tăng compute time"
+      ],
+      "answerIndex": 3,
+      "explanation": "Gradient checkpointing giảm VRAM bằng cách tính lại activation khi cần, đổi lại tăng compute time — đổi memory lấy compute."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao NVLink/InfiniBand quan trọng khi scale nhiều GPU?",
+      "options": [
+        "Vì multi-GPU training cần đồng bộ gradient/parameters liên tục; network chậm làm GPU chờ nhau",
+        "Vì chúng thay thế CUDA driver",
+        "Vì chúng tăng VRAM của mỗi GPU",
+        "Vì chúng tự động shard model"
+      ],
+      "answerIndex": 0,
+      "explanation": "Multi-GPU training cần đồng bộ gradient/parameters liên tục; network chậm làm GPU chờ nhau — NVLink/InfiniBand giảm thời gian chờ."
+    },
+    {
+      "id": "q5",
+      "prompt": "Tại sao checkpoint phải nằm trên durable storage khi dùng spot instance?",
+      "options": [
+        "Vì spot instance luôn có ổ cứng lớn đủ lưu",
+        "Vì spot có thể bị thu hồi, local disk mất; durable storage cho phép resume",
+        "Vì local disk nhanh hơn durable storage nên không cần",
+        "Vì checkpoint trên durable storage làm training chậm"
+      ],
+      "answerIndex": 1,
+      "explanation": "Spot instance có thể bị thu hồi và local disk mất; checkpoint trên durable storage cho phép resume training từ điểm đã lưu."
+    }
+  ]
+}

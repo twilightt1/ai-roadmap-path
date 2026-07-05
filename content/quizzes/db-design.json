@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Provenance trong database AI nghĩa là gì?",
+      "options": [
+        "Khả năng truy ngược output tới prompt version, model config, retrieved context, token usage, tool trace và user/request liên quan",
+        "Khả năng xóa dữ liệu cũ để tiết kiệm dung lượng",
+        "Khả năng sao lưu database tự động",
+        "Khả năng mã hóa dữ liệu nhạy cảm"
+      ],
+      "answerIndex": 0,
+      "explanation": "Provenance là khả năng truy ngược output tới prompt version, model config, retrieved context, token usage, tool trace và user/request liên quan — nền tảng audit AI."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao mọi bảng dữ liệu multi-tenant quan trọng nên có `tenant_id`?",
+      "options": [
+        "Vì `tenant_id` làm tăng số dòng không cần thiết",
+        "Vì `tenant_id` giúp enforce isolation, viết query an toàn, index theo access pattern và giảm rủi ro leak dữ liệu khi join",
+        "Vì `tenant_id` chỉ cần cho bảng billing",
+        "Vì `tenant_id` làm chậm mọi query"
+      ],
+      "answerIndex": 1,
+      "explanation": "`tenant_id` giúp enforce isolation, viết query an toàn, index theo access pattern và giảm rủi ro leak dữ liệu khi join — bắt buộc cho bảng multi-tenant quan trọng."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao prompt versions nên immutable?",
+      "options": [
+        "Vì prompt không bao giờ thay đổi trong thực tế",
+        "Vì immutable versions làm query nhanh hơn",
+        "Vì immutable versions giúp reproduce output cũ, audit thay đổi prompt và rollback/debug chính xác sau incident",
+        "Vì chỉ cần lưu prompt mới nhất là đủ"
+      ],
+      "answerIndex": 2,
+      "explanation": "Immutable versions giúp reproduce output cũ, audit thay đổi prompt và rollback/debug chính xác sau incident — prompt là code, không overwrite."
+    },
+    {
+      "id": "q4",
+      "prompt": "Lưu full conversation history khác gì với đưa toàn bộ history vào prompt?",
+      "options": [
+        "Hai việc là giống nhau",
+        "Database không nên lưu full history",
+        "Nên đưa toàn bộ history vào prompt để model nhớ tốt nhất",
+        "Database có thể lưu đầy đủ để audit; prompt runtime chỉ nên dùng window/summary/context phù hợp để kiểm soát cost và quality"
+      ],
+      "answerIndex": 3,
+      "explanation": "Database có thể lưu đầy đủ để audit; prompt runtime chỉ nên dùng window, summary hoặc context phù hợp để kiểm soát cost và quality — lưu đầy đủ không đồng nghĩa nhồi vào prompt."
+    },
+    {
+      "id": "q5",
+      "prompt": "Khi nào nên cân nhắc partitioning cho `model_calls`?",
+      "options": [
+        "Khi bảng tăng rất nhanh, query chủ yếu theo time range, cần archival nhanh hoặc dashboard hiện tại bị chậm vì scan quá nhiều dữ liệu",
+        "Khi bảng nhỏ và query chậm vì index",
+        "Khi chỉ có một tenant dùng bảng",
+        "Khi không bao giờ query theo thời gian"
+      ],
+      "answerIndex": 0,
+      "explanation": "Nên cân nhắc partitioning khi bảng tăng rất nhanh, query chủ yếu theo time range, cần archival nhanh hoặc dashboard bị chậm vì scan quá nhiều dữ liệu."
+    }
+  ]
+}

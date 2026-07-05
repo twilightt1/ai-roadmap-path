@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "API Gateway sở hữu gì và không nên sở hữu gì?",
+      "options": [
+        "Gateway chỉ sở hữu logging, không cần auth hay rate limits",
+        "Gateway sở hữu logic chọn model chi tiết cho từng request",
+        "Gateway sở hữu auth, tenant context, rate limits, validation, trace ID; không nên nhúng logic chọn model chi tiết",
+        "Gateway sở hữu RAG retrieval và embedding"
+      ],
+      "answerIndex": 2,
+      "explanation": "Gateway sở hữu auth, tenant context, rate limits, validation và trace ID; không nên nhúng logic chọn model chi tiết — đó là việc của Router để giữ ownership boundary rõ."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao Router cần model registry?",
+      "options": [
+        "Để train model mới từ dữ liệu thu thập",
+        "Để loại bỏ hoàn toàn cần API Gateway",
+        "Để giảm số lượng model cần deploy",
+        "Để biết capabilities, cost, context window, latency, safety tier, allowed tenants và fallback chain của từng model"
+      ],
+      "answerIndex": 3,
+      "explanation": "Router cần model registry để biết capabilities, cost, context window, latency, safety tier, allowed tenants và fallback chain của từng model khi quyết định route."
+    },
+    {
+      "id": "q3",
+      "prompt": "RAG Engine cần acceptance criteria nào để chứng minh tenant isolation?",
+      "options": [
+        "Mọi retrieval query filter theo tenant/ACL, integration test cross-tenant không retrieve được, audit source IDs theo tenant",
+        "Tất cả tenant chia sẻ chung một vector index để tiết kiệm VRAM",
+        "Không cần test cross-tenant vì đã có gateway",
+        "Chỉ cần logging mọi query là đủ"
+      ],
+      "answerIndex": 0,
+      "explanation": "Để chứng minh tenant isolation, RAG Engine cần: mọi query filter theo tenant/ACL, integration test cross-tenant không retrieve được, và audit source IDs theo tenant."
+    },
+    {
+      "id": "q4",
+      "prompt": "Agent Orchestrator cần những budget controls nào?",
+      "options": [
+        "Chỉ cần timeout cho mỗi request",
+        "Max steps, timeout, max cost/tokens, max tool calls và human approval cho irreversible actions",
+        "Chỉ cần max cost tổng cộng",
+        "Không cần budget control vì agent tự giới hạn"
+      ],
+      "answerIndex": 1,
+      "explanation": "Agent Orchestrator cần budget controls: max steps, timeout, max cost/tokens, max tool calls và human approval cho các hành động irreversible để tránh runaway và chi phí."
+    },
+    {
+      "id": "q5",
+      "prompt": "Observability stack cần trả lời câu hỏi production nào?",
+      "options": [
+        "Chỉ cần biết tốn bao nhiêu cost",
+        "Chỉ cần biết lỗi gì đã xảy ra",
+        "Request đi đâu, dùng model/prompt/chunks/tool nào, tốn bao nhiêu, chậm ở đâu, lỗi gì và safety decision là gì",
+        "Chỉ cần biết request đi tới model nào"
+      ],
+      "answerIndex": 2,
+      "explanation": "Observability stack phải trả lời: request đi đâu, dùng model/prompt/chunks/tool nào, tốn bao nhiêu, chậm ở đâu, lỗi gì và safety decision là gì — để debug incidents."
+    }
+  ]
+}

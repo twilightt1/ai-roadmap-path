@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao giảm precision từ FP16 sang INT4 không chỉ giảm VRAM mà còn có thể tăng throughput?",
+      "options": [
+        "INT4 giảm VRAM ~4 lần so với FP16, cho phép batch lớn hơn, tăng concurrency và giảm memory bandwidth per token",
+        "INT4 tăng độ chính xác của model so với FP16",
+        "INT4 tăng số parameter của model",
+        "INT4 không ảnh hưởng tới throughput, chỉ giảm VRAM"
+      ],
+      "answerIndex": 0,
+      "explanation": "INT4 giảm VRAM ~4 lần so với FP16, cho phép batch lớn hơn, tăng concurrency và giảm memory bandwidth per token, từ đó có thể tăng tốc độ."
+    },
+    {
+      "id": "q2",
+      "prompt": "Khác biệt chính giữa PTQ và QAT là gì? Khi nào QAT được ưu tiên?",
+      "options": [
+        "PTQ mô phỏng quantization trong training, QAT áp dụng sau khi train xong",
+        "PTQ áp dụng sau khi train xong, QAT mô phỏng quantization trong training để model thích nghi; QAT ưu tiên khi cần giữ quality cao ở precision thấp",
+        "QAT áp dụng quantization sau khi train xong, PTQ trong training",
+        "PTQ và QAT là hai tên gọi của cùng một phương pháp"
+      ],
+      "answerIndex": 1,
+      "explanation": "PTQ áp dụng quantization sau khi train xong; QAT mô phỏng quantization trong training để model thích nghi, nên ưu tiên khi cần giữ quality cao ở precision thấp."
+    },
+    {
+      "id": "q3",
+      "prompt": "GGUF và GPTQ phục vụ use case khác nhau thế nào? Vì sao GGUF phổ biến với llama.cpp?",
+      "options": [
+        "Cả GPTQ và GGUF đều chỉ dành cho edge device",
+        "GPTQ tối ưu cho CPU/edge, GGUF tối ưu cho GPU NVIDIA",
+        "GPTQ tối ưu cho GPU inference (NVIDIA), GGUF tối ưu cho CPU/Mac/edge với llama.cpp; GGUF hỗ trợ k-quant linh hoạt và dễ chạy local",
+        "GGUF chỉ chạy được trên NVIDIA GPU"
+      ],
+      "answerIndex": 2,
+      "explanation": "GPTQ tối ưu cho GPU inference (NVIDIA), còn GGUF tối ưu cho CPU/Mac/edge với llama.cpp nhờ hỗ trợ k-quant linh hoạt và dễ chạy local."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao cần benchmark trên workload thật (không chỉ perplexity) trước khi quyết định quantize?",
+      "options": [
+        "Perplexity không đo được bất kỳ thông tin gì về model",
+        "Benchmark trên workload thật luôn nhanh hơn đo perplexity",
+        "Perplexity quá khó tính nên không đáng dùng",
+        "Perplexity chỉ đo quality tổng, không phản ánh latency tail, throughput thực tế, memory spike và cost/request trên traffic thật"
+      ],
+      "answerIndex": 3,
+      "explanation": "Perplexity chỉ đo quality tổng; nó không phản ánh latency tail, throughput, memory spike và cost/request trên traffic thật nên cần benchmark workload thật."
+    },
+    {
+      "id": "q5",
+      "prompt": "`load_in_4bit` của bitsandbytes khác gì `load_in_8bit` về chất lượng và VRAM?",
+      "options": [
+        "`load_in_4bit` tiết kiệm VRAM hơn (~4x) nhưng có thể giảm quality hơn; `load_in_8bit` cân bằng hơn, chất lượng gần FP16",
+        "`load_in_4bit` tốn VRAM nhiều hơn `load_in_8bit`",
+        "Cả hai có chất lượng và VRAM giống hệt FP16",
+        "`load_in_8bit` tiết kiệm VRAM hơn `load_in_4bit`"
+      ],
+      "answerIndex": 0,
+      "explanation": "`load_in_4bit` tiết kiệm VRAM ~4x nhưng có thể giảm quality; `load_in_8bit` cân bằng hơn với chất lượng gần FP16, phù hợp khi VRAM đủ."
+    }
+  ]
+}

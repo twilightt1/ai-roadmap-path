@@ -5,11 +5,11 @@
       "prompt": "LLM decoder-only học theo objective nào?",
       "options": [
         "Masked language modeling (đoán token bị che)",
-        "Next-token prediction: P(next_token | previous_tokens)",
         "Contrastive learning giữa các câu",
+        "Next-token prediction: P(next_token | previous_tokens)",
         "Reinforcement learning ngay từ đầu"
       ],
-      "answerIndex": 1,
+      "answerIndex": 2,
       "explanation": "Decoder-only học next-token prediction — dự đoán token kế tiếp dựa trên các token trước đó."
     },
     {
@@ -18,22 +18,22 @@
       "options": [
         "Prefill sinh từng token tuần tự, decode xử lý toàn input song song",
         "Cả hai giống hệt nhau",
-        "Prefill xử lý toàn input song song; decode sinh từng token tuần tự với KV cache",
-        "Prefill chỉ dùng cho training, decode chỉ dùng cho inference"
+        "Prefill chỉ dùng cho training, decode chỉ dùng cho inference",
+        "Prefill xử lý toàn input song song; decode sinh từng token tuần tự với KV cache"
       ],
-      "answerIndex": 2,
+      "answerIndex": 3,
       "explanation": "Prefill xử lý toàn bộ input song song (cost O(seq_len²)); decode sinh từng token tuần tự, tái dùng KV cache."
     },
     {
       "id": "q3",
       "prompt": "KV cache lưu tensor nào trong quá trình generation?",
       "options": [
-        "Chỉ Query tensors",
         "Key và Value tensors: (batch, num_kv_heads, seq_len, head_dim)",
+        "Chỉ Query tensors",
         "Attention weights",
         "Embedding của toàn bộ vocabulary"
       ],
-      "answerIndex": 1,
+      "answerIndex": 0,
       "explanation": "KV cache lưu Key và Value tensors với shape (batch, num_kv_heads, seq_len, head_dim) để không tính lại cho prefix khi sinh token mới."
     },
     {
@@ -53,11 +53,11 @@
       "prompt": "SFT khác RLHF/DPO ở điểm gì?",
       "options": [
         "SFT học từ preference pairs, RLHF/DPO học từ instruction-response",
-        "SFT học từ instruction-response; RLHF/DPO học từ preference pairs",
         "Cả ba là cùng một phương pháp",
+        "SFT học từ instruction-response; RLHF/DPO học từ preference pairs",
         "SFT chỉ dùng cho decoder, RLHF/DPO chỉ dùng cho encoder"
       ],
-      "answerIndex": 1,
+      "answerIndex": 2,
       "explanation": "SFT (Supervised Fine-Tuning) học từ cặp instruction-response; RLHF/DPO học từ preference pairs (so sánh response nào tốt hơn)."
     }
   ]

@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "TD target trong Q-learning là gì?",
+      "options": [
+        "`r - γ Q(s,a)`",
+        "`r + γ max_a' Q(s',a')`",
+        "`γ max_a' Q(s',a') - r`",
+        "`r + γ Q(s,a)`"
+      ],
+      "answerIndex": 1,
+      "explanation": "TD target trong Q-learning là `r + γ max_a' Q(s',a')` — reward hiện tại cộng giá trị tối đa ước lượng ở next state."
+    },
+    {
+      "id": "q2",
+      "prompt": "TD error dương nghĩa là gì?",
+      "options": [
+        "Action tệ hơn Q-function hiện tại dự đoán",
+        "Episode đã kết thúc và không còn future value",
+        "Action tốt hơn Q-function hiện tại dự đoán; nên tăng Q-value cho action đó",
+        "Reward của transition bằng 0"
+      ],
+      "answerIndex": 2,
+      "explanation": "TD error dương nghĩa là action thực ra tốt hơn Q-function hiện tại dự đoán, nên tăng Q-value cho action đó để tiến tới target."
+    },
+    {
+      "id": "q3",
+      "prompt": "DQN cần target network vì sao?",
+      "options": [
+        "Để tăng tốc độ training lên nhiều lần",
+        "Để giảm số parameter của main network",
+        "Target network không cần thiết trong DQN",
+        "Nếu dùng cùng network cho target và prediction, target thay đổi liên tục khiến training không ổn định"
+      ],
+      "answerIndex": 3,
+      "explanation": "Nếu dùng cùng network cho target và prediction, target thay đổi liên tục theo mỗi update khiến training không ổn định; target network ổn định hóa quá trình học."
+    },
+    {
+      "id": "q4",
+      "prompt": "Prioritized Experience Replay ưu tiên sample nào?",
+      "options": [
+        "Transition có TD error cao hơn, tức agent đang dự đoán sai nhiều hơn",
+        "Sample có reward cao nhất trong buffer",
+        "Sample đầu tiên của mỗi episode",
+        "Mọi sample đều ngẫu nhiên đều nhau"
+      ],
+      "answerIndex": 0,
+      "explanation": "Prioritized Experience Replay ưu tiên transition có TD error cao hơn, tức những nơi agent đang dự đoán sai nhiều, để tăng sample efficiency."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao phải nhân `(1 - done)` trong target của Q-learning?",
+      "options": [
+        "Để tăng Q-value khi episode kết thúc",
+        "Nếu episode đã kết thúc, không có future value ở next state; target chỉ còn reward hiện tại",
+        "Để giảm variance của gradient",
+        "Để tăng exploration ở cuối episode"
+      ],
+      "answerIndex": 1,
+      "explanation": "Nếu episode đã kết thúc (done = 1), không còn future value ở next state; nhân `(1 - done)` để target chỉ còn reward hiện tại `r`."
+    }
+  ]
+}

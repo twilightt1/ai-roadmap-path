@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Pre-moderation khác post-moderation thế nào?",
+      "options": [
+        "Cả hai kiểm tra cùng một vị trí trong pipeline",
+        "Pre-moderation kiểm tra output, post-moderation kiểm tra input",
+        "Pre-moderation kiểm tra input trước model call; post-moderation kiểm tra output trước khi trả cho user",
+        "Pre-moderation chỉ áp dụng cho training, post-moderation cho inference"
+      ],
+      "answerIndex": 2,
+      "explanation": "Pre-moderation kiểm tra input trước khi gọi model; post-moderation kiểm tra output trước khi trả về cho user — cả hai đều cần trong safety pipeline."
+    },
+    {
+      "id": "q2",
+      "prompt": "Khi nào cần Human-in-the-Loop (HITL)?",
+      "options": [
+        "Khi traffic của hệ thống thấp",
+        "Khi không có user nào dùng hệ thống",
+        "Khi model chạy đủ nhanh không cần xác nhận",
+        "High-stakes domain, irreversible tool action, low confidence, policy ambiguity, user appeal hoặc safety classifier uncertain"
+      ],
+      "answerIndex": 3,
+      "explanation": "Cần HITL trong high-stakes domain, hành động irreversible, low confidence, policy ambiguity, user appeal hoặc khi safety classifier uncertain — cần rubric, SLA, owner và audit."
+    },
+    {
+      "id": "q3",
+      "prompt": "Audit log cho AI request nên chứa những version nào?",
+      "options": [
+        "Model version, prompt version, safety policy version, tool/pipeline version nếu có",
+        "Chỉ cần model version",
+        "Chỉ cần prompt version",
+        "Không cần lưu version nào trong audit log"
+      ],
+      "answerIndex": 0,
+      "explanation": "Audit log phải version model, prompt, safety policy và tool/pipeline (nếu có) để khi incident xảy ra có thể trace output đến đúng cấu hình."
+    },
+    {
+      "id": "q4",
+      "prompt": "NIST AI RMF có 4 functions nào?",
+      "options": [
+        "Plan, Do, Check, Act",
+        "Govern, Map, Measure, Manage",
+        "Train, Eval, Deploy, Monitor",
+        "Input, Process, Output, Feedback"
+      ],
+      "answerIndex": 1,
+      "explanation": "NIST AI RMF gồm 4 functions: Govern, Map, Measure, Manage — cần được chuyển thành engineering artifacts như evals, logs và release gates."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao safety gateway nên độc lập với model provider?",
+      "options": [
+        "Để giảm cost của inference",
+        "Để tăng throughput của hệ thống",
+        "Để mọi model/routing/fallback đều chịu cùng policy; không provider nào bypass guardrails",
+        "Để đơn giản hóa deployment pipeline"
+      ],
+      "answerIndex": 2,
+      "explanation": "Safety gateway độc lập với provider đảm bảo mọi model/routing/fallback chịu cùng policy; không provider nào có thể bypass guardrails khi fallback."
+    }
+  ]
+}

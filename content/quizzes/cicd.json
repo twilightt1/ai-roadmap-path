@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "CI/CD cho AI khác CI/CD truyền thống ở điểm lớn nhất nào?",
+      "options": [
+        "AI CI/CD chỉ cần chạy unit test code giống CI/CD truyền thống",
+        "AI CI/CD bỏ qua bước deploy vì model luôn được cập nhật thủ công",
+        "AI CI/CD không cần CI vì model không phải là code",
+        "AI CI/CD phải kiểm tra hành vi semantic của prompt/model/data, không chỉ code pass unit tests"
+      ],
+      "answerIndex": 3,
+      "explanation": "AI CI/CD phải version và test cả code, prompt, data, model và index — kiểm tra hành vi semantic, không chỉ code pass unit tests."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao rollback chỉ Docker image có thể không đủ cho AI system?",
+      "options": [
+        "Vì behavior còn phụ thuộc prompt/model/index/config bên ngoài image",
+        "Vì Docker image không hỗ trợ versioning",
+        "Vì Docker image không bao giờ bị lỗi môi trường",
+        "Vì rollback image luôn làm sập toàn bộ hệ thống"
+      ],
+      "answerIndex": 0,
+      "explanation": "Behavior của AI system còn phụ thuộc prompt, model, index và config bên ngoài image, nên cần rollback đúng toàn bộ release bundle."
+    },
+    {
+      "id": "q3",
+      "prompt": "Tiered testing giải quyết vấn đề gì trong AI CI/CD?",
+      "options": [
+        "Xóa bỏ hoàn toàn các test lớn để tăng tốc độ pipeline",
+        "Cân bằng tốc độ và độ bao phủ: test nhỏ trên PR, test lớn định kỳ/release",
+        "Chỉ chạy test trên production sau khi deploy xong",
+        "Thay thế eval gates bằng một smoke test duy nhất"
+      ],
+      "answerIndex": 1,
+      "explanation": "Tiered testing cân bằng tốc độ và độ bao phủ — chạy test nhỏ nhanh trên mỗi PR và test lớn đầy đủ định kỳ hoặc trước release."
+    },
+    {
+      "id": "q4",
+      "prompt": "Canary release giảm blast radius như thế nào?",
+      "options": [
+        "Deploy ngay 100% traffic để phát hiện lỗi nhanh nhất",
+        "Tắt monitoring trong suốt thời gian canary",
+        "Chỉ expose version mới cho một phần nhỏ traffic và rollback nếu metrics xấu",
+        "Deploy tất cả user cùng lúc nhưng giấu tính năng mới"
+      ],
+      "answerIndex": 2,
+      "explanation": "Canary chỉ đưa version mới cho một phần nhỏ traffic, theo dõi metrics và rollback nhanh nếu xấu — giới hạn tác động khi lỗi."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao secrets trong CI/CD đặc biệt nhạy cảm với AI system?",
+      "options": [
+        "CI/CD không bao giờ truy cập được secret",
+        "Secret trong CI/CD chỉ là biến môi trường nên không nguy hiểm",
+        "Secret chỉ có thể lộ khi commit code, không qua CI/CD",
+        "CI/CD có quyền deploy và truy cập cloud/provider; lộ secret có thể dẫn đến takeover hoặc bill shock"
+      ],
+      "answerIndex": 3,
+      "explanation": "CI/CD có quyền deploy và truy cập cloud/provider, nên lộ secret có thể dẫn đến takeover hệ thống hoặc bill shock."
+    }
+  ]
+}

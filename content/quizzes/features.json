@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Feature nào nên build trước: admin dashboard hay trace/usage instrumentation? Vì sao?",
+      "options": [
+        "Admin dashboard trước, vì cần UI để demo cho stakeholder",
+        "Không cần build cái nào trước, làm khi rảnh",
+        "Cả hai nên build song song ngay từ đầu",
+        "Trace/usage instrumentation trước, vì dashboard cần dữ liệu thật để có giá trị operational"
+      ],
+      "answerIndex": 3,
+      "explanation": "Trace/usage instrumentation nên build trước vì dashboard cần dữ liệu thật mới có giá trị operational — không có trace thì dashboard chỉ là UI rỗng."
+    },
+    {
+      "id": "q2",
+      "prompt": "Một acceptance criteria tốt cần tính chất gì?",
+      "options": [
+        "Cụ thể, testable, gắn với user/system behavior và có expected outcome rõ",
+        "Mơ hồ và linh hoạt để dễ adapt",
+        "Càng chung chung càng tốt để bao quát",
+        "Chỉ cần ghi tên feature là đủ"
+      ],
+      "answerIndex": 0,
+      "explanation": "Acceptance criteria tốt cần cụ thể, testable, gắn với user/system behavior và có expected outcome rõ — Capstone cần backlog có criteria, không chỉ danh sách features."
+    },
+    {
+      "id": "q3",
+      "prompt": "Demo Capstone nên chứng minh những năng lực production nào?",
+      "options": [
+        "Chỉ cần demo chatbot UI trả lời câu hỏi",
+        "Multi-tenancy, routing/fallback, RAG, agents/tools, cost, safety, observability, deployment và governance",
+        "Chỉ cần demo một model generation chạy được",
+        "Chỉ cần demo deployment lên cloud"
+      ],
+      "answerIndex": 1,
+      "explanation": "Demo Capstone nên chứng minh end-to-end: multi-tenancy, routing/fallback, RAG, agents/tools, cost, safety, observability, deployment và governance — không chỉ chatbot UI."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao vertical slice tốt hơn build nhiều mock features?",
+      "options": [
+        "Mock features chứng minh production capability tốt hơn vertical slice",
+        "Vertical slice luôn nhanh hơn mock để build",
+        "Vertical slice chứng minh end-to-end production capability; mock breadth chỉ chứng minh UI/intent",
+        "Cả hai cách cho kết quả tương đương nhau"
+      ],
+      "answerIndex": 2,
+      "explanation": "Vertical slice chứng minh end-to-end production capability; mock breadth chỉ chứng minh UI/intent — MVP nên chứng minh một vertical slice production-grade trước khi mở rộng."
+    },
+    {
+      "id": "q5",
+      "prompt": "Final grading rubric nên bao gồm những areas nào?",
+      "options": [
+        "Chỉ cần đánh giá code quality",
+        "Chỉ cần đánh giá UI/UX của product",
+        "Chỉ cần đánh giá deployment thành công hay không",
+        "Architecture, reliability, multi-tenancy, RAG, agents, cost, safety, observability, deployment và portfolio readiness"
+      ],
+      "answerIndex": 3,
+      "explanation": "Final grading rubric nên bao gồm architecture, reliability, multi-tenancy, RAG, agents, cost, safety, observability, deployment và portfolio readiness — phản ánh production capability toàn diện."
+    }
+  ]
+}

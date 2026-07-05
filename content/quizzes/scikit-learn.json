@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao Pipeline giúp chống leakage khi dùng cross-validation?",
+      "options": [
+        "Pipeline fit preprocessing riêng trên train fold trong CV, không nhìn validation fold",
+        "Pipeline tự động xóa test set khỏi memory",
+        "Pipeline không chứa preprocessing nên không có gì để leak",
+        "Pipeline dùng test set để fit preprocessing trước"
+      ],
+      "answerIndex": 0,
+      "explanation": "Trong CV, preprocessing được fit riêng trên train fold, không nhìn validation fold — không có chance để info leak vào train."
+    },
+    {
+      "id": "q2",
+      "prompt": "Cú pháp `model__C` và `prep__text__ngram_range` trong GridSearchCV nghĩa là gì?",
+      "options": [
+        "Cả hai đều là tham số của step cuối cùng trong pipeline",
+        "`model__C` là tham số C của step tên `model`; `prep__text__ngram_range` là `prep`(ColumnTransformer)→`text`(TfidfVectorizer)→`ngram_range`",
+        "`model__C` là learning rate; `prep__text__ngram_range` là số fold CV",
+        "`__` chỉ chia tách train/test, không liên quan tới step"
+      ],
+      "answerIndex": 1,
+      "explanation": "Cú pháp `step__param` (và nested `outer__inner__param`) chỉ định tham số của step tương ứng trong pipeline."
+    },
+    {
+      "id": "q3",
+      "prompt": "Threshold cho classifier nên tune ở đâu và evaluation làm ở đâu?",
+      "options": [
+        "Tune trên test set để tối ưu metric cuối",
+        "Tune trên cả train và test cùng lúc",
+        "Tune trên validation; evaluation trên test với threshold đã freeze",
+        "Không cần tune threshold, dùng mặc định 0.5 luôn"
+      ],
+      "answerIndex": 2,
+      "explanation": "`predict_proba` cho xác suất để tune threshold trên validation; evaluation trên test với threshold đã freeze."
+    },
+    {
+      "id": "q4",
+      "prompt": "RobustScaler khác StandardScaler ở điểm nào?",
+      "options": [
+        "RobustScaler dùng mean/std; StandardScaler dùng median/IQR",
+        "Cả hai giống hệt nhau, chỉ khác tên",
+        "RobustScaler scale về [0,1]; StandardScaler không scale",
+        "RobustScaler dùng median và IQR thay mean/std — ít bị outlier kéo"
+      ],
+      "answerIndex": 3,
+      "explanation": "RobustScaler dùng median và IQR thay vì mean/std, ít bị outlier kéo; hợp khi data có outlier không phải noise thật."
+    },
+    {
+      "id": "q5",
+      "prompt": "Sampler xử lý imbalance phải đặt trong Pipeline nào và vì sao?",
+      "options": [
+        "imblearn.pipeline.Pipeline, vì sampler cần re-fit chỉ trên train fold mỗi CV; sklearn Pipeline sẽ leak",
+        "sklearn Pipeline, vì sampler không cần fit",
+        "Không cần Pipeline, đặt sampler ngoài CV",
+        "Bất kỳ Pipeline nào cũng được, không khác biệt"
+      ],
+      "answerIndex": 0,
+      "explanation": "Sampler phải dùng `imblearn.pipeline.Pipeline` để re-fit chỉ trên train fold mỗi CV iteration; sklearn Pipeline không biết sampler interface và sẽ leak nếu nhét sampler."
+    }
+  ]
+}

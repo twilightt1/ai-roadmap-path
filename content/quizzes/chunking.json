@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Một chunk tốt cần cân bằng điều gì?",
+      "options": [
+        "Càng lớn càng tốt",
+        "Càng nhỏ càng tốt",
+        "Đủ context nhưng đủ specific, citeable và token-efficient",
+        "Không cần metadata"
+      ],
+      "answerIndex": 2,
+      "explanation": "Chunk tốt cân bằng: đủ context để trả lời đúng, đủ specific để retrieve chính xác, citeable và token-efficient — không quá lớn cũng không quá nhỏ."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao chunk quá nhỏ có hại cho retrieval?",
+      "options": [
+        "Tốn quá nhiều context window",
+        "Tăng precision luôn",
+        "Giảm số lượng chunk cần index",
+        "Mất điều kiện/heading/context cần để answer đúng"
+      ],
+      "answerIndex": 3,
+      "explanation": "Chunk quá nhỏ mất điều kiện, heading và context xung quanh — model không đủ thông tin để answer đúng dù retrieve trúng."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao chunk quá lớn có hại cho RAG?",
+      "options": [
+        "Nhiễu retrieval, tốn context, giảm precision",
+        "Mất heading của document",
+        "Tăng precision của retrieval",
+        "Giảm số token cần embed"
+      ],
+      "answerIndex": 0,
+      "explanation": "Chunk quá lớn chứa nhiều chủ đề → nhiễu retrieval, tốn context window và giảm precision vì một chunk trúng có thể kèm nội dung không liên quan."
+    },
+    {
+      "id": "q4",
+      "prompt": "Recursive splitting hoạt động thế nào?",
+      "options": [
+        "Chỉ chia theo số token cố định",
+        "Thử boundary lớn/tự nhiên trước, fallback dần xuống boundary nhỏ hơn",
+        "Chia ngẫu nhiên không theo structure",
+        "Chia theo semantic similarity"
+      ],
+      "answerIndex": 1,
+      "explanation": "Recursive splitting thử boundary lớn/tự nhiên (chapter, paragraph) trước, nếu chunk vẫn quá lớn thì fallback xuống boundary nhỏ hơn (sentence, word) — giữ structure khi có thể."
+    },
+    {
+      "id": "q5",
+      "prompt": "Metadata chunk cho production RAG cần gồm những trường nào?",
+      "options": [
+        "Chỉ chunk text",
+        "Chỉ embedding vector",
+        "doc_id, chunk_id, source, page/section, offsets, version, strategy, tenant/ACL",
+        "Chỉ timestamp"
+      ],
+      "answerIndex": 2,
+      "explanation": "Metadata production cần doc_id, chunk_id, source, page/section, offsets, version, strategy và tenant/ACL — cần cho citations, ACL, versioning và debugging."
+    }
+  ]
+}

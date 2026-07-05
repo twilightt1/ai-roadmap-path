@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Ingestion pipeline của RAG gồm những bước nào (thứ tự)?",
+      "options": [
+        "Embed, chunk, load, parse",
+        "Load, parse, clean, deduplicate, chunk, metadata, embed, upsert",
+        "Retrieve, rerank, generate",
+        "Normalize, embed, retrieve, generate"
+      ],
+      "answerIndex": 1,
+      "explanation": "Ingestion pipeline: load → parse → clean → deduplicate → chunk → gắn metadata → embed → upsert vào vector DB — chuẩn bị dữ liệu để retrieve."
+    },
+    {
+      "id": "q2",
+      "prompt": "Query pipeline của RAG gồm những bước nào?",
+      "options": [
+        "Load, parse, embed, upsert",
+        "Chunk, embed, retrieve",
+        "Normalize, embed/rewrite, retrieve, rerank, pack context, generate, validate/cite",
+        "Train, validate, deploy"
+      ],
+      "answerIndex": 2,
+      "explanation": "Query pipeline: normalize query → embed/rewrite → retrieve → rerank → pack context → generate → validate/cite — biến câu hỏi thành câu trả lời grounded."
+    },
+    {
+      "id": "q3",
+      "prompt": "HyDE hoạt động ra sao và rủi ro chính là gì?",
+      "options": [
+        "Tạo hypothetical answer/document rồi embed để retrieve; rủi ro hallucinated hypothesis bias retrieval",
+        "Gọi nhiều model song song; rủi ro cost cao",
+        "Nén context; rủi ro bỏ sót evidence",
+        "Rerank candidates bằng cross-encoder; rủi ro tăng latency"
+      ],
+      "answerIndex": 3,
+      "explanation": "HyDE tạo hypothetical answer/document rồi embed để retrieve tốt hơn — nhưng hypothesis có thể hallucinate và bias retrieval, dẫn tới sai hướng."
+    },
+    {
+      "id": "q4",
+      "prompt": "Reranker cải thiện điều gì trong RAG?",
+      "options": [
+        "Xếp hạng candidates chính xác hơn bằng query-document scoring",
+        "Tăng tốc độ embed",
+        "Giảm số chunk cần embed",
+        "Thay thế cần vector DB"
+      ],
+      "answerIndex": 0,
+      "explanation": "Reranker (cross-encoder) xếp hạng candidates chính xác hơn bằng query-document scoring, cải thiện thứ tự evidence trước khi pack vào context."
+    },
+    {
+      "id": "q5",
+      "prompt": "Retrieval metrics khác generation metrics thế nào trong RAG eval?",
+      "options": [
+        "Hai loại giống hệt nhau",
+        "Retrieval đo evidence selection; generation đo answer grounded/relevant/cited không",
+        "Retrieval đo answer quality; generation đo evidence selection",
+        "Cả hai đều đo latency"
+      ],
+      "answerIndex": 1,
+      "explanation": "Phải tách eval: retrieval metrics đo evidence selection (recall@k, precision), generation metrics đo answer có grounded, relevant và cited không."
+    }
+  ]
+}

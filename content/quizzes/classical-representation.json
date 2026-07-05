@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Bag of Words (BoW) mất thông tin gì so với văn bản gốc?",
+      "options": [
+        "Số lượng từ trong văn bản",
+        "Thứ tự/ngữ cảnh",
+        "Tần suất từ phổ biến",
+        "Danh sách vocabulary"
+      ],
+      "answerIndex": 1,
+      "explanation": "BoW chỉ đếm tần suất từ, bỏ qua thứ tự và ngữ cảnh — 'chó đuổi mèo' và 'mèo đuổi chó' cho vector giống nhau."
+    },
+    {
+      "id": "q2",
+      "prompt": "IDF của một term cao khi nào?",
+      "options": [
+        "Term xuất hiện trong mọi document",
+        "Term là stopword phổ biến",
+        "Term xuất hiện trong ít documents",
+        "Term xuất hiện ở đầu văn bản"
+      ],
+      "answerIndex": 2,
+      "explanation": "IDF cao khi term xuất hiện trong ít documents — tức term đặc trưng, hiếm; TF-IDF tăng trọng số cho những term này."
+    },
+    {
+      "id": "q3",
+      "prompt": "N-gram giúp gì cho sparse representation?",
+      "options": [
+        "Giảm dimension của vector",
+        "Thêm semantic similarity cho one-hot",
+        "Thay thế embedding dense",
+        "Capture phrases và thứ tự ngắn"
+      ],
+      "answerIndex": 3,
+      "explanation": "N-gram capture phrase và thứ tự ngắn (vd 'không tốt'), nhưng đánh đổi bằng tăng dimension."
+    },
+    {
+      "id": "q4",
+      "prompt": "Sparse search (TF-IDF/BM25) mạnh ở loại query nào?",
+      "options": [
+        "Exact keyword, code, IDs, tên API",
+        "Ý nghĩa trừu tượng không có từ khớp",
+        "Câu hỏi mở cần suy luận",
+        "Semantic paraphrase/synonym"
+      ],
+      "answerIndex": 0,
+      "explanation": "Sparse search bắt exact terms tốt cho keyword, code, IDs, tên API — nơi trùng từ quan trọng."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao hybrid search thường tốt hơn vector-only?",
+      "options": [
+        "Vector-only luôn chậm hơn hybrid",
+        "Sparse bắt exact terms; dense bắt semantic similarity; hai loại bổ sung nhau",
+        "Hybrid không cần embedding model",
+        "Sparse search không bao giờ hữu ích"
+      ],
+      "answerIndex": 1,
+      "explanation": "Sparse bắt exact terms, dense bắt semantic similarity — hai loại bổ sung nhau, nên hybrid thường vượt trội hơn dùng một loại."
+    }
+  ]
+}

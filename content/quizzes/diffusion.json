@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Forward process và reverse process khác nhau như thế nào?",
+      "options": [
+        "Forward process sinh ảnh; reverse process xóa ảnh",
+        "Forward process khử noise; reverse process thêm noise",
+        "Cả hai đều thêm noise nhưng với hướng khác nhau",
+        "Forward process thêm noise theo lịch trình cố định; reverse process dùng neural network học cách khử noise để quay về dữ liệu sạch"
+      ],
+      "answerIndex": 3,
+      "explanation": "Forward process thêm noise theo lịch trình cố định; reverse process dùng neural network học cách khử noise để quay về dữ liệu sạch."
+    },
+    {
+      "id": "q2",
+      "prompt": "Denoiser trong DDPM thường dự đoán gì?",
+      "options": [
+        "Dự đoán noise `epsilon` đã được thêm vào sample tại timestep `t`",
+        "Dự đoán ảnh sạch trực tiếp tại mỗi bước",
+        "Dự đoán learning rate cho bước tiếp theo",
+        "Dự đoán số bước khử noise còn lại"
+      ],
+      "answerIndex": 0,
+      "explanation": "Denoiser trong DDPM thường dự đoán noise epsilon đã được thêm vào sample tại timestep t, sau đó trừ đi để khử noise."
+    },
+    {
+      "id": "q3",
+      "prompt": "CFG dùng `epsilon_cond` và `epsilon_uncond` để làm gì?",
+      "options": [
+        "Để giảm số bước sampling xuống còn 1",
+        "Nó ngoại suy khác biệt giữa dự đoán có điều kiện và vô điều kiện để ép output bám prompt mạnh hơn",
+        "Để tính loss khi training diffusion model",
+        "Để chọn ngẫu nhiên một trong hai dự đoán nhằm tăng đa dạng"
+      ],
+      "answerIndex": 1,
+      "explanation": "CFG ngoại suy khác biệt giữa dự đoán có điều kiện (epsilon_cond) và vô điều kiện (epsilon_uncond) để ép output bám prompt mạnh hơn."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao Latent Diffusion rẻ hơn pixel-space diffusion?",
+      "options": [
+        "Vì Latent Diffusion bỏ qua hoàn toàn bước reverse process",
+        "Vì Latent Diffusion chỉ chạy trên CPU",
+        "Vì denoising diễn ra trên latent representation nhỏ hơn pixel image nhiều lần, giảm VRAM và compute",
+        "Vì Latent Diffusion không cần neural network"
+      ],
+      "answerIndex": 2,
+      "explanation": "Latent Diffusion thực hiện denoising trên latent representation nhỏ hơn pixel image nhiều lần, nên giảm VRAM và compute đáng kể."
+    },
+    {
+      "id": "q5",
+      "prompt": "ControlNet giải quyết hạn chế nào của text-only prompting?",
+      "options": [
+        "Hạn chế model không sinh được ảnh độ phân giải cao",
+        "Hạn chế model không hỗ trợ tiếng Việt",
+        "Hạn chế text prompt quá dài vượt quá context window",
+        "Nó thêm conditioning từ ảnh/pose/depth/edges/mask để kiểm soát layout, structure hoặc vùng cần sửa, thay vì chỉ mô tả bằng text"
+      ],
+      "answerIndex": 3,
+      "explanation": "ControlNet thêm conditioning từ ảnh/pose/depth/edges/mask để kiểm soát layout, structure hoặc vùng cần sửa, bù đắp hạn chế của text-only prompting."
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao không nên serve production LLM bằng `model.generate()` thủ công?",
+      "options": [
+        "`model.generate()` quá chậm trên mọi loại hardware",
+        "`model.generate()` không hỗ trợ chạy trên GPU",
+        "`model.generate()` không có continuous batching, KV cache management, scheduler và streaming; khi concurrency cao, GPU utilization thấp, queue tăng và server OOM",
+        "`model.generate()` chỉ dùng được cho training, không dùng cho inference"
+      ],
+      "answerIndex": 2,
+      "explanation": "`model.generate()` thiếu continuous batching, KV cache management, scheduler và streaming; khi concurrency cao sẽ dẫn tới GPU utilization thấp, queue tăng và OOM."
+    },
+    {
+      "id": "q2",
+      "prompt": "PagedAttention và continuous batching giải quyết hai bottleneck nào của LLM serving?",
+      "options": [
+        "PagedAttention loại bỏ hoàn toàn KV cache; continuous batching tăng số parameter",
+        "PagedAttention tăng batch size; continuous batching giảm KV cache",
+        "Cả hai đều giảm perplexity của model",
+        "PagedAttention giảm KV cache fragmentation và lãng phí VRAM; continuous batching thêm request mới vào batch khi sequence cũ xong, tăng GPU utilization"
+      ],
+      "answerIndex": 3,
+      "explanation": "PagedAttention giảm KV cache fragmentation/vãng phí VRAM; continuous batching chèn request mới vào batch khi sequence xong để tăng GPU utilization."
+    },
+    {
+      "id": "q3",
+      "prompt": "Khi nào nên chọn Ollama/llama.cpp thay vì vLLM/TGI?",
+      "options": [
+        "Ollama/llama.cpp phù hợp cho local/dev/edge, CPU/Mac/privacy/offline; vLLM/TGI phù hợp cho high-concurrency GPU server",
+        "Khi cần high-concurrency GPU server trong production",
+        "Khi cần serve hàng triệu request đồng thời",
+        "Khi cần training distributed trên nhiều GPU"
+      ],
+      "answerIndex": 0,
+      "explanation": "Ollama/llama.cpp phù hợp cho local/dev/edge và môi trường CPU/Mac/privacy/offline; vLLM/TGI phù hợp cho high-concurrency GPU server."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao cần tách interactive chat pool và batch summarization pool?",
+      "options": [
+        "Để giảm tổng số GPU cần dùng cho hệ thống",
+        "Batch job dài làm nghẽn interactive chat vì scheduler ưu tiên throughput; tách pool bảo vệ SLA latency cho interactive và cho phép batch pool tối ưu throughput riêng",
+        "Vì interactive chat không cần GPU để chạy",
+        "Vì batch summarization không quan trọng nên để riêng"
+      ],
+      "answerIndex": 1,
+      "explanation": "Batch job dài nghẽn interactive chat vì scheduler ưu tiên throughput; tách pool bảo vệ SLA latency cho interactive và cho phép batch pool tối ưu throughput riêng."
+    },
+    {
+      "id": "q5",
+      "prompt": "Model registry + rollout/rollback trong serving có vai trò gì?",
+      "options": [
+        "Tăng số parameter của model khi deploy",
+        "Loại bỏ hoàn toàn cần monitoring hệ thống",
+        "Giúp version, rollback và canary deployment; khi model mới gây regression, rollback về version cũ bằng config thay vì redeploy code",
+        "Tự động train lại model khi có lỗi inference"
+      ],
+      "answerIndex": 2,
+      "explanation": "Model registry hỗ trợ version, rollback và canary deployment; khi model mới gây regression, có thể rollback về version cũ bằng config thay vì redeploy code."
+    }
+  ]
+}

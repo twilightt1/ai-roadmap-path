@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao vector index được coi là derived data?",
+      "options": [
+        "Vì index là source of truth",
+        "Vì source docs là source of truth; index được build từ docs và phải rebuild/version/delete được",
+        "Vì index không cần versioning",
+        "Vì index không phụ thuộc docs"
+      ],
+      "answerIndex": 1,
+      "explanation": "Source docs là source of truth; vector index được build (derived) từ docs nên phải rebuildable, versioned và delete được khi docs đổi."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao delete semantics quan trọng trong production RAG?",
+      "options": [
+        "Deleted content nên vẫn retrieve được để backup",
+        "Delete không ảnh hưởng compliance",
+        "Deleted content không được retrieve; nếu còn trong index là leak/compliance issue",
+        "Index tự động sync delete không cần xử lý"
+      ],
+      "answerIndex": 2,
+      "explanation": "Nếu content đã delete vẫn còn trong index, nó có thể bị retrieve — đây là data leak và compliance issue, cần tombstone/propagation rõ."
+    },
+    {
+      "id": "q3",
+      "prompt": "Những cách thực hiện multi-tenant isolation trong RAG là gì?",
+      "options": [
+        "Chỉ dùng chung index cho mọi tenant",
+        "Không cần isolation vì model tự phân biệt",
+        "Chỉ dùng prompt để tách tenant",
+        "Separate indexes, namespaces/collections, metadata filters — với tenant hard filter"
+      ],
+      "answerIndex": 3,
+      "explanation": "Multi-tenant isolation có thể dùng separate indexes, namespaces/collections hoặc metadata filters — nhưng phải có tenant hard filter để ngăn cross-tenant leak."
+    },
+    {
+      "id": "q4",
+      "prompt": "ACL-aware retrieval nên xảy ra ở đâu?",
+      "options": [
+        "Trước khi chunks vào prompt, lý tưởng trong vector DB/index pre-filter",
+        "Sau khi chunks vào prompt",
+        "Trong UI layer",
+        "Trong model training"
+      ],
+      "answerIndex": 0,
+      "explanation": "ACL-aware retrieval phải xảy ra trước khi chunks vào prompt — lý tưởng trong vector DB/index pre-filter — để unauthorized chunks không bao giờ reach model."
+    },
+    {
+      "id": "q5",
+      "prompt": "Khi nào RAG system nên trả 'I don't know' (abstain)?",
+      "options": [
+        "Khi user hỏi câu khó",
+        "Khi retrieval thiếu evidence, confidence thấp, sources conflict, citation validation fail hoặc permission thiếu",
+        "Khi latency cao",
+        "Khi cost vượt budget"
+      ],
+      "answerIndex": 1,
+      "explanation": "System nên abstain khi retrieval thiếu evidence, confidence thấp, sources conflict, citation validation fail hoặc permission thiếu — tốt hơn là bịa câu trả lời."
+    }
+  ]
+}

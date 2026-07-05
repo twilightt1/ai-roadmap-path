@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao notebook fine-tuning khó dùng trực tiếp cho production?",
+      "options": [
+        "Vì notebook chạy nhanh hơn script nên không kiểm soát được",
+        "Vì state, seed, dataset, dependency và config thường không được version hóa đầy đủ, làm run khó reproduce/audit",
+        "Vì notebook không hỗ trợ GPU",
+        "Vì notebook tự động xóa checkpoint sau khi đóng"
+      ],
+      "answerIndex": 1,
+      "explanation": "Trong notebook, state, seed, dataset, dependency và config thường không được version hóa đầy đủ, khiến run khó reproduce và audit."
+    },
+    {
+      "id": "q2",
+      "prompt": "Axolotl giải quyết vấn đề gì bằng YAML config?",
+      "options": [
+        "Nó tự động giảm VRAM của model xuống 2-bit",
+        "Nó thay thế hoàn toàn việc cần GPU khi training",
+        "Nó đưa training parameters vào config reviewable/reproducible, giảm boilerplate và chuẩn hóa workflow",
+        "Nó sinh dữ liệu synthetic tự động cho mọi task"
+      ],
+      "answerIndex": 2,
+      "explanation": "Axolotl đưa training parameters vào YAML config reviewable/reproducible, giảm boilerplate và chuẩn hóa workflow cho cả team."
+    },
+    {
+      "id": "q3",
+      "prompt": "Unsloth phù hợp nhất với loại workload nào?",
+      "options": [
+        "Multi-node distributed pretraining từ scratch",
+        "Serving hàng nghìn adapter cho multi-tenant",
+        "Real-time inference cho hàng triệu request mỗi giây",
+        "Single-GPU SFT/QLoRA cần tối ưu tốc độ và VRAM"
+      ],
+      "answerIndex": 3,
+      "explanation": "Unsloth tối ưu cho single-GPU SFT/QLoRA, nơi cần tốc độ và tiết kiệm VRAM, không phải cho distributed pretraining hay serving quy mô lớn."
+    },
+    {
+      "id": "q4",
+      "prompt": "Experiment tracker nên log những artifact nào?",
+      "options": [
+        "Config, metrics, dataset manifest/hash, checkpoint/adapter, eval report, environment và code revision",
+        "Chỉ cần log tên model và số epoch",
+        "Chỉ cần log loss curve là đủ",
+        "Chỉ cần log screenshot của terminal sau khi train xong"
+      ],
+      "answerIndex": 0,
+      "explanation": "Experiment tracker nên log config, metrics, dataset manifest/hash, checkpoint/adapter, eval report, environment và code revision để đảm bảo reproduce và audit."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao cần lưu dataset split manifest?",
+      "options": [
+        "Để tăng tốc độ training",
+        "Để eval nhất quán giữa các run và tránh leakage hoặc random split làm metric dao động",
+        "Để tự động sinh thêm training data",
+        "Để giảm VRAM khi load dữ liệu"
+      ],
+      "answerIndex": 1,
+      "explanation": "Lưu dataset split manifest giúp eval nhất quán giữa các run và tránh leakage hoặc random split làm metric dao động."
+    }
+  ]
+}

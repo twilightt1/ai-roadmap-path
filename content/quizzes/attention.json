@@ -30,22 +30,22 @@
       "options": [
         "Thông tin dùng để match",
         "Thông tin tìm kiếm",
-        "Thông tin được truyền đi",
-        "Tham số cần học"
+        "Tham số cần học",
+        "Thông tin được truyền đi"
       ],
-      "answerIndex": 2,
+      "answerIndex": 3,
       "explanation": "Query tìm thông tin, key là thứ để match, value là thông tin thực sự được truyền đi (weighted sum)."
     },
     {
       "id": "q4",
       "prompt": "Vì sao scaled dot-product chia cho √d_k?",
       "options": [
-        "Để giảm số phép tính",
         "Giữ scale dot product ổn định, tránh softmax quá sắc",
+        "Để giảm số phép tính",
         "Để chuẩn hóa về [0,1]",
         "Để tránh gradient vanishing"
       ],
-      "answerIndex": 1,
+      "answerIndex": 0,
       "explanation": "Khi d_k lớn, dot product có thể rất lớn → softmax cực sắc (gradient gần 0). Chia √d_k giữ score ổn định."
     },
     {

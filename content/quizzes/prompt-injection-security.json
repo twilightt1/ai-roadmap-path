@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Direct prompt injection khác indirect prompt injection thế nào?",
+      "options": [
+        "Direct đến từ model weights, indirect đến từ user",
+        "Direct injection an toàn hơn indirect injection",
+        "Cả hai là cùng một khái niệm",
+        "Direct injection đến từ user prompt trực tiếp; indirect injection nằm trong dữ liệu mà hệ thống retrieve/đọc như docs, web, email, tool outputs"
+      ],
+      "answerIndex": 3,
+      "explanation": "Direct injection đến trực tiếp từ user prompt; indirect injection ẩn trong dữ liệu hệ thống retrieve/đọc (docs, web, email, tool outputs) và thường nguy hiểm hơn."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao retrieved documents phải xem là untrusted data?",
+      "options": [
+        "Vì attacker có thể kiểm soát hoặc poison nội dung đó, và LLM có thể nhầm data thành instruction",
+        "Vì documents luôn được verify kỹ trước khi index",
+        "Vì documents được mã hóa nên không thể tin cậy",
+        "Vì documents không ảnh hưởng tới output của model"
+      ],
+      "answerIndex": 0,
+      "explanation": "Attacker có thể kiểm soát hoặc poison nội dung retrieved documents, và LLM có thể nhầm data thành instruction — nên phải xem mọi retrieved content là untrusted."
+    },
+    {
+      "id": "q3",
+      "prompt": "Delimiters có phải security boundary cứng không?",
+      "options": [
+        "Có, delimiters bảo vệ hoàn toàn khỏi injection",
+        "Không. Delimiters chỉ hỗ trợ model hiểu cấu trúc; security thật cần validation/authorization/guardrails ngoài model",
+        "Delimiters thay thế hoàn toàn cần allowlist",
+        "Delimiters chỉ dùng trong quá trình training"
+      ],
+      "answerIndex": 1,
+      "explanation": "Delimiters không phải security boundary cứng — chúng chỉ giúp model hiểu cấu trúc; security thật cần validation, authorization và guardrails ở server-side."
+    },
+    {
+      "id": "q4",
+      "prompt": "Least privilege trong tool calling nghĩa là gì?",
+      "options": [
+        "Agent không nên dùng tool nào trong hệ thống",
+        "Agent có toàn quyền với mọi tool để linh hoạt",
+        "Agent chỉ được cấp quyền tối thiểu cần thiết; hành động write/delete/irreversible cần allowlist và xác nhận",
+        "Agent chỉ dùng tool sau khi episode kết thúc"
+      ],
+      "answerIndex": 2,
+      "explanation": "Least privilege nghĩa agent chỉ được cấp quyền tối thiểu cần thiết; các hành động write/delete/irreversible cần allowlist và human confirmation."
+    },
+    {
+      "id": "q5",
+      "prompt": "Red-team framework nên chạy một lần hay regression liên tục?",
+      "options": [
+        "Chỉ chạy một lần trước khi launch sản phẩm",
+        "Không cần chạy red-team trong CI/CD",
+        "Chỉ chạy khi đã có incident xảy ra",
+        "Regression liên tục, đặc biệt trước mỗi model/prompt/policy/tool change"
+      ],
+      "answerIndex": 3,
+      "explanation": "Red-team nên trở thành regression suite liên tục trong CI/CD, đặc biệt chạy trước mỗi thay đổi model/prompt/policy/tool để phát hiện regression kịp thời."
+    }
+  ]
+}

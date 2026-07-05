@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Autoregressive language model học xác suất gì?",
+      "options": [
+        "P(previous tokens | next token)",
+        "P(masked token | context hai chiều)",
+        "P(cả sequence) không phụ thuộc thứ tự",
+        "P(next token | previous tokens), và xác suất chuỗi theo tích các xác suất có điều kiện"
+      ],
+      "answerIndex": 3,
+      "explanation": "Autoregressive LM học P(next token | previous tokens); xác suất chuỗi là tích các xác suất có điều kiện."
+    },
+    {
+      "id": "q2",
+      "prompt": "Masked LM khác next-token prediction thế nào?",
+      "options": [
+        "Masked LM che token và dự đoán bằng context hai chiều; next-token prediction dự đoán token kế tiếp từ quá khứ",
+        "Cả hai đều dự đoán token kế tiếp từ quá khứ",
+        "MLM dự đoán token kế tiếp từ quá khứ; next-token prediction che token và đoán bằng context hai chiều",
+        "Masked LM chỉ dùng cho generation, next-token cho understanding"
+      ],
+      "answerIndex": 0,
+      "explanation": "Masked LM (BERT) che token và dự đoán bằng context hai chiều; next-token prediction (GPT) dự đoán token kế tiếp từ quá khứ."
+    },
+    {
+      "id": "q3",
+      "prompt": "Perplexity liên hệ với cross-entropy loss ra sao?",
+      "options": [
+        "perplexity = log(cross_entropy_loss)",
+        "perplexity = exp(cross_entropy_loss)",
+        "perplexity = cross_entropy_loss / số token",
+        "perplexity và cross-entropy không liên quan"
+      ],
+      "answerIndex": 1,
+      "explanation": "Perplexity = `exp(cross_entropy_loss)`; PPL thấp hơn nghĩa LM bối rối ít hơn, dự đoán tốt hơn."
+    },
+    {
+      "id": "q4",
+      "prompt": "Temperature cao làm distribution thay đổi thế nào?",
+      "options": [
+        "Làm distribution sắc hơn, giảm randomness",
+        "Không ảnh hưởng distribution",
+        "Làm distribution phẳng hơn, tăng randomness/diversity",
+        "Chuyển distribution thành deterministic"
+      ],
+      "answerIndex": 2,
+      "explanation": "Temperature cao làm distribution phẳng hơn, tăng randomness và diversity; temperature thấp làm distribution sắc hơn."
+    },
+    {
+      "id": "q5",
+      "prompt": "Top-k khác top-p (nucleus sampling) thế nào?",
+      "options": [
+        "Top-k giữ tập token có tổng xác suất đạt ngưỡng; top-p giữ số token cố định",
+        "Cả hai đều giữ số token cố định",
+        "Top-k và top-p là cùng một thứ",
+        "Top-k giữ số token cố định; top-p giữ tập token có tổng xác suất đạt ngưỡng p"
+      ],
+      "answerIndex": 3,
+      "explanation": "Top-k giữ số token cố định (k); top-p giữ tập token có tổng xác suất đạt ngưỡng p (số token thay đổi)."
+    }
+  ]
+}

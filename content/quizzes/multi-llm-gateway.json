@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao multi-LLM gateway được coi là control plane?",
+      "options": [
+        "Vì nó chỉ forward request tới provider",
+        "Vì nó centralize/enforce AI policy: model, prompt, routing, budget, validation, logging",
+        "Vì nó chạy trên control plane Kubernetes",
+        "Vì nó không có state"
+      ],
+      "answerIndex": 1,
+      "explanation": "Gateway là control plane vì nó centralize và enforce AI policy — model, prompt, routing, budget, validation, logging — chứ không chỉ forward request."
+    },
+    {
+      "id": "q2",
+      "prompt": "Multi-LLM gateway khác thin proxy ở đâu?",
+      "options": [
+        "Thin proxy route, validate, cache; gateway chỉ forward",
+        "Hai loại giống hệt nhau",
+        "Thin proxy chỉ forward; gateway route, validate, cache, fallback, track cost, enforce tenant policy",
+        "Gateway không hỗ trợ fallback"
+      ],
+      "answerIndex": 2,
+      "explanation": "Thin proxy chỉ forward request; gateway làm nhiều hơn — route, validate, cache, fallback, track cost và enforce tenant policy."
+    },
+    {
+      "id": "q3",
+      "prompt": "Cost tracking trong gateway nên group theo những dimensions nào?",
+      "options": [
+        "Chỉ theo provider",
+        "Chỉ theo latency",
+        "Chỉ theo token count",
+        "Tenant, user, feature, provider, model, prompt version, route policy, cache/fallback"
+      ],
+      "answerIndex": 3,
+      "explanation": "Cost tracking phải group theo tenant, user, feature, provider, model, prompt version, route policy và cache/fallback để debug và charge back chính xác."
+    },
+    {
+      "id": "q4",
+      "prompt": "Semantic cache trong gateway cần những guardrail nào?",
+      "options": [
+        "Tenant isolation, similarity threshold, data/permission version, không cache high-risk personalized data",
+        "Không cần guardrail vì cache luôn an toàn",
+        "Chỉ TTL ngắn",
+        "Chỉ cache khi provider lỗi"
+      ],
+      "answerIndex": 0,
+      "explanation": "Semantic cache cần tenant isolation, similarity threshold, data/permission version, và không cache high-risk personalized data để tránh leak và stale result."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao gateway là target security nhạy cảm cần bảo vệ nghiêm ngặt?",
+      "options": [
+        "Gateway không chứa dữ liệu nhạy cảm",
+        "Nó giữ provider keys, prompts, logs, policies và có thể route sensitive data",
+        "Gateway không có audit log",
+        "Gateway chạy fully stateless nên không cần bảo vệ"
+      ],
+      "answerIndex": 1,
+      "explanation": "Gateway giữ provider keys, prompts, logs, policies và route sensitive data — nếu bị compromise, attacker truy cập toàn bộ AI policy và dữ liệu nhạy cảm."
+    }
+  ]
+}

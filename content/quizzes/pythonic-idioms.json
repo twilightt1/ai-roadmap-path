@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Generator expression khác list comprehension ở điểm gì theo bài?",
+      "options": [
+        "Generator tạo toàn bộ list trong memory ngay lập tức",
+        "Generator chạy nhanh hơn list comprehension",
+        "Generator lazy, chỉ tạo giá trị khi duyệt — tiết kiệm memory, chỉ duyệt được 1 lần",
+        "Generator chỉ dùng được cho dữ liệu số"
+      ],
+      "answerIndex": 2,
+      "explanation": "List comprehension tạo toàn bộ list trong memory (~8MB cho 1M số). Generator expression (x for x in ...) lazy (~120 bytes), chỉ tạo giá trị khi duyệt — nhưng chỉ duyệt được một lần."
+    },
+    {
+      "id": "q2",
+      "prompt": "any() và all() có hành vi short-circuit thế nào theo bài?",
+      "options": [
+        "Cả hai đều duyệt hết mọi phần tử mới trả kết quả",
+        "Không có short-circuit, luôn duyệt hết",
+        "any dừng khi gặp False đầu; all dừng khi gặp True đầu",
+        "any dừng khi gặp True đầu; all dừng khi gặp False đầu"
+      ],
+      "answerIndex": 3,
+      "explanation": "any trả True nếu ít nhất 1 phần tử truthy — dừng khi gặp True đầu. all trả True nếu tất cả truthy — dừng khi gặp False đầu. Cả hai short-circuit để tiết kiệm."
+    },
+    {
+      "id": "q3",
+      "prompt": "Theo bài, so sánh comprehension và map/filter trong Python hiện đại thế nào?",
+      "options": [
+        "Comprehension thường dễ đọc hơn map/filter trong Python hiện đại",
+        "map/filter luôn dễ đọc hơn comprehension",
+        "Cả hai giống hệt nhau, không khác biệt",
+        "map/filter không dùng được nữa trong Python 3"
+      ],
+      "answerIndex": 0,
+      "explanation": "map/filter hợp lý, nhưng trong Python hiện đại list comprehension thường dễ đọc hơn: [x*2 for x in nums] rõ hơn map(lambda x: x*2, nums). reduce vẫn dùng cho gộp tích lũy."
+    },
+    {
+      "id": "q4",
+      "prompt": "defaultdict(list) hữu ích trong RAG theo bài vì sao?",
+      "options": [
+        "Tăng tốc độ tìm kiếm vector",
+        "Tự tạo value mặc định (list rỗng) — không cần if key not in dict mỗi lần",
+        "Lưu được nhiều kiểu dữ liệu hơn dict thường",
+        "Tự động sắp xếp value theo thứ tự"
+      ],
+      "answerIndex": 1,
+      "explanation": "Khi xây index 'từ -> danh sách chunk chứa từ', defaultdict(list) tuyệt vời: không cần if key not in dict: dict[key] = [] mỗi lần. Code gọn và ít bug."
+    },
+    {
+      "id": "q5",
+      "prompt": "deque có ưu điểm gì so với list theo bài?",
+      "options": [
+        "Lưu được nhiều phần tử hơn list",
+        "Tự động sắp xếp phần tử",
+        "Hàng đợi 2 đầu, O(1) cho popleft (list thì O(n))",
+        "Không cần import từ collections"
+      ],
+      "answerIndex": 2,
+      "explanation": "deque là hàng đợi 2 đầu, O(1) cho appendleft/popleft — list thì popleft là O(n) phải dịch toàn bộ phần tử. Hữu ích cho queue/stack hiệu quả."
+    }
+  ]
+}

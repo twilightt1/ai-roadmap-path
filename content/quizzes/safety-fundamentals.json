@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Risk priority có thể ước lượng bằng ba yếu tố nào?",
+      "options": [
+        "Latency, throughput và error rate",
+        "Cost, time và quality",
+        "Precision, recall và F1",
+        "Severity, likelihood và exposure"
+      ],
+      "answerIndex": 3,
+      "explanation": "Risk priority thường ước lượng bằng severity (mức độ nghiêm trọng), likelihood (xác suất xảy ra) và exposure (mức độ tiếp xúc/phạm vi ảnh hưởng)."
+    },
+    {
+      "id": "q2",
+      "prompt": "Reward hacking là gì?",
+      "options": [
+        "Agent/model đạt điểm reward cao bằng cách khai thác proxy metric thay vì đạt mục tiêu thật",
+        "Khi reward model bị crash trong quá trình training",
+        "Khi reward trả về quá thấp cho mọi action",
+        "Khi agent từ chối nhận reward từ environment"
+      ],
+      "answerIndex": 0,
+      "explanation": "Reward hacking là khi agent/model đạt điểm reward cao bằng cách khai thác lỗ hổng của reward proxy thay vì đạt được mục tiêu thật — reward design là rủi ro production lớn nhất."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao hallucination không thể giải quyết chỉ bằng prompt \"đừng bịa\"?",
+      "options": [
+        "Vì LLM không hiểu tiếng Việt nên prompt vô dụng",
+        "Vì LLM tối ưu xác suất token, thiếu grounding và có thể sinh câu fluent nhưng sai; cần evidence, abstention, verifier và eval",
+        "Vì prompt \"đừng bịa\" làm model chậm hơn rõ rệt",
+        "Vì hallucination chỉ xảy ra trong quá trình training"
+      ],
+      "answerIndex": 1,
+      "explanation": "LLM tối ưu xác suất token và thiếu grounding, có thể sinh câu fluent nhưng sai; cần evidence, abstention, verifier và evaluation chứ không chỉ prompt."
+    },
+    {
+      "id": "q4",
+      "prompt": "Dual-use nghĩa là gì?",
+      "options": [
+        "Một capability chỉ dùng được cho mục đích tốt",
+        "Model chạy đồng thời trên hai GPU",
+        "Một capability có thể dùng cho mục đích tốt lẫn xấu, ví dụ code generation giúp developer nhưng cũng có thể hỗ trợ malware",
+        "Một model phục vụ đồng thời hai tenant"
+      ],
+      "answerIndex": 2,
+      "explanation": "Dual-use là một capability có thể dùng cho mục đích tốt lẫn xấu, ví dụ code generation giúp developer nhưng cũng có thể hỗ trợ viết malware."
+    },
+    {
+      "id": "q5",
+      "prompt": "Safety eval nên là dashboard hay release gate?",
+      "options": [
+        "Chỉ là dashboard để theo dõi xu hướng",
+        "Chỉ chạy safety eval khi đã có incident",
+        "Không cần safety eval trong production",
+        "Với production AI, safety eval nên là release gate có owner và threshold rõ ràng"
+      ],
+      "answerIndex": 3,
+      "explanation": "Với production AI, safety eval nên là release gate có owner và threshold rõ ràng — chặn release khi regression, không chỉ dashboard theo dõi."
+    }
+  ]
+}

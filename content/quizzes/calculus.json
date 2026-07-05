@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Gradient ∇f chỉ hướng nào và để giảm loss ta đi theo hướng nào theo bài?",
+      "options": [
+        "Gradient chỉ hướng giảm nhanh nhất; ta đi theo gradient để giảm loss",
+        "Gradient chỉ hướng tăng nhanh nhất; ta đi ngược gradient để giảm loss",
+        "Gradient chỉ hướng vuông góc với đường dốc; ta đi theo gradient",
+        "Gradient luôn bằng 0 tại mọi điểm; ta đi ngẫu nhiên"
+      ],
+      "answerIndex": 1,
+      "explanation": "Gradient chỉ hướng tăng nhanh nhất. Để giảm loss, ta đi ngược gradient: θ = θ - α·∇L. Đây chính là gradient descent."
+    },
+    {
+      "id": "q2",
+      "prompt": "Theo bài, tại sao saddle points là ác mộng của training?",
+      "options": [
+        "Tại đó loss luôn rất cao",
+        "Tại đó gradient quá lớn gây exploding",
+        "Tại đó gradient = 0 nhưng không phải cực tiểu, optimizer bị kẹt — và saddle phổ biến hơn local min ở nhiều chiều",
+        "Tại đó đạo hàm cấp 2 luôn dương"
+      ],
+      "answerIndex": 2,
+      "explanation": "Trong không gian nhiều chiều (weight của mạng lớn), saddle point phổ biến hơn local minimum. Tại đó gradient = 0 nhưng không phải cực tiểu → optimizer bị kẹt. Cần momentum/Adam để thoát."
+    },
+    {
+      "id": "q3",
+      "prompt": "Công thức chain rule cho backpropagation trong mạng 1 tầng theo bài là gì?",
+      "options": [
+        "∂L/∂w = (∂L/∂w) · (∂w/∂x)",
+        "∂L/∂w = (∂z/∂w) · (∂L/∂z) · (∂L/∂a)",
+        "∂L/∂w = ∂L/∂x · ∂x/∂z",
+        "∂L/∂w = (∂L/∂a) · (∂a/∂z) · (∂z/∂w), tính từ loss ngược về input"
+      ],
+      "answerIndex": 3,
+      "explanation": "Cho input x → linear z = w·x + b → activation a = σ(z) → loss L. Tính ∂L/∂w = (∂L/∂a)·(∂a/∂z)·(∂z/∂w) từ phải sang trái (từ loss ngược về input) — đó là backpropagation."
+    },
+    {
+      "id": "q4",
+      "prompt": "Đạo hàm của sigmoid σ(x) có dạng nào và vấn đề gì khi |x| lớn theo bài?",
+      "options": [
+        "σ'(x) = σ(x)·(1-σ(x)); khi |x| lớn thì σ'(x) ≈ 0 gây vanishing gradient",
+        "σ'(x) = 1 khi |x| lớn; không có vanishing",
+        "σ'(x) = x·σ(x); khi |x| lớn gradient exploding",
+        "σ'(x) = e^x; khi |x| lớn gradient quá lớn"
+      ],
+      "answerIndex": 0,
+      "explanation": "σ'(x) = σ(x)·(1-σ(x)) — rất tiện vì dùng lại output. Nhưng khi |x| lớn, σ(x) gần 0 hoặc 1 → σ'(x) ≈ 0 → vanishing gradient. Đây là lý do ReLU phổ biến hơn."
+    },
+    {
+      "id": "q5",
+      "prompt": "Theo bài, tại sao luôn dùng cặp softmax + cross-entropy cho classification?",
+      "options": [
+        "Vì softmax tính nhanh hơn khi ghép cross-entropy",
+        "Vì đạo hàm gọn thành predicted - target, gradient ổn định và không vanishing",
+        "Vì softmax + cross-entropy giảm memory hơn tách rời",
+        "Vì chỉ cặp này tránh được exploding gradient"
+      ],
+      "answerIndex": 1,
+      "explanation": "Đạo hàm softmax rườm rà, nhưng khi ghép với cross-entropy, kết quả cực gọn: ∂L/∂zᵢ = softmax(zᵢ) - yᵢ (predicted - target). Gradient ổn định, dễ tính, không vanishing."
+    }
+  ]
+}

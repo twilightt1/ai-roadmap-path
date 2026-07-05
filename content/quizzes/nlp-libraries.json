@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "NLTK phù hợp nhất cho mục đích gì?",
+      "options": [
+        "Semantic search embedding cho RAG",
+        "Production NER tốc độ cao hàng triệu request",
+        "Fine-tune transformer model lớn",
+        "Học/prototype classic NLP như tokenization, stopwords, stemming, corpora"
+      ],
+      "answerIndex": 3,
+      "explanation": "NLTK tốt để học/prototype classic NLP (tokenization, stopwords, stemming, corpora) — không tối ưu production tốc độ cao."
+    },
+    {
+      "id": "q2",
+      "prompt": "spaCy mạnh ở những task production nào?",
+      "options": [
+        "Sentence segmentation, NER, POS, dependency parsing, rule-based matching tốc độ cao",
+        "Fine-tune LLM lớn",
+        "Token budget counting cho OpenAI",
+        "Train word embedding từ scratch"
+      ],
+      "answerIndex": 0,
+      "explanation": "spaCy mạnh cho production: sentence segmentation, NER, POS, dependency parsing, rule-based matching với tốc độ cao."
+    },
+    {
+      "id": "q3",
+      "prompt": "sentence-transformers khác Hugging Face Transformers chung ở điểm nào?",
+      "options": [
+        "Thay thế hoàn toàn Transformers cho mọi task",
+        "Tập trung vào sentence/chunk embeddings và similarity/retrieval workflows",
+        "Chỉ dùng cho tokenization",
+        "Chỉ hỗ trợ text generation"
+      ],
+      "answerIndex": 1,
+      "explanation": "sentence-transformers tập trung vào sentence/chunk embeddings và similarity/retrieval workflows — tối ưu cho semantic search/RAG."
+    },
+    {
+      "id": "q4",
+      "prompt": "tiktoken dùng để làm gì và giới hạn là gì?",
+      "options": [
+        "Train embedding model cho mọi provider",
+        "Thay thế tokenizer của mọi model",
+        "Count tokens/cost/context cho OpenAI-style tokenizers; không chính xác tuyệt đối cho provider/model khác",
+        "Đếm số từ chính xác cho mọi ngôn ngữ"
+      ],
+      "answerIndex": 2,
+      "explanation": "tiktoken count tokens/cost/context cho OpenAI-style tokenizers; không chính xác tuyệt đối cho provider/model khác."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao không nên load model trong mỗi request?",
+      "options": [
+        "Model tự động cache nên không vấn đề",
+        "Load mỗi request giúp tăng accuracy",
+        "Load mỗi request tiết kiệm memory",
+        "Model loading rất chậm và tốn memory; phải load một lần và reuse"
+      ],
+      "answerIndex": 3,
+      "explanation": "Model loading rất chậm và tốn memory; production phải load một lần và reuse qua các request."
+    }
+  ]
+}

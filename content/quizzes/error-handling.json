@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Khối `else` trong cấu trúc try/except chạy khi nào theo bài?",
+      "options": [
+        "Khi có exception được bắt",
+        "Luôn chạy bất kể có exception hay không",
+        "Khi try thành công (không có exception)",
+        "Khi finally không chạy"
+      ],
+      "answerIndex": 2,
+      "explanation": "else chạy khi try thành công (không có exception). finally luôn chạy kể cả khi có exception — dùng để dọn dẹp (đóng file, release GPU)."
+    },
+    {
+      "id": "q2",
+      "prompt": "Tại sao `except Exception:` trần được bài coi là antipattern?",
+      "options": [
+        "Nó làm code chạy chậm hơn đáng kể",
+        "Nó chỉ bắt được TypeError",
+        "Nó không bắt được exception nào cả",
+        "Nó nuốt mọi lỗi kể cả bug logic (TypeError, KeyError), che giấu bug thay vì sửa"
+      ],
+      "answerIndex": 3,
+      "explanation": "except Exception: nuốt mọi lỗi kể cả bug logic do code sai. Nguyên tắc: bắt cụ thể exception bạn biết cách xử lý. Nếu phải catch-all, luôn raise lại để không nuốt."
+    },
+    {
+      "id": "q3",
+      "prompt": "Mục đích của `raise RuntimeError(...) from e` là gì?",
+      "options": [
+        "Chuỗi exception, giữ traceback gốc giúp debug dễ hơn",
+        "Ẩn exception gốc để log gọn hơn",
+        "Bỏ qua exception gốc hoàn toàn",
+        "Tạo exception mới không liên quan tới e"
+      ],
+      "answerIndex": 0,
+      "explanation": "from e chuỗi exception — giữ traceback gốc. Khi log/print, bạn thấy cả nguyên nhân gốc và exception mới, giúp debug dễ hơn."
+    },
+    {
+      "id": "q4",
+      "prompt": "Khi log exception, thêm exc_info=True để làm gì?",
+      "options": [
+        "Ẩn traceback cho log gọn",
+        "Đính kèm toàn bộ traceback để biết lỗi ở dòng nào",
+        "Tăng level log lên ERROR tự động",
+        "Ghi log ra file thay vì console"
+      ],
+      "answerIndex": 1,
+      "explanation": "exc_info=True (hoặc logger.exception(...)) đính kèm toàn bộ traceback. Không có nó bạn chỉ biết 'có lỗi' mà không biết ở dòng nào."
+    },
+    {
+      "id": "q5",
+      "prompt": "Theo bài, đọc traceback thế nào là đúng?",
+      "options": [
+        "Từ trên xuống dưới theo luồng chạy",
+        "Chỉ nhìn dòng đầu tiên",
+        "Từ dưới lên: dòng cuối là loại lỗi, các dòng trên là call stack",
+        "Chỉ nhìn dòng cuối, bỏ qua call stack"
+      ],
+      "answerIndex": 2,
+      "explanation": "Đọc từ dưới lên: dòng cuối là loại lỗi (vd TypeError), các dòng trên là call stack từ ngoài vào trong. Trong AI traceback thường sâu, tập trung vào dòng code của bạn xuất hiện trong stack."
+    }
+  ]
+}

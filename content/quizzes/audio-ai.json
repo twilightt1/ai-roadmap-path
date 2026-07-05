@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "VAD có vai trò gì trong voice assistant?",
+      "options": [
+        "VAD chuyển văn bản thành giọng nói",
+        "VAD dịch giọng nói từ tiếng Anh sang tiếng Việt",
+        "VAD phát hiện đoạn có giọng nói và ranh giới lượt nói, giúp giảm silence, giảm STT cost và cải thiện turn-taking",
+        "VAD tăng độ lớn của âm thanh để nghe rõ hơn"
+      ],
+      "answerIndex": 2,
+      "explanation": "VAD (Voice Activity Detection) phát hiện đoạn có giọng nói và ranh giới lượt nói, giúp giảm silence, giảm STT cost và cải thiện turn-taking."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao batch file upload không phù hợp cho real-time conversation?",
+      "options": [
+        "Vì batch upload không cần server nên rẻ hơn",
+        "Vì file upload không hỗ trợ định dạng audio",
+        "Vì batch upload làm tăng chất lượng giọng nói",
+        "Vì phải đợi ghi âm xong, STT xong, LLM xong, TTS xong rồi mới phát, tạo latency nhiều giây"
+      ],
+      "answerIndex": 3,
+      "explanation": "Batch file upload phải đợi ghi âm xong, STT xong, LLM xong, TTS xong rồi mới phát, tạo latency nhiều giây không chấp nhận được cho hội thoại thực tế."
+    },
+    {
+      "id": "q3",
+      "prompt": "Barge-in là gì?",
+      "options": [
+        "Là khả năng user ngắt lời assistant đang nói, khiến hệ thống dừng playback/generation hiện tại và xử lý lượt nói mới",
+        "Khi assistant nói to hơn để lấn át người dùng",
+        "Khi hệ thống tự động tắt microphone để tiết kiệm cost",
+        "Là lỗi khi hai người dùng nói cùng lúc trên cùng một kênh"
+      ],
+      "answerIndex": 0,
+      "explanation": "Barge-in là khả năng user ngắt lời assistant đang nói, khiến hệ thống dừng playback/generation hiện tại và xử lý lượt nói mới."
+    },
+    {
+      "id": "q4",
+      "prompt": "Voice cloning dựa trên loại representation nào?",
+      "options": [
+        "Token embedding của văn bản người dùng hay nói",
+        "Speaker embedding hoặc voice embedding nén đặc trưng âm sắc/ngữ điệu của người nói",
+        "Spectrogram của nhạc nền",
+        "Positional encoding của transformer"
+      ],
+      "answerIndex": 1,
+      "explanation": "Voice cloning thường dựa trên speaker embedding hoặc voice embedding nén đặc trưng âm sắc/ngữ điệu của người nói."
+    },
+    {
+      "id": "q5",
+      "prompt": "Những cost bucket chính của voice AI là gì?",
+      "options": [
+        "Chỉ có STT minutes và TTS characters",
+        "Chỉ có GPU cost cho training",
+        "STT minutes, LLM tokens, TTS characters/audio seconds, streaming infrastructure, storage/retention và human review/safety operations",
+        "Chỉ có chi phí bandwidth mạng"
+      ],
+      "answerIndex": 2,
+      "explanation": "Các cost bucket chính gồm STT minutes, LLM tokens, TTS characters/audio seconds, streaming infrastructure, storage/retention và human review/safety operations."
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao LoRA tiết kiệm tham số hơn Full FT?",
+      "options": [
+        "Vì LoRA freeze ma trận gốc và chỉ train hai ma trận low-rank nhỏ `A` và `B` để biểu diễn delta",
+        "Vì LoRA xóa bớt các layer của model gốc",
+        "Vì LoRA dùng quantization cho toàn bộ weights khi train",
+        "Vì LoRA không cần gradient nên không lưu optimizer states"
+      ],
+      "answerIndex": 0,
+      "explanation": "LoRA freeze ma trận gốc và chỉ train hai ma trận low-rank nhỏ A và B để biểu diễn delta, nên số tham số trainable ít hơn Full FT rất nhiều."
+    },
+    {
+      "id": "q2",
+      "prompt": "QLoRA dùng quantization để tiết kiệm phần nào của memory?",
+      "options": [
+        "Quantize gradients của adapter xuống 4-bit",
+        "Quantize base model weights xuống 4-bit, trong khi adapter vẫn là phần trainable nhỏ",
+        "Quantize optimizer states xuống 4-bit",
+        "Quantize activations của layer cuối cùng xuống 4-bit"
+      ],
+      "answerIndex": 1,
+      "explanation": "QLoRA quantize base model weights xuống 4-bit để giảm VRAM, trong khi adapter (phần trainable) vẫn giữ full precision."
+    },
+    {
+      "id": "q3",
+      "prompt": "Adapter có độc lập với base model không?",
+      "options": [
+        "Có, adapter có thể dùng với bất kỳ base model nào cùng số layer",
+        "Có, adapter tự chứa toàn bộ weights của model",
+        "Không. Adapter là delta phụ thuộc base model, tokenizer và template cụ thể",
+        "Không, nhưng chỉ phụ thuộc vào tokenizer thôi"
+      ],
+      "answerIndex": 2,
+      "explanation": "Adapter không độc lập: nó là delta phụ thuộc base model, tokenizer và template cụ thể, nên phải đi kèm manifest đầy đủ."
+    },
+    {
+      "id": "q4",
+      "prompt": "Khi nào nên tăng LoRA rank?",
+      "options": [
+        "Khi model bị overfit trên training set",
+        "Khi loss giảm quá nhanh và muốn chậm lại",
+        "Khi muốn giảm VRAM khi training",
+        "Khi underfit: train/eval task không cải thiện dù data, LR và target modules đã hợp lý"
+      ],
+      "answerIndex": 3,
+      "explanation": "Tăng LoRA rank khi model underfit — train/eval task không cải thiện dù data, LR và target modules đã hợp lý — để tăng capacity của adapter."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao merge adapter xong vẫn cần eval lại?",
+      "options": [
+        "Vì merge có thể thay đổi numerical behavior, deployment artifact khác runtime adapter và cần kiểm tra regression/latency",
+        "Vì merge tự động tăng learning rate và train tiếp",
+        "Vì merge làm mất toàn bộ adapter weights",
+        "Vì merge bắt buộc phải chạy trên GPU khác"
+      ],
+      "answerIndex": 0,
+      "explanation": "Merge có thể thay đổi numerical behavior, deployment artifact khác runtime adapter, nên cần eval lại để kiểm tra regression và latency."
+    }
+  ]
+}

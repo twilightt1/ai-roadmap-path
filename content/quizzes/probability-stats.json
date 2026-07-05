@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Bayes' Theorem cho phép làm gì và các thành phần có ý nghĩa gì theo bài?",
+      "options": [
+        "Lật P(A|B) thành P(B|A); prior P(A) là niềm tin trước, likelihood P(B|A) là xác suất thấy B nếu A, posterior P(A|B) là niềm tin sau",
+        "Tính P(A,B) từ P(A) và P(B); prior là xác suất chung",
+        "Tính P(A) từ P(B); chỉ dùng cho sự kiện độc lập",
+        "Nhân P(A) với P(B); không có prior hay posterior"
+      ],
+      "answerIndex": 0,
+      "explanation": "Bayes: P(A|B) = P(B|A)·P(A)/P(B) — lật P(A|B) thành P(B|A). Prior là niềm tin trước, likelihood là xác suất thấy B nếu A, posterior là niềm tin sau khi biết B, evidence là tổng hợp."
+    },
+    {
+      "id": "q2",
+      "prompt": "Trong ví dụ xét nghiệm bệnh, test dương nhưng chỉ 16.7% thật sự mắc bệnh — đây là hiện tượng gì theo bài?",
+      "options": [
+        "Lỗi tính toán trong công thức Bayes",
+        "Base rate fallacy — bệnh hiếm (1%), số người khỏe bị dương tính giả (5%×99%) nhiều hơn số người bệnh dương tính (99%×1%)",
+        "Test không nhạy nên kết quả sai",
+        "Prior được chọn quá lớn"
+      ],
+      "answerIndex": 1,
+      "explanation": "Bệnh hiếm (1%): số người khỏe bị dương tính giả (5%×99%) nhiều hơn số người bệnh dương tính (99%×1%). Khi prior rất nhỏ, posterior cũng thấp dù likelihood cao. Đây là base rate fallacy — trực giác thường sai với sự kiện hiếm."
+    },
+    {
+      "id": "q3",
+      "prompt": "Covariance và correlation khác nhau thế nào theo bài?",
+      "options": [
+        "Giống nhau, chỉ khác tên",
+        "Correlation đo cách thay đổi cùng nhau; covariance luôn từ -1 đến 1",
+        "Covariance đo cách X, Y thay đổi cùng nhau; correlation = Cov(X,Y)/(SD(X)·SD(Y)) — chuẩn hóa, từ -1 đến 1",
+        "Cả hai đều không dùng trong AI"
+      ],
+      "answerIndex": 2,
+      "explanation": "Covariance Cov(X,Y) = E[(X-E[X])(Y-E[Y])] đo cách X, Y thay đổi cùng nhau. Correlation = Cov(X,Y)/(SD(X)·SD(Y)) — chuẩn hóa về [-1,1]. PCA dùng ma trận covariance để tìm hướng phương sai lớn nhất."
+    },
+    {
+      "id": "q4",
+      "prompt": "MLE và MAP khác nhau thế nào và liên quan tới regularization ra sao theo bài?",
+      "options": [
+        "MLE = MAP, không khác biệt",
+        "MAP chỉ dùng khi data nhiều, MLE khi data ít",
+        "MLE thêm regularization, MAP không",
+        "MLE tối đa P(data|θ); MAP thêm prior P(θ) — MAP = MLE + regularization (L2 từ Gaussian prior, L1 từ Laplace prior)"
+      ],
+      "answerIndex": 3,
+      "explanation": "MLE: θ_MLE = argmax P(data|θ). MAP: θ_MAP = argmax P(data|θ)·P(θ) — thêm prior. MAP = MLE + regularization: prior Gaussian ≡ L2 (weight decay), prior Laplace ≡ L1. Khi data nhiều, prior không quan trọng, MLE = MAP."
+    },
+    {
+      "id": "q5",
+      "prompt": "Multinomial liên quan tới language modeling thế nào theo bài?",
+      "options": [
+        "Mỗi token trong LLM là phân phối multinomial trên vocab; LLM output logits → softmax → probability → sample token",
+        "Multinomial chỉ dùng cho phân loại binary",
+        "Multinomial chỉ dùng để khởi tạo weight",
+        "Multinomial không liên quan tới LLM"
+      ],
+      "answerIndex": 0,
+      "explanation": "Mỗi token trong LLM là một phân phối multinomial trên vocab. LLM output logits, softmax → probability, sample token. Temperature (chia logit cho T), top-k, top-p điều khiển phân phối khi sampling."
+    }
+  ]
+}

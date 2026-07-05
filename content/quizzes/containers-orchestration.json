@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Docker giải quyết vấn đề gì trong AI deployment?",
+      "options": [
+        "Tự động tối ưu weights model để chạy nhanh hơn",
+        "Đóng gói code, dependencies và runtime thành image bất biến, giảm lỗi môi trường",
+        "Thay thế hoàn toàn Kubernetes trong orchestration",
+        "Quản lý trực tiếp phân bổ VRAM giữa các pod"
+      ],
+      "answerIndex": 1,
+      "explanation": "Docker đóng gói code, dependencies và runtime thành image bất biến, giảm lỗi môi trường khi deploy AI service."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao Kubernetes cần NVIDIA device plugin khi chạy AI workload?",
+      "options": [
+        "Để thay thế CUDA driver bên trong container",
+        "Để tự động nén model trước khi load lên GPU",
+        "Để container có thể request và sử dụng GPU vật lý qua resource `nvidia.com/gpu`",
+        "Để Kubernetes tự chia VRAM an toàn giữa các pod"
+      ],
+      "answerIndex": 2,
+      "explanation": "NVIDIA device plugin cho phép container request và sử dụng GPU vật lý qua resource `nvidia.com/gpu`."
+    },
+    {
+      "id": "q3",
+      "prompt": "`readinessProbe` khác gì `livenessProbe` trong Kubernetes?",
+      "options": [
+        "Readiness cho biết pod còn sống hay cần restart; liveness cho biết sẵn sàng nhận traffic",
+        "Cả hai đều có chức năng hoàn toàn giống nhau",
+        "Readiness thay thế liveness khi dùng GPU",
+        "Readiness cho biết pod sẵn sàng nhận traffic; liveness cho biết pod còn sống hay cần restart"
+      ],
+      "answerIndex": 3,
+      "explanation": "Readiness cho biết pod sẵn sàng nhận traffic; liveness cho biết pod còn sống hay cần restart — hai vai trò riêng biệt."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao không nên tải model từ Hugging Face mỗi lần container start?",
+      "options": [
+        "Vì làm startup chậm, phụ thuộc Internet, tốn băng thông và gây downtime khi restart/scale",
+        "Vì Hugging Face không hỗ trợ tải model trong container",
+        "Vì model tải về luôn sai version",
+        "Vì Docker image không thể chứa model bên trong"
+      ],
+      "answerIndex": 0,
+      "explanation": "Tải model mỗi lần start làm startup chậm, phụ thuộc Internet, tốn băng thông và gây downtime khi restart hoặc scale — nên cache model."
+    },
+    {
+      "id": "q5",
+      "prompt": "Khi nào nên dùng MIG hoặc time-slicing cho GPU?",
+      "options": [
+        "Khi model lớn cần toàn bộ VRAM của nhiều GPU",
+        "Khi model nhỏ hoặc workload nhẹ không cần nguyên GPU, và chấp nhận quản lý isolation phức tạp hơn",
+        "Khi cần train model phân tán trên cụm multi-GPU",
+        "Khi muốn tối ưu all-reduce gradient sync giữa các GPU"
+      ],
+      "answerIndex": 1,
+      "explanation": "MIG hoặc time-slicing dùng khi model nhỏ hoặc workload nhẹ không cần nguyên GPU, đổi lại phải quản lý isolation phức tạp hơn."
+    }
+  ]
+}

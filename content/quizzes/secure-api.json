@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Threat model cho AI API gồm những thành phần nào?",
+      "options": [
+        "Chỉ danh sách API endpoint",
+        "Assets, actors, trust boundaries, attack surfaces",
+        "Chỉ firewall rules",
+        "Chỉ model version"
+      ],
+      "answerIndex": 1,
+      "explanation": "Threat model đầy đủ gồm assets (tài sản cần bảo vệ), actors (đối tượng), trust boundaries (ranh giới tin cậy) và attack surfaces (bề mặt tấn công)."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao API key không bao giờ được expose trong frontend?",
+      "options": [
+        "Frontend không thể gọi API",
+        "Frontend không hỗ trợ HTTPS",
+        "Key bị lộ giúp attacker dùng key tạo bill và không enforce per-user quota",
+        "Key chỉ dùng cho backend training"
+      ],
+      "answerIndex": 2,
+      "explanation": "Khi key lộ trong frontend, attacker có thể dùng key tạo bill tự do và không thể enforce per-user quota — security boundary phải nằm trước model."
+    },
+    {
+      "id": "q3",
+      "prompt": "Authentication khác authorization thế nào?",
+      "options": [
+        "Hai khái niệm giống hệt nhau",
+        "Authorization luôn chạy trước authentication",
+        "Authentication kiểm tra quyền; Authorization kiểm tra danh tính",
+        "Authentication hỏi 'who are you?'; Authorization hỏi 'what can you do?'"
+      ],
+      "answerIndex": 3,
+      "explanation": "Authentication xác định danh tính ('who are you?'), còn authorization quyết định hành động được phép ('what can you do?') — hai lớp riêng biệt."
+    },
+    {
+      "id": "q4",
+      "prompt": "Giới hạn của regex masking khi redact PII là gì?",
+      "options": [
+        "Regex masking không hoàn hảo; cần NER-based và LLM-based redaction",
+        "Regex luôn hoàn hảo cho mọi PII",
+        "Regex chỉ hoạt động với số",
+        "Regex không tốn compute"
+      ],
+      "answerIndex": 0,
+      "explanation": "Regex masking không bắt được mọi dạng PII; cần bổ sung NER-based redaction, LLM-based redaction và human review cho độ chính xác cao hơn."
+    },
+    {
+      "id": "q5",
+      "prompt": "Một incident response plan đầy đủ gồm những giai đoạn nào?",
+      "options": [
+        "Chỉ detect và ignore",
+        "Detect, respond, recover, post-mortem",
+        "Chỉ recover",
+        "Detect, deploy, train"
+      ],
+      "answerIndex": 1,
+      "explanation": "Incident response đầy đủ gồm detect (phát hiện), respond (phản ứng), recover (khôi phục) và post-mortem (rút kinh nghiệm) để ngăn lặp lại."
+    }
+  ]
+}

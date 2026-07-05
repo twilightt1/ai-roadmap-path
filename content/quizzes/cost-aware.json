@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao cost-aware architecture phải nằm ở gateway/policy layer?",
+      "options": [
+        "Vì gateway là nơi duy nhất có GPU",
+        "Vì cần estimate, budget check, cache, route và enforce limits trước khi gọi model đắt tiền",
+        "Vì cost chỉ quan trọng sau khi deploy",
+        "Vì policy layer không biết được model nào được gọi"
+      ],
+      "answerIndex": 1,
+      "explanation": "Cost-aware phải nằm ở gateway/policy layer vì cần estimate, budget check, cache, route và enforce limits trước khi gọi model đắt tiền."
+    },
+    {
+      "id": "q2",
+      "prompt": "Model routing có rủi ro gì?",
+      "options": [
+        "Router luôn chọn đúng model cho mọi task",
+        "Router làm tăng cost cho mọi request",
+        "Router có thể gửi task khó sang model yếu, làm quality giảm hoặc safety fail",
+        "Router không ảnh hưởng đến quality"
+      ],
+      "answerIndex": 2,
+      "explanation": "Router có thể gửi task khó sang model yếu, làm quality giảm hoặc safety fail — cần confidence, fallback và human escalation."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao output tokens thường cần giới hạn chặt hơn input tokens?",
+      "options": [
+        "Vì output tokens không tốn tiền",
+        "Vì giới hạn output làm tăng chất lượng câu trả lời",
+        "Vì input tokens luôn nguy hiểm hơn output",
+        "Vì output tokens thường đắt hơn input và model có thể verbose nếu không giới hạn"
+      ],
+      "answerIndex": 3,
+      "explanation": "Output tokens thường đắt hơn input và model có thể verbose nếu không giới hạn — nên max tokens là guardrail cost quan trọng."
+    },
+    {
+      "id": "q4",
+      "prompt": "Hard spend limit khác gì budget alert?",
+      "options": [
+        "Hard limit chặn request khi vượt ngân sách; alert chỉ thông báo sau/ngay khi tiến gần ngưỡng",
+        "Cả hai đều chỉ thông báo, không chặn",
+        "Cả hai đều chặn request khi vượt ngân sách",
+        "Budget alert luôn ưu tiên hơn hard limit"
+      ],
+      "answerIndex": 0,
+      "explanation": "Hard spend limit chặn request khi vượt ngân sách; budget alert chỉ thông báo sau hoặc ngay khi tiến gần ngưỡng — alert không tự chặn."
+    },
+    {
+      "id": "q5",
+      "prompt": "Cost per successful task hữu dụng hơn cost per request khi nào?",
+      "options": [
+        "Khi mọi request luôn thành công",
+        "Khi request có thể fail/retry hoặc feature tạo business outcome khác nhau; cost cần gắn với giá trị đạt được",
+        "Khi không quan tâm đến chi phí",
+        "Khi chỉ có một loại feature"
+      ],
+      "answerIndex": 1,
+      "explanation": "Khi request có thể fail/retry hoặc feature tạo business outcome khác nhau, cost cần gắn với giá trị đạt được — cost per successful task phản ánh đúng hơn."
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao training loss thấp không đủ để release model?",
+      "options": [
+        "Vì loss chỉ đo fit trên training objective; nó không đảm bảo task quality, safety, format adherence hay production latency",
+        "Vì loss thấp làm model chạy chậm hơn khi inference",
+        "Vì loss thấp luôn làm model overfit, không bao giờ deploy được",
+        "Vì loss thấp chỉ có ý nghĩa với model nhỏ, không dùng được cho LLM"
+      ],
+      "answerIndex": 0,
+      "explanation": "Loss chỉ đo mức fit trên training objective; nó không đảm bảo task quality, safety, format adherence, general capability hay production latency."
+    },
+    {
+      "id": "q2",
+      "prompt": "Product eval khác academic benchmark như thế nào?",
+      "options": [
+        "Academic benchmark đo workload thật; product eval đo năng lực chuẩn hóa",
+        "Academic benchmark đo năng lực chuẩn hóa; product eval đo workload thật, edge cases và success criteria của sản phẩm",
+        "Cả hai hoàn toàn giống nhau, chỉ khác tên gọi",
+        "Product eval chỉ dùng cho model nhỏ, academic benchmark chỉ dùng cho model lớn"
+      ],
+      "answerIndex": 1,
+      "explanation": "Academic benchmark đo năng lực chuẩn hóa trên dataset chung, còn product eval đo workload thật, edge cases và success criteria cụ thể của sản phẩm."
+    },
+    {
+      "id": "q3",
+      "prompt": "LLM-as-judge cần calibration gì?",
+      "options": [
+        "Chỉ cần chọn model lớn nhất làm judge là đủ",
+        "Tăng temperature của judge lên mức cao nhất để có đa dạng",
+        "Rubric rõ, gold set human-labeled, randomize A/B, blind comparison và disagreement review",
+        "Chỉ cần chạy judge một lần trên toàn test set"
+      ],
+      "answerIndex": 2,
+      "explanation": "LLM-as-judge cần rubric rõ, gold set human-labeled, randomize A/B, blind comparison và disagreement review để kết quả đáng tin."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao checkpoint cuối không luôn là checkpoint tốt nhất?",
+      "options": [
+        "Vì checkpoint cuối luôn có loss cao nhất",
+        "Vì checkpoint cuối luôn thiếu tokenizer",
+        "Vì checkpoint cuối không bao giờ lưu được optimizer states",
+        "Vì overfitting/regression có thể tăng ở các bước cuối dù task metric tiếp tục tăng nhẹ"
+      ],
+      "answerIndex": 3,
+      "explanation": "Overfitting hoặc regression có thể xuất hiện ở các bước cuối cùng dù task metric vẫn tăng nhẹ, nên checkpoint cuối chưa chắc đã tốt nhất."
+    },
+    {
+      "id": "q5",
+      "prompt": "Rollback policy nên được định nghĩa khi nào?",
+      "options": [
+        "Trước khi release/canary, tốt nhất trước cả khi train, để tránh chỉnh threshold theo kết quả mong muốn",
+        "Chỉ khi model bắt đầu regress metric",
+        "Sau khi incident lần đầu xảy ra trong production",
+        "Sau khi model đã được deploy toàn bộ user base"
+      ],
+      "answerIndex": 0,
+      "explanation": "Rollback policy nên được định nghĩa trước khi release/canary, tốt nhất trước cả khi train, để tránh chỉnh threshold theo kết quả mong muốn."
+    }
+  ]
+}

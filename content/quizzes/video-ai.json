@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Spatiotemporal patch chứa thông tin gì?",
+      "options": [
+        "Chỉ thông tin màu sắc trung bình của toàn bộ video",
+        "Chỉ thông tin thời gian, không có thông tin không gian",
+        "Toàn bộ transcript của video",
+        "Thông tin không gian của một vùng ảnh và thông tin thời gian về cách vùng đó thay đổi qua nhiều frame"
+      ],
+      "answerIndex": 3,
+      "explanation": "Spatiotemporal patch chứa thông tin không gian của một vùng ảnh và thông tin thời gian về cách vùng đó thay đổi qua nhiều frame."
+    },
+    {
+      "id": "q2",
+      "prompt": "Temporal consistency trong video generation là gì?",
+      "options": [
+        "Là khả năng giữ identity, object, motion, scene và logic liên tục giữa các frame thay vì drift hoặc artifact",
+        "Đảm bảo video có đúng số frame như yêu cầu",
+        "Đảm bảo mỗi frame có độ phân giải giống nhau",
+        "Đảm bảo tốc độ sinh frame không đổi theo thời gian"
+      ],
+      "answerIndex": 0,
+      "explanation": "Temporal consistency là khả năng giữ identity, object, motion, scene và logic liên tục giữa các frame, thay vì drift hoặc xuất hiện artifact."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao transcript quan trọng với video understanding?",
+      "options": [
+        "Vì transcript giúp tăng độ phân giải của keyframes",
+        "Vì nhiều video (meeting/lecture/news) chứa phần lớn thông tin trong lời nói; chỉ nhìn keyframes sẽ bỏ sót nội dung",
+        "Vì transcript giảm cost lưu trữ video",
+        "Vì transcript thay thế hoàn toàn việc nhìn keyframes"
+      ],
+      "answerIndex": 1,
+      "explanation": "Nhiều video, đặc biệt meeting/lecture/news, chứa phần lớn thông tin trong lời nói; chỉ nhìn keyframes sẽ bỏ sót nội dung, nên transcript rất quan trọng."
+    },
+    {
+      "id": "q4",
+      "prompt": "DiT khác U-Net diffusion ở hướng scaling như thế nào?",
+      "options": [
+        "DiT dùng convolution thay vì attention nên scale rẻ hơn",
+        "DiT chỉ chạy được trên CPU nên không scale được",
+        "DiT biến video/latent thành token patches và dùng Transformer attention, thường scale tốt hơn với data/compute lớn và quan hệ thời gian dài",
+        "DiT và U-Net có kiến trúc hoàn toàn giống nhau"
+      ],
+      "answerIndex": 2,
+      "explanation": "DiT biến video/latent thành token patches và dùng Transformer attention, thường scale tốt hơn với data/compute lớn và quan hệ thời gian dài so với U-Net."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao generated video cần provenance/watermark/audit metadata?",
+      "options": [
+        "Để tăng độ phân giải của video",
+        "Để giảm cost lưu trữ",
+        "Để video chạy nhanh hơn trên thiết bị di động",
+        "Vì synthetic video có thể bị dùng làm bằng chứng giả hoặc deepfake; provenance giúp disclosure, audit, moderation và incident response"
+      ],
+      "answerIndex": 3,
+      "explanation": "Synthetic video có thể bị dùng làm bằng chứng giả hoặc deepfake; provenance/watermark/audit metadata giúp disclosure, audit, moderation và incident response."
+    }
+  ]
+}

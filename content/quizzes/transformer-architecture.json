@@ -4,12 +4,12 @@
       "id": "q1",
       "prompt": "Self-attention giải quyết hạn chế nào của RNN?",
       "options": [
-        "RNN không học được dependency xa — self-attention xử lý tuần tự tốt hơn",
-        "RNN quá nặng — self-attention giảm số parameter",
         "Self-attention giảm xử lý tuần tự, học dependency xa tốt hơn và parallel tốt hơn",
+        "RNN quá nặng — self-attention giảm số parameter",
+        "RNN không học được dependency xa — self-attention xử lý tuần tự tốt hơn",
         "Self-attention không cần activation function"
       ],
-      "answerIndex": 2,
+      "answerIndex": 0,
       "explanation": "Self-attention giảm xử lý tuần tự (tokens tính song song), học dependency xa tốt hơn, và parallel tốt hơn RNN."
     },
     {
@@ -29,11 +29,11 @@
       "prompt": "Vì sao Transformer cần positional encoding hoặc RoPE?",
       "options": [
         "Để giảm số parameter",
-        "Vì self-attention không tự biết thứ tự token (permutation-invariant)",
         "Để tăng attention score",
+        "Vì self-attention không tự biết thứ tự token (permutation-invariant)",
         "Để tránh gradient exploding"
       ],
-      "answerIndex": 1,
+      "answerIndex": 2,
       "explanation": "Self-attention không có khái niệm thứ tự — positional encoding/RoPE thêm thông tin vị trí để model phân biệt thứ tự token."
     },
     {
@@ -41,23 +41,23 @@
       "prompt": "Causal mask trong decoder dùng để làm gì?",
       "options": [
         "Tăng attention score cho token đầu",
-        "Chặn token hiện tại nhìn token tương lai",
+        "Giảm độ sâu model",
         "Loại bỏ PAD token",
-        "Giảm độ sâu model"
+        "Chặn token hiện tại nhìn token tương lai"
       ],
-      "answerIndex": 1,
+      "answerIndex": 3,
       "explanation": "Causal mask chặn token hiện tại nhìn các token tương lai, đảm bảo sinh autoregressive hợp lý."
     },
     {
       "id": "q5",
       "prompt": "Chi phí của attention chuẩn theo độ dài chuỗi (seq_len) là gì?",
       "options": [
-        "O(seq_len)",
-        "O(seq_len · log seq_len)",
         "O(seq_len²)",
+        "O(seq_len · log seq_len)",
+        "O(seq_len)",
         "O(seq_len³)"
       ],
-      "answerIndex": 2,
+      "answerIndex": 0,
       "explanation": "Attention matrix có kích thước seq_len × seq_len → cost O(seq_len²). Đây là gốc của các phương pháp như Flash Attention, sparse attention."
     }
   ]

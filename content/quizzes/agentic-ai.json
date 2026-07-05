@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Bounded autonomy trong production agent nghĩa là gì?",
+      "options": [
+        "Cho agent maximum autonomy để hoàn thành task",
+        "Khóa agent không cho tự quyết",
+        "Cho agent đủ khả năng tiến triển task nhưng giới hạn actions/cost/permissions/time/data/failure",
+        "Để agent tự set giới hạn"
+      ],
+      "answerIndex": 2,
+      "explanation": "Production agent = bounded autonomy — đủ khả năng tiến triển task nhưng bị giới hạn về actions, cost, permissions, time, data và failure modes để giữ an toàn."
+    },
+    {
+      "id": "q2",
+      "prompt": "Error recovery nên được thiết kế như thế nào?",
+      "options": [
+        "Để model tự invent recovery không giới hạn",
+        "Không cần recovery policy",
+        "Luôn retry vô hạn",
+        "Policy-driven, code rõ, có budget riêng; không để model invent unlimited recovery"
+      ],
+      "answerIndex": 3,
+      "explanation": "Error recovery phải là policy-driven, code rõ với budget riêng — không để model tự invent unlimited recovery, gây cost explosion hoặc action không an toàn."
+    },
+    {
+      "id": "q3",
+      "prompt": "Khi nào agent nên escalate lên human?",
+      "options": [
+        "High-risk action, unclear intent, policy conflict, low confidence, conflicting evidence, repeated failure, budget exceeded, sensitive data",
+        "Chỉ khi agent hết token",
+        "Chỉ khi user yêu cầu",
+        "Không bao giờ cần escalate"
+      ],
+      "answerIndex": 0,
+      "explanation": "Agent nên escalate khi gặp high-risk action, unclear intent, policy conflict, low confidence, conflicting evidence, repeated failure, budget exceeded hoặc sensitive data — giữ human-in-the-loop."
+    },
+    {
+      "id": "q4",
+      "prompt": "Cost controls cho production agent gồm những gì?",
+      "options": [
+        "Chỉ max tokens",
+        "Max tokens/calls/time/parallel, per-tenant/agent budgets, alerts, kill switch",
+        "Chỉ alerts",
+        "Không cần cost controls"
+      ],
+      "answerIndex": 1,
+      "explanation": "Cost controls gồm max tokens/calls/time/parallel, per-tenant và per-agent budgets, alerts và kill switch — đây là feature, không optional, để ngăn cost explosion."
+    },
+    {
+      "id": "q5",
+      "prompt": "Agent evaluation production cần những levels nào?",
+      "options": [
+        "Chỉ unit test",
+        "Chỉ regression",
+        "Unit, scenario, regression, human, red-team",
+        "Chỉ human review"
+      ],
+      "answerIndex": 2,
+      "explanation": "Agent eval cần nhiều levels: unit (component), scenario (flow), regression (prompt/model change), human (judgment) và red-team (adversarial) — đủ để bắt failure đa dạng."
+    }
+  ]
+}
