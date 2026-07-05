@@ -49,12 +49,14 @@ export default function HomePage() {
 
               <div className="flex flex-wrap items-center gap-3 pt-2">
                 <Button
+                  nativeButton={false}
                   render={<Link href="/roadmap" />}
                   className="h-10 gap-2 rounded-lg bg-primary px-5 text-xs font-semibold text-primary-foreground shadow-sm transition-transform hover:scale-[1.02] active:scale-95"
                 >
                   Khám phá lộ trình <ArrowRight className="h-4 w-4" />
                 </Button>
                 <Button
+                  nativeButton={false}
                   variant="outline"
                   render={<Link href="/projects" />}
                   className="h-10 gap-2 rounded-lg border-border bg-foreground/5 px-5 text-xs font-semibold text-muted-foreground hover:bg-foreground/10"
@@ -222,6 +224,7 @@ export default function HomePage() {
             Mỗi phase đều có dự án thực hành từ dễ đến khó — học bằng cách xây dựng hệ thống thực tế.
           </p>
           <Button
+            nativeButton={false}
             render={<Link href="/roadmap" />}
             className="mx-auto mt-6 flex h-10 gap-2 rounded-lg bg-primary px-6 text-primary-foreground shadow-md transition-transform hover:scale-[1.02] active:scale-95"
           >

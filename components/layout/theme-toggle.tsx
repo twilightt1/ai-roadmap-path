@@ -16,7 +16,10 @@ export function ThemeToggle({ className }: { className?: string }) {
   const { resolvedTheme, setTheme } = useTheme();
   const mounted = useSyncExternalStore(emptySubscribe, getClientSnapshot, getServerSnapshot);
 
-  const isDark = resolvedTheme === "dark";
+  // Guard with `mounted` so isDark is stable (false) during SSR and the
+  // initial hydration render, matching the server. Flips to the real value
+  // after mount. Prevents the aria-label/aria-pressed hydration mismatch.
+  const isDark = mounted && resolvedTheme === "dark";
 
   return (
     <button
