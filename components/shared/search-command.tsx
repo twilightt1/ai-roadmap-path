@@ -11,7 +11,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { Map, Rocket, Award, Compass, BookOpen } from "lucide-react";
+import { Map, Rocket, Award, Compass, BookOpen, Search } from "lucide-react";
 
 export function SearchCommand() {
   const router = useRouter();
@@ -90,6 +90,14 @@ export function SearchCommand() {
         </CommandGroup>
 
         <CommandGroup heading="Trang">
+          <CommandItem
+            value="search tìm kiếm bài học content"
+            onSelect={() => onSelect("/search")}
+          >
+            <Search className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="ml-2">Tìm trong bài học</span>
+            <span className="ml-auto pl-2 text-[9px] text-muted-foreground/70">→</span>
+          </CommandItem>
           <CommandItem
             value="roadmap timeline lộ trình"
             onSelect={() => onSelect("/roadmap")}
