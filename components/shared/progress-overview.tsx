@@ -4,6 +4,7 @@ import { motion } from "motion/react";
 import { Trophy, BookOpen, Target, Flame, TrendingUp } from "lucide-react";
 import { useProgress } from "@/lib/progress";
 import { ProgressRing } from "./progress-ring";
+import { ProjectProgressSection } from "@/components/roadmap/project-progress-section";
 
 /**
  * Dashboard-style overview of the learner's progress.
@@ -132,6 +133,9 @@ export function ProgressOverview() {
           ))}
         </div>
       </div>
+
+      {/* Projects section */}
+      <ProjectProgressSection />
     </div>
   );
 }
