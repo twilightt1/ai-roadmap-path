@@ -252,3 +252,50 @@
 .prose-ai [data-line-numbers] .line {
   @apply before:mr-3 before:inline-block before:w-4 before:text-right before:text-muted-foreground/60 before:content-[attr(data-line)];
 }
+/* ------------------------------------------------------------------ */
+/* Pagefind Component UI theme integration                             */
+/* Maps Pagefind's --pf-* CSS variables to our oklch() design tokens   */
+/* so the default search UI matches the dark modern theme.            */
+/* Pagefind dark mode is keyed by [data-pf-theme="dark"]; since our   */
+/* tokens already shift with .dark on <html>, one :root block covers  */
+/* both themes.                                                        */
+/* ------------------------------------------------------------------ */
+:root {
+  --pf-text: var(--foreground);
+  --pf-text-secondary: var(--muted-foreground);
+  --pf-text-muted: var(--muted-foreground);
+  --pf-background: var(--card);
+  --pf-border: var(--border);
+  --pf-border-focus: var(--primary);
+  --pf-hover: var(--accent);
+  --pf-skeleton: var(--muted);
+  --pf-skeleton-shine: var(--accent);
+  --pf-mark: var(--primary);
+  --pf-scroll-shadow: color-mix(in oklch, var(--foreground) 8%, transparent);
+
+  --pf-outline-focus: var(--primary);
+  --pf-outline-width: 2px;
+  --pf-outline-offset: 2px;
+
+  --pf-font: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --pf-input-font-size: 0.9375rem;
+  --pf-input-height: 2.75rem;
+  --pf-summary-font-size: 0.75rem;
+  --pf-result-title-font-size: 0.875rem;
+  --pf-result-excerpt-font-size: 0.8125rem;
+
+  --pf-border-radius: var(--radius);
+  --pf-shadow-sm: 0 2px 8px color-mix(in oklch, var(--foreground) 6%, transparent);
+  --pf-shadow-md: 0 4px 12px color-mix(in oklch, var(--foreground) 10%, transparent);
+  --pf-shadow-lg: 0 16px 48px color-mix(in oklch, var(--foreground) 20%, transparent);
+}
+
+/* Give highlighted query terms a tinted background (Pagefind default is
+   transparent) so matches are visible in both light and dark mode. */
+:is(*, #\#):is(*, #\#):is(*, #\#) .pf-result-excerpt mark,
+:is(*, #\#):is(*, #\#):is(*, #\#) .pf-heading-excerpt mark,
+:is(*, #\#):is(*, #\#):is(*, #\#) .pf-searchbox-result-excerpt mark {
+  background: color-mix(in oklch, var(--primary) 20%, transparent);
+  font-weight: 600;
+  color: var(--foreground);
+}
