@@ -1,18 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, Check } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import type { Project } from "@/lib/types";
-import { phases } from "@/lib/roadmap-data";
+import { useProgress } from "@/lib/progress";
 import { difficultyMap } from "@/lib/theme";
 import { Badge } from "@/components/ui/badge";
 
 export function ProjectCard({ project }: { project: Project }) {
   const d = difficultyMap[project.difficulty];
   const reduce = useReducedMotion();
-  const phaseSlug = phases.find((phase) => phase.number === project.phase)?.slug;
-  const phaseHref = phaseSlug ? `/phase/${phaseSlug}` : "/projects";
+  const { isFeatureDone, isProjectDone, hydrated } = useProgress();
+
+  const total = project.features.length;
+  const doneCount = project.features.filter((_, i) => isFeatureDone(project.id, i)).length;
+  const allDone = isProjectDone(project.id);
 
   return (
     <motion.div
@@ -71,12 +74,36 @@ export function ProjectCard({ project }: { project: Project }) {
           ))}
         </div>
 
-        <Link
-          href={phaseHref}
-          className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
-        >
-          Xem phase <ArrowUpRight className="h-3 w-3" />
-        </Link>
+        <div className="flex items-center justify-between gap-2">
+          <Link
+            href={`/projects/${project.id}`}
+            className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+          >
+            Xem dự án <ArrowUpRight className="h-3 w-3" />
+          </Link>
+
+          {/* Progress indicator */}
+          {hydrated && total > 0 && (
+            <span
+              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-mono tabular-nums ${
+                allDone
+                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                  : doneCount > 0
+                    ? "border-primary/30 bg-primary/10 text-primary"
+                    : "border-border bg-foreground/5 text-muted-foreground/70"
+              }`}
+            >
+              {allDone ? (
+                <>
+                  <Check className="h-3 w-3" />
+                  Done
+                </>
+              ) : (
+                <>{doneCount}/{total}</>
+              )}
+            </span>
+          )}
+        </div>
       </div>
     </motion.div>
   );
