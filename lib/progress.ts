@@ -259,15 +259,6 @@ export function useProgress() {
     [state.projectFeatures]
   );
 
-  const projectStats = {
-    completed: allProjects.filter((p) => isProjectDone(p.id)).length,
-    total: allProjects.length,
-    percent:
-      allProjects.length === 0
-        ? 0
-        : Math.round((allProjects.filter((p) => isProjectDone(p.id)).length / allProjects.length) * 100),
-  };
-
   const reset = useCallback(() => {
     setState({ ...emptyState, lastVisit: new Date().toISOString() });
     if (typeof window !== "undefined") {
@@ -278,6 +269,15 @@ export function useProgress() {
   }, []);
 
   const stats = computeStats(store.completed, store);
+
+  const projectStats = {
+    completed: stats.completedProjects,
+    total: stats.totalProjects,
+    percent:
+      stats.totalProjects === 0
+        ? 0
+        : Math.round((stats.completedProjects / stats.totalProjects) * 100),
+  };
 
   return {
     completed: store.completed,
