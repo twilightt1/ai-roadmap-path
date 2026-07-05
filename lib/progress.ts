@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useSyncExternalStore } from "react";
-import { phases } from "./roadmap-data";
+import { phases, allProjects } from "./roadmap-data";
 
 /**
  * Progress tracking store — localStorage-based, không cần auth.
@@ -13,6 +13,7 @@ import { phases } from "./roadmap-data";
 const STORAGE_KEY = "ai-roadmap:progress:v1";
 const COMPLETED_KEY = "ai-roadmap:completed:v1";
 const STARTED_KEY = "ai-roadmap:started:v1";
+const PROJECT_FEATURES_KEY = "ai-roadmap:project-features:v1";
 
 export type ProgressStats = {
   /** 0..100 */
@@ -30,6 +31,16 @@ export type ProgressStats = {
     percent: number;
     done: boolean;
   }>;
+  completedProjects: number;
+  totalProjects: number;
+  projectProgress: Array<{
+    phase: number;
+    slug: string;
+    title: string;
+    completed: number;
+    total: number;
+    percent: number;
+  }>;
   startedAt: string | null;
   lastVisit: string | null;
   /** Days since first activity — computed once when store loads */
@@ -38,12 +49,14 @@ export type ProgressStats = {
 
 type StoreState = {
   completed: Set<string>;
+  projectFeatures: Set<string>;
   startedAt: string | null;
   lastVisit: string | null;
 };
 
 const emptyState: StoreState = {
   completed: new Set(),
+  projectFeatures: new Set(),
   startedAt: null,
   lastVisit: null,
 };
@@ -57,9 +70,13 @@ function loadState(): StoreState {
   try {
     const raw = localStorage.getItem(COMPLETED_KEY);
     const completed = raw ? new Set<string>(JSON.parse(raw) as string[]) : new Set<string>();
+    const featuresRaw = localStorage.getItem(PROJECT_FEATURES_KEY);
+    const projectFeatures = featuresRaw
+      ? new Set<string>(JSON.parse(featuresRaw) as string[])
+      : new Set<string>();
     const lastVisit = localStorage.getItem(STORAGE_KEY);
     const startedAt = localStorage.getItem(STARTED_KEY);
-    return { completed, lastVisit, startedAt };
+    return { completed, projectFeatures, lastVisit, startedAt };
   } catch {
     return emptyState;
   }
@@ -69,6 +86,7 @@ function persistState(s: StoreState) {
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(COMPLETED_KEY, JSON.stringify([...s.completed]));
+    localStorage.setItem(PROJECT_FEATURES_KEY, JSON.stringify([...s.projectFeatures]));
     const now = new Date().toISOString();
     localStorage.setItem(STORAGE_KEY, now);
     if (!s.startedAt) localStorage.setItem(STARTED_KEY, now);
@@ -109,6 +127,18 @@ export function topicKey(phaseSlug: string, topicId: string): string {
   return `${phaseSlug}/${topicId}`;
 }
 
+/** Build a feature key: `${projectId}/${featureIndex}` */
+export function featureKey(projectId: string, featureIndex: number): string {
+  return `${projectId}/${featureIndex}`;
+}
+
+/** True if all features of a project are checked. */
+export function isProjectDone(projectId: string): boolean {
+  const project = allProjects.find((p) => p.id === projectId);
+  if (!project || project.features.length === 0) return false;
+  return project.features.every((_, i) => state.projectFeatures.has(featureKey(projectId, i)));
+}
+
 /** Compute stats from a set of completed topic keys. */
 export function computeStats(completed: Set<string>, s: StoreState): ProgressStats {
   const phaseProgress = phases.map((phase) => {
@@ -139,6 +169,23 @@ export function computeStats(completed: Set<string>, s: StoreState): ProgressSta
       )
     : 0;
 
+  const projectProgress = phases.map((phase) => {
+    const total = phase.projects.length;
+    const completed = phase.projects.filter((p) => isProjectDone(p.id)).length;
+    const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
+    return {
+      phase: phase.number,
+      slug: phase.slug,
+      title: phase.title,
+      completed,
+      total,
+      percent,
+    };
+  });
+
+  const totalProjects = allProjects.length;
+  const completedProjects = allProjects.filter((p) => isProjectDone(p.id)).length;
+
   return {
     overall: totalTopics === 0 ? 0 : Math.round((completedTopics / totalTopics) * 100),
     completedTopics,
@@ -146,6 +193,9 @@ export function computeStats(completed: Set<string>, s: StoreState): ProgressSta
     completedPhases,
     totalPhases,
     phaseProgress,
+    completedProjects,
+    totalProjects,
+    projectProgress,
     startedAt: s.startedAt,
     lastVisit: s.lastVisit,
     daysSinceStart,
@@ -179,10 +229,50 @@ export function useProgress() {
     [store.completed]
   );
 
+  const toggleFeature = useCallback((projectId: string, featureIndex: number) => {
+    const key = featureKey(projectId, featureIndex);
+    const next = new Set(state.projectFeatures);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setState({ ...state, projectFeatures: next, lastVisit: new Date().toISOString() });
+  }, []);
+
+  const setFeature = useCallback((projectId: string, featureIndex: number, value: boolean) => {
+    const key = featureKey(projectId, featureIndex);
+    const next = new Set(state.projectFeatures);
+    if (value) next.add(key);
+    else next.delete(key);
+    setState({ ...state, projectFeatures: next, lastVisit: new Date().toISOString() });
+  }, []);
+
+  const isFeatureDone = useCallback(
+    (projectId: string, featureIndex: number) => state.projectFeatures.has(featureKey(projectId, featureIndex)),
+    [state.projectFeatures]
+  );
+
+  const isProjectDoneCb = useCallback(
+    (projectId: string) => {
+      const project = allProjects.find((p) => p.id === projectId);
+      if (!project || project.features.length === 0) return false;
+      return project.features.every((_, i) => state.projectFeatures.has(featureKey(projectId, i)));
+    },
+    [state.projectFeatures]
+  );
+
+  const projectStats = {
+    completed: allProjects.filter((p) => isProjectDone(p.id)).length,
+    total: allProjects.length,
+    percent:
+      allProjects.length === 0
+        ? 0
+        : Math.round((allProjects.filter((p) => isProjectDone(p.id)).length / allProjects.length) * 100),
+  };
+
   const reset = useCallback(() => {
     setState({ ...emptyState, lastVisit: new Date().toISOString() });
     if (typeof window !== "undefined") {
       localStorage.removeItem(COMPLETED_KEY);
+      localStorage.removeItem(PROJECT_FEATURES_KEY);
       localStorage.removeItem(STARTED_KEY);
     }
   }, []);
@@ -191,12 +281,18 @@ export function useProgress() {
 
   return {
     completed: store.completed,
+    projectFeatures: store.projectFeatures,
     hydrated,
     stats,
     toggle,
     setCompleted,
     isCompleted,
     reset,
+    toggleFeature,
+    setFeature,
+    isFeatureDone,
+    isProjectDone: isProjectDoneCb,
+    projectStats,
     startedAt: store.startedAt,
     lastVisit: store.lastVisit,
   };
