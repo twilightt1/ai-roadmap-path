@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Hyperparameter khác parameter (tham số học) thế nào?",
+      "options": [
+        "Cả hai đều học từ data qua `.fit()`, chỉ khác tên gọi",
+        "Parameter ta chọn trước training, hyperparameter học từ data",
+        "Parameter học từ data qua `.fit()`, hyperparameter ta chọn trước training",
+        "Hyperparameter tự động tối ưu bằng grid search, parameter cần set bằng tay"
+      ],
+      "answerIndex": 2,
+      "explanation": "Parameter được học từ data qua `.fit()`, còn hyperparameter do ta chọn trước khi training."
+    },
+    {
+      "id": "q2",
+      "prompt": "Nhược điểm chính của grid search là gì?",
+      "options": [
+        "Không đảm bảo tìm ra best param trong range",
+        "Không hỗ trợ cross-validation",
+        "Chỉ hoạt động với model tuyến tính",
+        "Combinatorial explosion (factorial growth), tốn compute khi nhiều dim không quan trọng"
+      ],
+      "answerIndex": 3,
+      "explanation": "Grid search nổ tổ hợp (factorial) khi thêm dim, tốn compute; lãng phí khi nhiều dim không quan trọng."
+    },
+    {
+      "id": "q3",
+      "prompt": "Bayesian optimization (Optuna TPE) dùng thông tin gì để chọn trial kế?",
+      "options": [
+        "Kết quả/score của các trial trước để suggest điểm có prob tốt cao",
+        "Chỉ chọn ngẫu nhiên như random search",
+        "Gradient của loss function",
+        "Số lượng parameter trong model"
+      ],
+      "answerIndex": 0,
+      "explanation": "TPE dựng distribution 'good' vs 'bad' params từ kết quả trial trước, suggest điểm có xác suất tốt cao."
+    },
+    {
+      "id": "q4",
+      "prompt": "Optuna pruning là gì và hữu ích cho task nào?",
+      "options": [
+        "Cắt bỏ feature không quan trọng trước training",
+        "Dừng trial kém sớm trước hết budget, hữu ích cho NN/LLM/training dài",
+        "Xóa bỏ trial trùng lặp trong grid",
+        "Giảm số layer của network sau khi train xong"
+      ],
+      "answerIndex": 1,
+      "explanation": "Pruning dừng trial kém sớm dựa trên intermediate iterations, tiết kiệm compute nhiều cho NN/LLM/training dài."
+    },
+    {
+      "id": "q5",
+      "prompt": "Validation curve khác learning curve ở chỗ nào?",
+      "options": [
+        "Validation curve: score theo train size; learning curve: score theo 1 hyperparameter",
+        "Cả hai giống hệt nhau, chỉ khác tên gọi",
+        "Validation curve: score theo giá trị 1 hyperparameter; learning curve: score theo train size",
+        "Validation curve chỉ dùng cho deep learning, learning curve cho classical ML"
+      ],
+      "answerIndex": 2,
+      "explanation": "Validation curve vẽ score theo 1 hyperparameter (sweet spot/sensitivity); learning curve vẽ score theo train size (cần thêm data hay model phức tạp hơn)."
+    }
+  ]
+}

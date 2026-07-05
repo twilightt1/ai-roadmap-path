@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao AI system design phải bắt đầu từ requirements và constraints?",
+      "options": [
+        "Vì requirements không ảnh hưởng đến kiến trúc AI",
+        "Vì chọn model trước luôn cho kết quả tốt nhất",
+        "Vì model, caching, async, placement và cost controls phụ thuộc vào SLA, budget, data sensitivity và traffic",
+        "Vì constraints chỉ quan trọng sau khi deploy"
+      ],
+      "answerIndex": 2,
+      "explanation": "Model, caching, async, placement và cost controls phụ thuộc vào SLA, budget, data sensitivity và traffic — phải clarify requirements trước khi chọn model."
+    },
+    {
+      "id": "q2",
+      "prompt": "Nêu các NFR đặc thù của AI systems ngoài latency/availability.",
+      "options": [
+        "Chỉ có throughput và disk I/O",
+        "Chỉ có cold start time",
+        "Chỉ có backward compatibility",
+        "Quality, groundedness, cost, safety, privacy, auditability hoặc hallucination rate"
+      ],
+      "answerIndex": 3,
+      "explanation": "NFR đặc thù của AI gồm quality, groundedness, cost, safety, privacy, auditability và hallucination rate — ngoài latency/availability truyền thống."
+    },
+    {
+      "id": "q3",
+      "prompt": "ADR (Architecture Decision Record) dùng để làm gì?",
+      "options": [
+        "Ghi lại bối cảnh, quyết định và hệ quả của một lựa chọn kiến trúc để review/audit sau này",
+        "Thay thế cho code review",
+        "Tự động deploy model mới",
+        "Lưu trữ trọng số model"
+      ],
+      "answerIndex": 0,
+      "explanation": "ADR ghi lại bối cảnh, quyết định và hệ quả của một lựa chọn kiến trúc để review/audit sau này — giúp team thống nhất trade-off trước khi triển khai."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao rollback AI có thể cần rollback prompt/model/index chứ không chỉ code?",
+      "options": [
+        "Vì code luôn là nguyên nhân duy nhất của lỗi",
+        "Vì behavior phụ thuộc vào toàn bộ release bundle: code, prompt, model, retriever index và config",
+        "Vì rollback code tự động rollback model",
+        "Vì prompt và model không bao giờ thay đổi"
+      ],
+      "answerIndex": 1,
+      "explanation": "Behavior phụ thuộc vào toàn bộ release bundle: code, prompt, model, retriever index và config — nên rollback có thể cần rollback nhiều thành phần."
+    },
+    {
+      "id": "q5",
+      "prompt": "Khi nào nên chọn async task API thay vì synchronous REST?",
+      "options": [
+        "Khi tác vụ luôn hoàn thành dưới 100ms",
+        "Khi không quan tâm đến trải nghiệm user",
+        "Khi tác vụ mất hơn vài giây, dễ timeout, cần retry/resume hoặc chạy worker nền",
+        "Khi tác vụ không bao giờ lỗi"
+      ],
+      "answerIndex": 2,
+      "explanation": "Khi tác vụ mất hơn vài giây, dễ timeout, cần retry/resume hoặc chạy worker nền — nên chọn async task API thay vì synchronous REST."
+    }
+  ]
+}

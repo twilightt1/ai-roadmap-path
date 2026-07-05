@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Theo bài, async giúp khi nào và không giúp khi nào?",
+      "options": [
+        "Async giúp tác vụ I/O-bound (gọi API, đọc ổ đĩa, DB); không giúp CPU-bound",
+        "Async giúp mọi tác vụ, kể cả tính toán CPU nặng",
+        "Async giúp CPU-bound, không giúp I/O-bound",
+        "Async chỉ giúp khi tính toán nặng, không giúp gọi API"
+      ],
+      "answerIndex": 0,
+      "explanation": "Async giúp khi tác vụ chờ I/O — event loop chạy tác vụ khác lúc chờ. Async không giúp CPU-bound (khi đó cần đa luồng/đa tiến trình). LLM API là I/O-bound nên async là vũ khí chính."
+    },
+    {
+      "id": "q2",
+      "prompt": "asyncio.gather trả kết quả theo thứ tự nào?",
+      "options": [
+        "Theo thứ tự cái nào xong trước trả trước",
+        "Theo cùng thứ tự coroutine được truyền vào",
+        "Theo thứ tự alphabet của tên hàm",
+        "Thứ tự ngẫu nhiên tùy event loop"
+      ],
+      "answerIndex": 1,
+      "explanation": "gather chạy nhiều coroutine song song nhưng trả kết quả theo cùng thứ tự truyền vào — không phải theo thứ tự xong. Muốn nhận theo thứ tự xong trước, dùng asyncio.as_completed."
+    },
+    {
+      "id": "q3",
+      "prompt": "Để gather không fail-fast khi một coroutine raise exception, dùng gì?",
+      "options": [
+        "suppress_exceptions=True",
+        "raise_on_error=False",
+        "return_exceptions=True",
+        "catch_all=True"
+      ],
+      "answerIndex": 2,
+      "explanation": "Mặc định gather raise ngay nếu 1 coroutine raise. Với return_exceptions=True, results[i] có thể là Exception object thay vì giá trị — cho phép xử lý lỗi từng cái."
+    },
+    {
+      "id": "q4",
+      "prompt": "Khi gọi HTTP bất đồng bộ, nên dùng thư viện nào và tại sao không dùng requests?",
+      "options": [
+        "requests vì quen thuộc và ổn định",
+        "aiohttp vì cũ và phổ biến hơn",
+        "urllib vì là built-in không cần cài",
+        "httpx.AsyncClient vì requests đồng bộ sẽ chặn event loop, giết hiệu năng"
+      ],
+      "answerIndex": 3,
+      "explanation": "requests đồng bộ chặn event loop khi đọc stream — dùng trong async giết hiệu năng. httpx.AsyncClient hỗ trợ async, tái dùng client cho connection pooling."
+    },
+    {
+      "id": "q5",
+      "prompt": "Để giới hạn số request song song tránh bị rate limit, dùng công cụ asyncio nào?",
+      "options": [
+        "asyncio.Semaphore",
+        "asyncio.Lock",
+        "asyncio.Queue",
+        "asyncio.Event"
+      ],
+      "answerIndex": 0,
+      "explanation": "Semaphore giới hạn concurrency — `async with sem` chỉ cho phép tối đa N coroutine vào vùng đó cùng lúc. Kết hợp retry backoff để vừa nhanh vừa không bị cấm."
+    }
+  ]
+}

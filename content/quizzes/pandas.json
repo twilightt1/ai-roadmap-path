@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Khác biệt giữa loc và iloc theo bài là gì?",
+      "options": [
+        "Cả hai đều dùng số nguyên, chỉ khác cú pháp",
+        "loc dùng số nguyên, iloc dùng label",
+        "Cả hai đều dùng label, chỉ khác tốc độ",
+        "loc dùng label (slice inclusive), iloc dùng số nguyên (slice exclusive)"
+      ],
+      "answerIndex": 3,
+      "explanation": "loc dùng label (slice inclusive — df.loc[0:2] lấy 3 hàng nếu label 0,1,2). iloc dùng số nguyên (slice exclusive — df.iloc[0:2] lấy 2 hàng đầu). Nhầm rất phổ biến."
+    },
+    {
+      "id": "q2",
+      "prompt": "Theo bài, chiến lược xử lý missing data nào đúng?",
+      "options": [
+        "Chọn chiến lược phù hợp: số liên tục điền mean/median, phân loại điền 'unknown' — không phải lúc nào cũng drop",
+        "Luôn dropna bỏ hàng có bất kỳ NaN",
+        "Luôn fillna(0) cho mọi cột",
+        "Bỏ qua không xử lý, model tự xử lý"
+      ],
+      "answerIndex": 0,
+      "explanation": "Không phải lúc nào cũng drop. Với số liệu liên tục, điền mean/median hoặc interpolation. Với phân loại, điền 'unknown'. Missing data ảnh hưởng chất lượng model nên cần xử lý có chủ đích."
+    },
+    {
+      "id": "q3",
+      "prompt": "Trong pd.merge, how=\"left\" tương đương JOIN nào trong SQL?",
+      "options": [
+        "INNER JOIN",
+        "LEFT JOIN",
+        "FULL OUTER JOIN",
+        "CROSS JOIN"
+      ],
+      "answerIndex": 1,
+      "explanation": "how='inner' = INNER JOIN, 'left' = LEFT JOIN, 'outer' = FULL OUTER JOIN. Khi gắn metadata user vào log, thường dùng 'left' để không mất log của user chưa có profile."
+    },
+    {
+      "id": "q4",
+      "prompt": "Để tính tổng tokens theo từng user, dùng pattern nào theo bài?",
+      "options": [
+        "df.pivot_table rồi sum",
+        "pd.merge rồi sort",
+        "df.groupby('user')['tokens'].sum()",
+        "df.melt rồi value_counts"
+      ],
+      "answerIndex": 2,
+      "explanation": "groupby + agg là bread-and-butter cho phân tích theo nhóm. df.groupby('user')['tokens'].sum() cho tổng tokens mỗi user; có thể agg nhiều hàm cùng lúc."
+    },
+    {
+      "id": "q5",
+      "prompt": "Để phân tích chuỗi thời gian theo ngày, cần làm gì theo bài?",
+      "options": [
+        "value_counts trên cột timestamp",
+        "groupby('ts') rồi sum",
+        "pivot_table với index='ts'",
+        "pd.to_datetime → set_index → resample('D')"
+      ],
+      "answerIndex": 3,
+      "explanation": "Parse dates bằng pd.to_datetime, set_index để cột thời gian thành index, rồi resample('D').sum() (theo ngày) hoặc resample('W').mean() (theo tuần)."
+    }
+  ]
+}

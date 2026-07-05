@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao eval loss thấp chưa đủ để deploy LLM?",
+      "options": [
+        "Vì eval loss thấp luôn nghĩa là model bị overfit",
+        "Vì eval loss thấp chứng tỏ data leakage chắc chắn xảy ra",
+        "Vì eval loss chỉ dùng được cho model non-LLM",
+        "Vì nó không đo format, safety, latency, cost, user relevance hoặc regression trên use case thật"
+      ],
+      "answerIndex": 3,
+      "explanation": "Eval loss không đo format, safety, latency, cost, user relevance hoặc regression trên use case thật — nên chưa đủ để quyết định deploy."
+    },
+    {
+      "id": "q2",
+      "prompt": "Golden dataset khác gì với training dataset?",
+      "options": [
+        "Golden dataset là bộ test được bảo vệ để đánh giá, không được dùng train",
+        "Golden dataset dùng để train model mỗi ngày",
+        "Golden dataset là bản sao của training dataset",
+        "Golden dataset chỉ chứa prompt không có đáp án"
+      ],
+      "answerIndex": 0,
+      "explanation": "Golden dataset là bộ test được bảo vệ để đánh giá, không được dùng train — phải version, bảo vệ và audit."
+    },
+    {
+      "id": "q3",
+      "prompt": "LLM-as-a-judge có những bias phổ biến nào?",
+      "options": [
+        "Chỉ có position bias",
+        "Position bias, verbosity bias, self-preference, prompt sensitivity và non-determinism",
+        "Không có bias nào vì LLM khách quan",
+        "Chỉ bị non-determinism, không có bias nhận thức nào"
+      ],
+      "answerIndex": 1,
+      "explanation": "LLM-as-a-judge có các bias phổ biến: position bias, verbosity bias, self-preference, prompt sensitivity và non-determinism — cần rubric và calibration."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao RAG eval phải đo cả context precision/recall?",
+      "options": [
+        "Vì answer sai luôn do model generation yếu",
+        "Vì context precision/recall không liên quan đến RAG",
+        "Vì answer sai có thể do không retrieve đúng tài liệu, không chỉ do model generation",
+        "Vì chỉ cần đo answer quality là đủ cho RAG"
+      ],
+      "answerIndex": 2,
+      "explanation": "Answer sai có thể do không retrieve đúng tài liệu chứ không chỉ do model generation, nên RAG eval phải tách retrieval quality khỏi answer quality."
+    },
+    {
+      "id": "q5",
+      "prompt": "Canary release giúp giảm rủi ro khi deploy model mới như thế nào?",
+      "options": [
+        "Đưa model mới cho 100% traffic ngay lập tức để kiểm tra nhanh",
+        "Deploy model mới mà không cần eval trước",
+        "Tắt mọi monitoring để model chạy tự do",
+        "Chỉ đưa model mới cho một phần nhỏ traffic, theo dõi metrics và rollback nhanh nếu lỗi"
+      ],
+      "answerIndex": 3,
+      "explanation": "Canary chỉ đưa model mới cho một phần nhỏ traffic, theo dõi metrics và rollback nhanh nếu lỗi — giảm rủi ro deployment."
+    }
+  ]
+}

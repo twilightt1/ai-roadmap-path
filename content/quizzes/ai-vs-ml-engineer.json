@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Khác biệt cốt lõi về model giữa AI Engineer và ML Engineer là gì?",
+      "options": [
+        "AI Engineer train model từ đầu, ML Engineer dùng pretrained",
+        "AI Engineer dùng pretrained qua API, ML Engineer train từ đầu (scratch)",
+        "Cả hai đều train model từ đầu, chỉ khác ngôn ngữ lập trình",
+        "Cả hai đều chỉ dùng pretrained, không ai train model"
+      ],
+      "answerIndex": 1,
+      "explanation": "AI Engineer dùng pretrained model qua API; ML Engineer tự train model từ đầu (scratch). Sự khác biệt sinh ra từ câu hỏi 'tôi tạo model, hay dùng model?'."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vòng lặp ship feature của AI Engineer và ML Engineer khác nhau thế nào theo bài?",
+      "options": [
+        "Cả hai đều 1-2 tuần",
+        "AI Engineer 1-3 tháng, ML Engineer 1-2 tuần",
+        "AI Engineer 1-2 tuần, ML Engineer 1-3 tháng",
+        "Cả hai đều 1-3 tháng"
+      ],
+      "answerIndex": 2,
+      "explanation": "AI Engineer ship feature trong 1-2 tuần (prompt/RAG → test → deploy → measure). ML Engineer mất 1-3 tháng (collect data → clean → train → eval → tune → deploy)."
+    },
+    {
+      "id": "q3",
+      "prompt": "Theo bài, đâu là trường hợp KHÔNG nên dùng LLM?",
+      "options": [
+        "Tóm tắt văn bản dài",
+        "Q&A trên tài liệu private qua RAG",
+        "Chatbot hỗ trợ khách hàng",
+        "Dữ liệu tabular (CSV, SQL) cần chính xác"
+      ],
+      "answerIndex": 3,
+      "explanation": "Bài khuyên đừng dùng LLM cho dữ liệu tabular — XGBoost nhanh hơn, rẻ hơn, chính xác hơn. Cũng không dùng khi cần latency < 50ms, cần chính xác tuyệt đối, hoặc dữ liệu nhạy cảm."
+    },
+    {
+      "id": "q4",
+      "prompt": "Về mức độ toán học, AI Engineer cần gì so với ML Engineer?",
+      "options": [
+        "AI Engineer chỉ cần hiểu trực giác đủ để debug, không phải chứng minh",
+        "AI Engineer cần chứng minh toán sâu như ML Engineer",
+        "AI Engineer không cần toán gì cả",
+        "ML Engineer không cần toán sâu"
+      ],
+      "answerIndex": 0,
+      "explanation": "AI Engineer cần math 'đủ' để debug — hiểu trực giác gradient, optimization chứ không chứng minh. ML Engineer cần math sâu để phát triển và chứng minh."
+    },
+    {
+      "id": "q5",
+      "prompt": "Theo heuristic trong bài, khoảng bao nhiêu % use case 2026 có thể giải bằng AI Engineer (RAG, agent, API)?",
+      "options": [
+        "Khoảng 20%",
+        "Khoảng 80%",
+        "Khoảng 50%",
+        "100%"
+      ],
+      "answerIndex": 1,
+      "explanation": "Bài đưa heuristic 80%: 80% use case 2026 giải bằng AI Engineer (RAG, agent, API). 20% còn lại (đặc biệt tabular, time-series, cảnh báo) cần ML Engineer."
+    }
+  ]
+}

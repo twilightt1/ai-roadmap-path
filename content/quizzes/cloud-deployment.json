@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao chọn region cho AI cloud deployment là quyết định pháp lý, không chỉ kỹ thuật?",
+      "options": [
+        "Vì mỗi region có cùng luật dữ liệu nên không quan trọng",
+        "Vì region chỉ ảnh hưởng giá GPU, không ảnh hưởng pháp lý",
+        "Vì dữ liệu người dùng có thể bị luật như GDPR/PDPA giới hạn nơi lưu và xử lý",
+        "Vì luật không quy định nơi xử lý dữ liệu AI"
+      ],
+      "answerIndex": 2,
+      "explanation": "Dữ liệu người dùng có thể bị luật như GDPR/PDPA giới hạn nơi lưu và xử lý, nên chọn region là quyết định pháp lý chứ không chỉ kỹ thuật."
+    },
+    {
+      "id": "q2",
+      "prompt": "Khi nào serverless container phù hợp hơn Kubernetes cho AI workload?",
+      "options": [
+        "Khi cần GPU orchestration phức tạp cho cụm lớn",
+        "Khi cần kiểm soát chi tiết toàn bộ network policy của cluster",
+        "Khi cần chạy liên tục nhiều workload nặng trên cụm multi-GPU",
+        "Khi workload đơn giản, team nhỏ, traffic vừa phải và không cần GPU orchestration phức tạp"
+      ],
+      "answerIndex": 3,
+      "explanation": "Serverless container phù hợp khi workload đơn giản, team nhỏ, traffic vừa phải và không cần GPU orchestration phức tạp; Kubernetes tốt cho platform nhiều workload."
+    },
+    {
+      "id": "q3",
+      "prompt": "Least privilege trong cloud AI nghĩa là gì?",
+      "options": [
+        "Service chỉ có quyền đúng tài nguyên cần thiết, không quyền wildcard rộng",
+        "Service có mọi quyền để tránh lỗi runtime",
+        "Tất cả service dùng chung một admin credential",
+        "Service được quyền đọc ghi toàn bộ bucket để tiện sao lưu"
+      ],
+      "answerIndex": 0,
+      "explanation": "Least privilege nghĩa service chỉ có quyền đúng tài nguyên cần thiết, không quyền wildcard rộng — giảm rủi ro khi credential bị lộ."
+    },
+    {
+      "id": "q4",
+      "prompt": "Egress cost trong cloud là gì?",
+      "options": [
+        "Chi phí thuê GPU mỗi giờ",
+        "Chi phí chuyển dữ liệu ra khỏi cloud/region/network boundary",
+        "Chi phí lưu trữ model artifact trong object storage",
+        "Chi phí chạy training job trên spot instance"
+      ],
+      "answerIndex": 1,
+      "explanation": "Egress cost là chi phí chuyển dữ liệu ra khỏi cloud, region hoặc network boundary — một nguồn cost ẩn hay gặp trong AI system."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao logs/traces của LLM có thể vi phạm privacy?",
+      "options": [
+        "Vì logs chỉ chứa HTTP status code, không có nội dung",
+        "Vì logs luôn được mã hóa end-to-end nên không thể lộ",
+        "Vì prompt/output có thể chứa PII, secrets hoặc dữ liệu nhạy cảm do user nhập tự do",
+        "Vì LLM không bao giờ lưu prompt của user vào logs"
+      ],
+      "answerIndex": 2,
+      "explanation": "Prompt/output có thể chứa PII, secrets hoặc dữ liệu nhạy cảm do user nhập tự do, nên logs/traces cũng chịu ràng buộc data residency và privacy."
+    }
+  ]
+}

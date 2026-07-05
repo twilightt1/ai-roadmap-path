@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Công thức cập nhật của gradient descent theo bài là gì?",
+      "options": [
+        "θ = θ + α · ∇L(θ)",
+        "θ = θ - α · ∇L(θ)",
+        "θ = ∇L(θ) - α · θ",
+        "θ = α · ∇L(θ) - θ"
+      ],
+      "answerIndex": 1,
+      "explanation": "Gradient descent: θ = θ - α·∇L(θ). Đi ngược gradient (hướng dốc nhất) từng bước. α là learning rate (bước nhảy), ∇L là gradient tại θ. Trực giác: quả bóng lăn xuống đồi."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao mini-batch là chuẩn so với batch GD và SGD theo bài?",
+      "options": [
+        "Mini-batch luôn cho loss thấp nhất",
+        "Mini-batch không cần learning rate",
+        "Mini-batch tận dụng vectorization GPU, ổn định hơn SGD (noise ít hơn), nhanh hơn batch GD — cân bằng tốc độ và generalization",
+        "Mini-batch chỉ dùng cho regression"
+      ],
+      "answerIndex": 2,
+      "explanation": "Mini-batch (32-256 mẫu) tận dụng vectorization GPU (xử lý cả batch song song), ổn định hơn SGD (noise ít hơn), nhanh hơn batch GD. Batch nhỏ cho gradient noise giúp thoát local min, generalization tốt."
+    },
+    {
+      "id": "q3",
+      "prompt": "Adam kết hợp những gì và khi nào là mặc định an toàn theo bài?",
+      "options": [
+        "Adam = SGD + LR schedule; mặc định cho computer vision",
+        "Adam = weight decay tách rời; chỉ dùng cho regression",
+        "Adam = chỉ adaptive LR; không dùng cho transformer",
+        "Adam = Momentum + RMSProp (đà + adaptive LR); mặc định an toàn, ít cần tune LR — dùng cho prototype/fine-tune LLM"
+      ],
+      "answerIndex": 3,
+      "explanation": "Adam = Momentum + RMSProp: giữ cả đà (momentum) và adaptive LR (RMSProp), có bias correction. Mặc định an toàn, ít cần tune LR. AdamW (Adam + weight decay tách rời) là chuẩn cho transformer."
+    },
+    {
+      "id": "q4",
+      "prompt": "Tại sao transformer cần warmup theo bài?",
+      "options": [
+        "Transformer nhạy với LR lớn lúc đầu (init chưa ổn); warmup tăng dần LR từ 0 giúp tránh phân kỳ sớm",
+        "Vì transformer không dùng gradient descent",
+        "Warmup làm training chạy nhanh hơn",
+        "Warmup giảm memory sử dụng"
+      ],
+      "answerIndex": 0,
+      "explanation": "Transformer nhạy với LR lớn lúc đầu vì init chưa ổn. Warmup tăng dần LR từ 0 trong vài nghìn bước đầu giúp tránh phân kỳ sớm, rồi giảm (thường cosine). Đây là lý do mọi LLM training dùng warmup + cosine."
+    },
+    {
+      "id": "q5",
+      "prompt": "Theo bài, L1 và L2 regularization khác nhau thế nào và MAP estimation liên quan ra sao?",
+      "options": [
+        "L1 làm weight nhỏ (không = 0), L2 làm weight = 0 (thưa)",
+        "L1 (Laplace prior) gây sparsity (weight = 0); L2 (Gaussian prior) làm weight nhỏ mượt; regularization chính là MAP estimation",
+        "Cả L1 và L2 đều làm weight = 0",
+        "L1 và L2 không liên quan tới MAP"
+      ],
+      "answerIndex": 1,
+      "explanation": "L1 (thêm λ‖w‖₁) gây sparsity — weight = 0, dễ diễn giải. L2 (thêm λ‖w‖²) làm weight nhỏ mượt, không = 0. Regularization không phải 'mẹo' mà là MAP estimation: prior Gaussian ≡ L2, prior Laplace ≡ L1."
+    }
+  ]
+}

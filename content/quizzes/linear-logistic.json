@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Logistic regression output là gì và vì sao không dùng MSE làm loss?",
+      "options": [
+        "Output là giá trị liên tục bất kỳ; MSE cho gradient tốt nhất",
+        "Output là xác suất class positive sau sigmoid; MSE cho gradient tệ khi p gần 0/1 vì sigmoid gradient nhỏ",
+        "Output là logit z chưa qua sigmoid; MSE bị overflow",
+        "Output là class label 0/1 trực tiếp; MSE không xác định"
+      ],
+      "answerIndex": 1,
+      "explanation": "Output là xác suất sau sigmoid. MSE phạt confident-but-wrong yếu hơn BCE và cho gradient tệ khi p gần 0/1 vì sigmoid gradient nhỏ."
+    },
+    {
+      "id": "q2",
+      "prompt": "L1 regularization có tác dụng đặc biệt gì so với L2?",
+      "options": [
+        "L1 và L2 đều tạo sparsity như nhau",
+        "L1 làm weight nhỏ cân bằng, L2 tạo sparsity",
+        "L1 tạo sparsity (nhiều weight=0, feature selection); L2 làm weight nhỏ, không sparse",
+        "L1 tăng overfit, L2 giảm overfit"
+      ],
+      "answerIndex": 2,
+      "explanation": "L1 tạo sparsity (rất nhiều weight = 0, dùng cho feature selection); L2 chỉ làm weight nhỏ, cân bằng, không sparse."
+    },
+    {
+      "id": "q3",
+      "prompt": "Trong sklearn LogisticRegression, `C` nhỏ nghĩa là gì?",
+      "options": [
+        "C nhỏ = số epoch huấn luyện ít",
+        "C nhỏ = regularization yếu",
+        "C nhỏ = learning rate nhỏ",
+        "C nhỏ = regularization mạnh (C là nghịch đảo regularization)"
+      ],
+      "answerIndex": 3,
+      "explanation": "`C` là nghịch đảo regularization: `C` nhỏ = regularization mạnh. Lưu ý `alpha` của Ridge ngược nghĩa — `alpha` lớn = regularization mạnh."
+    },
+    {
+      "id": "q4",
+      "prompt": "OvR khác Multinomial (softmax) thế nào khi làm multi-class?",
+      "options": [
+        "OvR train K classifier binary; Multinomial train một classifier softmax",
+        "Cả hai đều train một classifier softmax duy nhất",
+        "OvR train một classifier softmax; Multinomial train K classifier binary",
+        "OvR chỉ cho regression, Multinomial chỉ cho binary"
+      ],
+      "answerIndex": 0,
+      "explanation": "OvR train K classifier binary; Multinomial train một classifier softmax. Multinomial tốt khi class loại trừ nhau và balance, OvR đơn giản, hợp khi có class hierarchy."
+    },
+    {
+      "id": "q5",
+      "prompt": "Polynomial features degree=2 cho 3 feature ban đầu sinh ra bao nhiêu feature?",
+      "options": [
+        "6 feature",
+        "9 feature",
+        "12 feature",
+        "3 feature"
+      ],
+      "answerIndex": 1,
+      "explanation": "3 gốc (x1,x2,x3) + 3 bình phương (x1²,x2²,x3²) + 3 tương tác (x1x2,x1x3,x2x3) = 9 feature."
+    }
+  ]
+}

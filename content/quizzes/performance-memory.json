@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Generator (yield) có lợi ích gì so với trả list hết theo bài?",
+      "options": [
+        "Chạy nhanh hơn list comprehension",
+        "Xử lý data lớn mà không tốn RAM — trả giá trị từng cái, tạm dừng giữa chừng",
+        "Tự động song song hóa xử lý",
+        "Lưu được mọi kiểu dữ liệu mà list không lưu được"
+      ],
+      "answerIndex": 1,
+      "explanation": "Generator trả giá trị từng cái, tạm dừng rồi tiếp tục khi được gọi lại — không load hết file vào RAM. Đây là nền tảng streaming LLM và batch loader."
+    },
+    {
+      "id": "q2",
+      "prompt": "Theo bài, itertools (chain, islice, batched, product) có đặc điểm gì?",
+      "options": [
+        "Tạo list trung gian để tối ưu cache",
+        "Chỉ hoạt động với dữ liệu số",
+        "Tất cả đều lazy — không tạo list trung gian, xử lý từng phần tử",
+        "Chạy nhanh hơn NumPy cho ma trận"
+      ],
+      "answerIndex": 2,
+      "explanation": "Mọi hàm trong itertools đều lazy — không tạo list trung gian, xử lý từng phần tử. Lý tưởng cho stream data lớn."
+    },
+    {
+      "id": "q3",
+      "prompt": "Nguyên tắc tối ưu hiệu năng theo bài là gì?",
+      "options": [
+        "Tối ưu sớm mọi thứ có thể",
+        "Tối ưu hàm dài nhất trong file trước",
+        "Luôn thay Python loop bằng NumPy",
+        "Profile trước, tối ưu sau — trực giác về 'đâu chậm' thường sai"
+      ],
+      "answerIndex": 3,
+      "explanation": "Nguyên tắc: profile trước, tối ưu sau. timeit đo đoạn nhỏ, cProfile tìm hàm có cumtime cao nhất. Đừng tối ưu sớm code chưa phải bottleneck."
+    },
+    {
+      "id": "q4",
+      "prompt": "Khác biệt giữa shallow copy và deep copy theo bài?",
+      "options": [
+        "Shallow copy nested vẫn tham chiếu chung; deep copy copy toàn bộ đệ quy, độc lập hoàn toàn",
+        "Cả hai đều copy hoàn toàn ra object mới",
+        "Shallow copy luôn nhanh hơn deep copy",
+        "Deep copy không cần import module copy"
+      ],
+      "answerIndex": 0,
+      "explanation": "copy() (shallow) copy tầng ngoài nhưng nested vẫn tham chiếu chung — sửa nested ảnh hưởng gốc. copy.deepcopy() copy toàn bộ đệ quy, bản độc lập hoàn toàn."
+    },
+    {
+      "id": "q5",
+      "prompt": "Theo bài, vì sao vectorization đánh bại Python loop?",
+      "options": [
+        "Python loop tính sai kết quả với số lớn",
+        "NumPy đẩy phép tính xuống C, tính hàng nghìn phần tử cùng lúc — khác biệt 50-100×",
+        "Vectorization dùng ít memory hơn loop",
+        "Python loop không hỗ trợ phép nhân"
+      ],
+      "answerIndex": 1,
+      "explanation": "Python loop chậm vì mỗi phép + qua interpreter. NumPy đẩy phép tính xuống C, tính hàng nghìn phần tử cùng lúc. Khi đã có NumPy array/PyTorch tensor, đừng lặp từng phần tử — dùng vectorized op (@, *, sum(axis=))."
+    }
+  ]
+}

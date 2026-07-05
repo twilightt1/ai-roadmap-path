@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Khác biệt cốt lõi giữa retry và fallback là gì?",
+      "options": [
+        "Retry đổi model; fallback gọi lại cùng provider",
+        "Hai cơ chế hoàn toàn giống nhau",
+        "Retry gọi lại cùng provider/model; fallback đổi model/provider/path",
+        "Retry luôn nhanh hơn fallback"
+      ],
+      "answerIndex": 2,
+      "explanation": "Retry gọi lại cùng provider/model khi lỗi tạm thời; fallback đổi sang model/provider/path khác khi lỗi kéo dài hoặc không thể retry."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao fallback phải preserve output contract (schema)?",
+      "options": [
+        "Để giảm cost token",
+        "Để model tự train lại",
+        "Để tăng latency",
+        "Downstream parser/business logic phụ thuộc schema; phá contract tạo lỗi muộn hơn"
+      ],
+      "answerIndex": 3,
+      "explanation": "Downstream parser và business logic phụ thuộc schema/contract; nếu fallback trả schema khác, lỗi xuất hiện muộn hơn và khó debug hơn."
+    },
+    {
+      "id": "q3",
+      "prompt": "Điểm khó của streaming fallback là gì?",
+      "options": [
+        "Đã stream partial output, retry/fallback có thể duplicate hoặc mâu thuẫn với phần user đã thấy",
+        "Streaming không thể fallback",
+        "Streaming luôn rẻ hơn non-streaming",
+        "Streaming không cần buffer"
+      ],
+      "answerIndex": 0,
+      "explanation": "Khi đã stream partial output tới user, retry/fallback có thể duplicate hoặc mâu thuẫn với phần user đã thấy — cần xử lý partial output cẩn thận."
+    },
+    {
+      "id": "q4",
+      "prompt": "Cache fallback trở nên nguy hiểm trong trường hợp nào?",
+      "options": [
+        "Khi data là static public docs",
+        "Khi data personalized, stale, permission thay đổi, hoặc high-stakes/current data",
+        "Khi cache có TTL dài nhưng data static",
+        "Khi cache nằm ở backend proxy"
+      ],
+      "answerIndex": 1,
+      "explanation": "Cache fallback nguy hiểm khi data personalized, stale, permission thay đổi hoặc là high-stakes/current data — có thể trả thông tin sai/quá hạn hoặc leak dữ liệu."
+    },
+    {
+      "id": "q5",
+      "prompt": "Khi model trả safety refusal, có nên fallback sang model khác không?",
+      "options": [
+        "Luôn fallback để hoàn thành request",
+        "Fallback chỉ khi user yêu cầu",
+        "Không được bypass mù quáng; chỉ theo policy rõ và safety constraints",
+        "Safety refusal không liên quan fallback"
+      ],
+      "answerIndex": 2,
+      "explanation": "Safety refusal không được bypass mù quáng sang model khác; chỉ fallback khi có policy rõ và vẫn tôn trọng safety constraints để tránh jailbreak."
+    }
+  ]
+}

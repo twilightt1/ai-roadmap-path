@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao cache key không nên chỉ dựa trên query text?",
+      "options": [
+        "Vì output phụ thuộc tenant/user/ACL, prompt version, model version, content version và locale",
+        "Vì query text luôn giống nhau giữa các tenant",
+        "Vì query text không thể hash được",
+        "Vì chỉ cần query text là đủ để xác định câu trả lời"
+      ],
+      "answerIndex": 0,
+      "explanation": "Output phụ thuộc tenant/user/ACL, prompt version, model version, content version và locale — cache key phải include các thành phần này."
+    },
+    {
+      "id": "q2",
+      "prompt": "Exact cache và semantic cache khác nhau thế nào?",
+      "options": [
+        "Exact cache dùng embedding; semantic cache dùng hash chuỗi",
+        "Exact cache dùng hash chuỗi giống hệt; semantic cache dùng embedding để tìm câu tương đương nghĩa",
+        "Cả hai đều dùng cùng một cơ chế",
+        "Semantic cache luôn chính xác hơn exact cache"
+      ],
+      "answerIndex": 1,
+      "explanation": "Exact cache dùng hash chuỗi giống hệt; semantic cache dùng embedding để tìm câu tương đương nghĩa — exact rẻ và nên đứng trước semantic."
+    },
+    {
+      "id": "q3",
+      "prompt": "Prompt caching phía provider yêu cầu điều kiện gì?",
+      "options": [
+        "Prompt phải ngắn hơn 100 token",
+        "Toàn bộ prompt phải thay đổi mỗi request",
+        "Prefix prompt phải giống hệt và ổn định, phần dynamic nên đặt sau",
+        "Provider tự động cache mọi prompt bất kể cấu trúc"
+      ],
+      "answerIndex": 2,
+      "explanation": "Prompt caching phía provider yêu cầu prefix prompt giống hệt và ổn định; phần dynamic nên đặt sau để cache hit được phần prefix."
+    },
+    {
+      "id": "q4",
+      "prompt": "Stale cache trong RAG thường xảy ra khi nào?",
+      "options": [
+        "Khi user không gửi query",
+        "Khi cache luôn tự purge theo thời gian",
+        "Khi vector DB không lưu embedding",
+        "Khi tài liệu/index/prompt đổi nhưng cache key không include version hoặc không purge"
+      ],
+      "answerIndex": 3,
+      "explanation": "Stale cache trong RAG xảy ra khi tài liệu/index/prompt đổi nhưng cache key không include content/index version hoặc không purge — trả câu cũ."
+    },
+    {
+      "id": "q5",
+      "prompt": "Cache poisoning là gì?",
+      "options": [
+        "Kẻ tấn công hoặc lỗi hệ thống đưa answer sai/độc hại vào cache shared khiến nhiều user nhận lại",
+        "Khi cache hit rate quá cao làm chậm hệ thống",
+        "Khi cache tự động xóa entry hợp lệ",
+        "Khi cache key quá dài gây tràn bộ nhớ"
+      ],
+      "answerIndex": 0,
+      "explanation": "Cache poisoning là khi kẻ tấn công hoặc lỗi hệ thống đưa answer sai/độc hại vào cache shared, khiến nhiều user nhận lại — nguy hiểm với cache công khai."
+    }
+  ]
+}

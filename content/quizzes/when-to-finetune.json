@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao fine-tuning không phù hợp để lưu thông tin thay đổi hằng ngày?",
+      "options": [
+        "Vì fine-tuning làm mất khả năng xử lý text của model",
+        "Vì fine-tuning chỉ chạy được một lần duy nhất trên mỗi model",
+        "Vì weights là static artifact sau training; muốn cập nhật phải retrain và vẫn không có citation/provenance rõ",
+        "Vì thông tin thay đổi hằng ngày luôn bị loss function loại bỏ"
+      ],
+      "answerIndex": 2,
+      "explanation": "Weights là static artifact sau training; muốn cập nhật phải retrain mà vẫn không có citation/provenance rõ, nên fine-tuning không phù hợp cho dữ liệu đổi liên tục."
+    },
+    {
+      "id": "q2",
+      "prompt": "Parametric memory khác non-parametric memory ở điểm nào?",
+      "options": [
+        "Parametric memory nằm trong context/RAG; non-parametric memory nằm trong weights",
+        "Parametric memory chỉ dùng cho image, non-parametric memory chỉ dùng cho text",
+        "Cả hai đều nằm trong weights, chỉ khác độ sâu layer",
+        "Parametric memory nằm trong weights và tốt cho behavior/style/pattern; non-parametric memory nằm trong context/tool/RAG và tốt cho facts cập nhật, citation, ACL"
+      ],
+      "answerIndex": 3,
+      "explanation": "Parametric memory nằm trong weights, tốt cho behavior/style/pattern; non-parametric memory nằm trong context/tool/RAG, tốt cho facts cập nhật, citation và ACL."
+    },
+    {
+      "id": "q3",
+      "prompt": "Khi nào token reduction có thể tạo business case cho fine-tuning?",
+      "options": [
+        "Khi traffic lớn, prompt chứa nhiều ví dụ cố định và số token tiết kiệm đủ bù training/eval/ops cost",
+        "Khi model đã vượt mọi metric mà không cần train",
+        "Khi traffic rất nhỏ và prompt ngắn",
+        "Khi muốn tăng số token mỗi request để model chính xác hơn"
+      ],
+      "answerIndex": 0,
+      "explanation": "Token reduction tạo business case khi traffic lớn, prompt chứa nhiều ví dụ cố định và số token tiết kiệm đủ bù training/eval/ops cost."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao cần baseline prompt/RAG trước khi train?",
+      "options": [
+        "Để giảm thời gian training",
+        "Để biết model mới thật sự cải thiện metric nào và regress metric nào; nếu không có baseline, fine-tuning là tối ưu mù",
+        "Để tăng VRAM khi training",
+        "Baseline chỉ cần khi model nhỏ, không cần với LLM"
+      ],
+      "answerIndex": 1,
+      "explanation": "Baseline giúp đo model mới thật sự cải thiện metric nào và regress metric nào; không có baseline thì fine-tuning là tối ưu mù."
+    },
+    {
+      "id": "q5",
+      "prompt": "ACL nên nằm ở model weights hay retrieval/policy layer?",
+      "options": [
+        "Nên nằm ở model weights vì weights được train để hiểu quyền truy cập",
+        "Nên chia đều: một nửa ở weights, một nửa ở policy layer",
+        "Nên nằm ở retrieval/policy layer vì quyền truy cập thay đổi theo user/tenant/request và cần audit được",
+        "ACL không cần thiết trong hệ thống LLM"
+      ],
+      "answerIndex": 2,
+      "explanation": "ACL nên nằm ở retrieval/policy layer vì quyền truy cập thay đổi theo user/tenant/request và cần audit được, không thể nhúng cố định vào weights."
+    }
+  ]
+}

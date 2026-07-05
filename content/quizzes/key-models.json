@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Encoder-only model (như BERT) mạnh ở loại task nào?",
+      "options": [
+        "Free-form chat generation",
+        "Next-token prediction autoregressive",
+        "Understanding tasks như classification, NER, reranking, embeddings",
+        "Image generation"
+      ],
+      "answerIndex": 2,
+      "explanation": "Encoder-only tốt cho understanding tasks: classification, NER, reranking, embeddings — không phải free-form generation."
+    },
+    {
+      "id": "q2",
+      "prompt": "Decoder-only model (GPT/Claude/LLaMA-style) học objective gì?",
+      "options": [
+        "Masked language modeling hai chiều",
+        "Image classification",
+        "Contrastive embedding learning",
+        "Next-token prediction/autoregressive language modeling"
+      ],
+      "answerIndex": 3,
+      "explanation": "Decoder-only học next-token prediction (autoregressive language modeling) — dự đoán token kế tiếp từ quá khứ."
+    },
+    {
+      "id": "q3",
+      "prompt": "Base model khác instruct/chat model thế nào?",
+      "options": [
+        "Base model completion text; instruct/chat model được tune để follow instructions/chat format",
+        "Base model đã tune cho chat; instruct model chưa tune",
+        "Cả hai giống hệt nhau, chỉ khác tên",
+        "Base model chỉ dùng cho image, instruct model cho text"
+      ],
+      "answerIndex": 0,
+      "explanation": "Base model chỉ completion text; instruct/chat model được tune để follow instructions và theo chat format."
+    },
+    {
+      "id": "q4",
+      "prompt": "Encoder-decoder model (T5/BART) phù hợp task gì?",
+      "options": [
+        "Classification và reranking",
+        "Seq2seq như translation, summarization, text-to-text transformations",
+        "Embedding retrieval",
+        "Free-form chat reasoning"
+      ],
+      "answerIndex": 1,
+      "explanation": "Encoder-decoder biến task thành text-to-text, mạnh cho seq2seq: translation, summarization, các phép biến đổi text."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao model nhỏ có thể tốt hơn model lớn trong production?",
+      "options": [
+        "Model nhỏ luôn chính xác hơn model lớn",
+        "Model lớn không hỗ trợ production",
+        "Với task hẹp/nhãn cố định, small model nhanh/rẻ/ổn định và dễ kiểm soát hơn",
+        "Model nhỏ không cần evaluation"
+      ],
+      "answerIndex": 2,
+      "explanation": "Với task hẹp/nhãn cố định, small model nhanh/rẻ/ổn định và dễ kiểm soát hơn — không phải lúc nào cũng cần model lớn."
+    }
+  ]
+}

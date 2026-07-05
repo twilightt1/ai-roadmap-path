@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Lợi ích chính của `with open(...) as f` (context manager) là gì?",
+      "options": [
+        "Tự động đóng file khi thoát khối, kể cả khi có exception",
+        "Đọc file nhanh hơn open() thường",
+        "Mở file ở binary mode mặc định",
+        "Giới hạn kích thước file được đọc"
+      ],
+      "answerIndex": 0,
+      "explanation": "with là context manager — tự động đóng file khi thoát khối, kể cả khi có exception. Đây là cách an toàn và nên dùng thay cho open() không có with."
+    },
+    {
+      "id": "q2",
+      "prompt": "Tại sao bài khuyên luôn truyền encoding=\"utf-8\" khi mở file text?",
+      "options": [
+        "Để file có kích thước nhỏ hơn",
+        "Tránh bug encoding cross-platform (Windows thường mặc định cp1252)",
+        "Để đọc file nhanh hơn đáng kể",
+        "Để buộc file thành binary mode"
+      ],
+      "answerIndex": 1,
+      "explanation": "Nếu không chỉ định, Python dùng encoding mặc định của OS (Windows thường cp1252) — gây bug ký tự khi chạy trên máy khác. Dataset AI thường đa ngôn ngữ nên utf-8 là bắt buộc."
+    },
+    {
+      "id": "q3",
+      "prompt": "Khác biệt giữa json.dump/load và json.dumps/loads là gì?",
+      "options": [
+        "Không khác nhau, chỉ là alias",
+        "dump/loads cho file, dumps/load cho chuỗi",
+        "dump/load cho file, dumps/loads cho chuỗi",
+        "Tất cả đều làm việc với chuỗi"
+      ],
+      "answerIndex": 2,
+      "explanation": "json.dump/load ghi/đọc file; json.dumps/loads chuyển đổi giữa dict và chuỗi (khi gửi qua HTTP/API). Dùng ensure_ascii=False để giữ ký tự unicode nguyên dạng."
+    },
+    {
+      "id": "q4",
+      "prompt": "Theo bài, vì sao không nên pickle.load file từ nguồn không tin cậy?",
+      "options": [
+        "Pickle chậm hơn JSON đáng kể",
+        "Pickle làm file binary quá lớn",
+        "Pickle không lưu được object phức tạp",
+        "Pickle có thể thực thi code tùy ý khi load — là vector tấn công"
+      ],
+      "answerIndex": 3,
+      "explanation": "Pickle có thể thực thi code tùy ý khi load — là vector tấn công. Chỉ load file do chính bạn tạo. Đối với model AI, ưu tiên safetensors (an toàn, không chạy code)."
+    },
+    {
+      "id": "q5",
+      "prompt": "pathlib.Path có ưu điểm gì so với os.path.join theo bài?",
+      "options": [
+        "Dùng separator đúng cho OS, code cross-platform, nối path bằng / tự nhiên",
+        "Chạy nhanh hơn nhiều lần",
+        "Không cần import, có sẵn",
+        "Hỗ trợ đọc binary file"
+      ],
+      "answerIndex": 0,
+      "explanation": "Path dùng separator đúng cho OS (\\ trên Windows, / trên Linux) — code chạy mọi nơi. Nối path bằng / rất tự nhiên, kết hợp glob()/rglob() để list file theo pattern."
+    }
+  ]
+}

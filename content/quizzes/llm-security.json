@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao LLM không nên được xem là security boundary?",
+      "options": [
+        "Vì LLM luôn tuân thủ đúng policy nếu prompt rõ ràng",
+        "Vì security chỉ cần ở tầng network",
+        "Vì LLM không bao giờ xử lý dữ liệu nhạy cảm",
+        "Vì model có thể bị lừa bởi prompt/context và không đảm bảo tuân thủ policy; kiểm soát phải nằm ngoài model"
+      ],
+      "answerIndex": 3,
+      "explanation": "Model có thể bị lừa bởi prompt/context và không đảm bảo tuân thủ policy, nên kiểm soát phải nằm ngoài model trong architecture và policy engine."
+    },
+    {
+      "id": "q2",
+      "prompt": "Direct và indirect prompt injection khác nhau thế nào?",
+      "options": [
+        "Direct đến từ user input trực tiếp; indirect nằm trong tài liệu/web/email/tool output được model đọc",
+        "Cả hai đều giống hệt nhau",
+        "Direct injection luôn an toàn hơn indirect",
+        "Indirect injection chỉ xảy ra qua system prompt"
+      ],
+      "answerIndex": 0,
+      "explanation": "Direct injection đến từ user input trực tiếp; indirect injection nằm trong tài liệu, web, email hoặc tool output mà model đọc vào."
+    },
+    {
+      "id": "q3",
+      "prompt": "Least privilege cho agent tools nghĩa là gì?",
+      "options": [
+        "Agent có mọi quyền để hoàn thành task nhanh nhất",
+        "Agent chỉ có quyền tối thiểu cần thiết; write/delete/high-risk cần approval và validation ngoài model",
+        "Agent dùng chung credential admin của hệ thống",
+        "Agent tự cấp quyền cho chính nó khi cần"
+      ],
+      "answerIndex": 1,
+      "explanation": "Least privilege nghĩa agent chỉ có quyền tối thiểu cần thiết; các hành động write/delete/high-risk cần approval và validation ngoài model."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao RAG cần filter ACL trước khi đưa context vào prompt?",
+      "options": [
+        "Vì filter sau khi vào prompt sẽ nhanh hơn",
+        "Vì model tự biết tài liệu nào trái quyền để bỏ qua",
+        "Vì nếu tài liệu trái quyền đã vào prompt, model có thể leak; lọc phải xảy ra trước LLM",
+        "Vì ACL chỉ áp dụng cho training data"
+      ],
+      "answerIndex": 2,
+      "explanation": "Nếu tài liệu trái quyền đã vào prompt, model có thể leak nội dung đó — lọc ACL phải xảy ra trước khi đưa context vào LLM."
+    },
+    {
+      "id": "q5",
+      "prompt": "Guardrail false positive gây vấn đề gì?",
+      "options": [
+        "Làm guardrail an toàn hơn và tăng UX",
+        "Chỉ ảnh hưởng đến chi phí, không ảnh hưởng UX",
+        "Không gây vấn đề gì vì false positive hiếm gặp",
+        "Chặn nhầm yêu cầu hợp lệ, làm UX tệ, giảm trust và có thể khiến user tìm cách bypass"
+      ],
+      "answerIndex": 3,
+      "explanation": "Guardrail false positive chặn nhầm yêu cầu hợp lệ, làm UX tệ, giảm trust và có thể khiến user tìm cách bypass — cần đo false positives/negatives."
+    }
+  ]
+}

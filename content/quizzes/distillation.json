@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Distillation khác quantization ở điểm nào?",
+      "options": [
+        "Distillation nén hành vi/capability từ teacher sang student; quantization chỉ giảm precision của weights, không thay đổi kiến thức",
+        "Quantization nén capability từ teacher sang student, distillation chỉ giảm precision weights",
+        "Cả hai đều chỉ giảm precision của weights",
+        "Distillation giảm precision weights, quantization nén capability sang student"
+      ],
+      "answerIndex": 0,
+      "explanation": "Distillation chuyển hành vi/capability từ teacher sang student, còn quantization chỉ giảm precision của weights mà không thêm kiến thức mới."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao soft labels (logits) truyền nhiều thông tin hơn hard labels?",
+      "options": [
+        "Soft labels giảm số parameter của student model",
+        "Soft labels giữ thông tin phân phối xác suất (ví dụ \"B\" vs \"A\" rất gần) và uncertainty; hard labels mất thông tin này",
+        "Soft labels giúp inference nhanh hơn hard labels",
+        "Soft labels không cần loss function khi training"
+      ],
+      "answerIndex": 1,
+      "explanation": "Soft labels giữ phân phối xác suất và uncertainty giữa các class, giúp student học được thông tin mà hard labels (chỉ một class) làm mất."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao teacher-generated outputs (text) cần quality filtering trước khi train student?",
+      "options": [
+        "Vì teacher model không bao giờ generate đúng",
+        "Vì filtering tăng số lượng training data",
+        "Vì teacher có thể hallucinate, generate noise hoặc output sai; nếu không filter, student học sai và không reproduce được",
+        "Vì student chỉ cần lượng dữ liệu nhỏ"
+      ],
+      "answerIndex": 2,
+      "explanation": "Teacher có thể hallucinate hoặc sinh output sai; nếu không filter và kiểm chứng, student sẽ học theo dữ liệu sai và không tái lập được."
+    },
+    {
+      "id": "q4",
+      "prompt": "Production pattern student-first + confidence threshold + teacher fallback hoạt động thế nào?",
+      "options": [
+        "Teacher xử lý mọi request, student chỉ làm backup khi teacher lỗi",
+        "Teacher xử lý majority, student chỉ xử lý minority khó",
+        "Student và teacher chạy song song rồi vote kết quả",
+        "Student xử lý majority request; nếu confidence < threshold, fallback sang teacher để đảm bảo quality cho minority khó"
+      ],
+      "answerIndex": 3,
+      "explanation": "Student xử lý phần lớn request để tối ưu cost/latency; khi confidence thấp, request được fallback sang teacher để đảm bảo quality cho case khó."
+    },
+    {
+      "id": "q5",
+      "prompt": "Khi nào distillation phù hợp và khi nào không?",
+      "options": [
+        "Phù hợp cho task hẹp, volume cao, latency/cost-sensitive; không phù hợp khi cần reasoning phức tạp, đa task hoặc không có dữ liệu",
+        "Phù hợp khi cần reasoning phức tạp và đa task",
+        "Phù hợp cho mọi use case mà không cần cân nhắc",
+        "Phù hợp khi không có dữ liệu training"
+      ],
+      "answerIndex": 0,
+      "explanation": "Distillation phù hợp cho task hẹp, volume cao, nhạy cảm về latency/cost; không phù hợp khi cần reasoning phức tạp, đa task hoặc thiếu dữ liệu."
+    }
+  ]
+}

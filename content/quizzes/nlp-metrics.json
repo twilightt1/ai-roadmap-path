@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Khi nào accuracy là metric nguy hiểm?",
+      "options": [
+        "Khi class imbalance hoặc class nhỏ quan trọng",
+        "Khi class balance hoàn hảo",
+        "Khi dataset rất lớn",
+        "Khi dùng neural network"
+      ],
+      "answerIndex": 0,
+      "explanation": "Accuracy nguy hiểm khi class imbalance hoặc khi class nhỏ lại quan trọng — model có thể đạt accuracy cao mà dự đoán sai class quan trọng."
+    },
+    {
+      "id": "q2",
+      "prompt": "Macro F1 khác weighted F1 thế nào?",
+      "options": [
+        "Macro F1 và weighted F1 giống hệt nhau",
+        "Macro F1 trung bình đều mỗi class; weighted F1 trung bình theo số examples/support",
+        "Weighted F1 trung bình đều mỗi class; macro F1 theo support",
+        "Macro F1 chỉ cho binary, weighted cho multiclass"
+      ],
+      "answerIndex": 1,
+      "explanation": "Macro F1 trung bình đều mỗi class (coi mọi class quan trọng như nhau); weighted F1 trung bình theo support (số examples mỗi class)."
+    },
+    {
+      "id": "q3",
+      "prompt": "BLEU đo gì và yếu với trường hợp nào?",
+      "options": [
+        "Semantic similarity; mạnh với paraphrase",
+        "Entity-level overlap; yếu với imbalance",
+        "N-gram overlap; yếu với paraphrase và references không đầy đủ",
+        "Cross-entropy; yếu với class nhỏ"
+      ],
+      "answerIndex": 2,
+      "explanation": "BLEU đo n-gram overlap; yếu với paraphrase và khi references không đầy đủ — trùng từ không đảm bảo đúng nghĩa."
+    },
+    {
+      "id": "q4",
+      "prompt": "BERTScore dùng gì để đo similarity?",
+      "options": [
+        "N-gram overlap chính xác",
+        "Cosine của one-hot vectors",
+        "Số token trùng nhau",
+        "Contextual embeddings từ model như BERT/RoBERTa"
+      ],
+      "answerIndex": 3,
+      "explanation": "BERTScore dùng contextual embeddings từ model như BERT/RoBERTa để bắt semantic similarity tốt hơn overlap thô."
+    },
+    {
+      "id": "q5",
+      "prompt": "Recall@k trong RAG trả lời câu hỏi gì?",
+      "options": [
+        "Relevant chunk có xuất hiện trong top-k retrieved results không",
+        "Generated answer có đúng fact không",
+        "Latency có dưới k giây không",
+        "Số token trong context có dưới limit không"
+      ],
+      "answerIndex": 0,
+      "explanation": "Recall@k cho biết relevant chunk có xuất hiện trong top-k retrieved results không — đo chất lượng retrieval, không phải generation."
+    }
+  ]
+}

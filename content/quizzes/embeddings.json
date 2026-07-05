@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao embedding model quyết định retrieval quality?",
+      "options": [
+        "Model chỉ ảnh hưởng latency, không ảnh hưởng quality",
+        "Nó định nghĩa vector space nơi query và chunks được so sánh",
+        "Model không liên quan retrieval",
+        "Mọi embedding model cho kết quả giống nhau"
+      ],
+      "answerIndex": 1,
+      "explanation": "Embedding model định nghĩa vector space nơi query và chunks được so sánh — chọn model khác đổi toàn bộ geometry và retrieval quality."
+    },
+    {
+      "id": "q2",
+      "prompt": "Dense retrieval yếu ở loại query nào?",
+      "options": [
+        "Query ngữ nghĩa phức tạp",
+        "Query dài có nhiều context",
+        "Exact IDs, numbers, code identifiers, rare tokens, bảng phức tạp",
+        "Query về khái niệm tổng quát"
+      ],
+      "answerIndex": 2,
+      "explanation": "Dense retrieval mạnh semantic nhưng yếu với exact IDs, numbers, code identifiers, rare tokens và bảng phức tạp — nơi cần exact match."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao hybrid search (sparse + dense) hữu ích?",
+      "options": [
+        "Sparse và dense cùng bắt exact match",
+        "Hybrid loại bỏ cần reranking",
+        "Hybrid chỉ giảm cost",
+        "Sparse bắt exact match; dense bắt semantic similarity; hai loại bổ sung nhau"
+      ],
+      "answerIndex": 3,
+      "explanation": "Sparse retrieval (BM25) bắt exact match, dense retrieval bắt semantic similarity — kết hợp hai loại bổ sung nhau, xử lý được nhiều loại query hơn."
+    },
+    {
+      "id": "q4",
+      "prompt": "Metric mismatch trong vector DB là gì?",
+      "options": [
+        "Cách tính similarity trong DB không khớp assumption của vectors/model",
+        "Dùng cosine thay vì dot product cho normalized vectors",
+        "Embedding dimension sai",
+        "Số query quá nhiều"
+      ],
+      "answerIndex": 0,
+      "explanation": "Metric mismatch xảy ra khi cách tính similarity trong DB (cosine/dot product/L2) không khớp assumption mà embedding model train cho — cho kết quả retrieval sai."
+    },
+    {
+      "id": "q5",
+      "prompt": "Khi đổi embedding model, cần làm gì với corpus và index?",
+      "options": [
+        "Giữ nguyên index cũ, chỉ đổi query embedding",
+        "Re-embed corpus, update index metadata, rerun retrieval eval",
+        "Chỉ đổi model name trong config",
+        "Không cần eval lại"
+      ],
+      "answerIndex": 1,
+      "explanation": "Đổi embedding model đổi vector space — phải re-embed toàn corpus, update index metadata và rerun retrieval eval; không trộn vector spaces khác nhau."
+    }
+  ]
+}

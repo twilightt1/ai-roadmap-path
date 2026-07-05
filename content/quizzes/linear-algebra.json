@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Cosine similarity có công thức nào và vì sao hợp lý cho semantic search theo bài?",
+      "options": [
+        "(v·w)/(|v||w|); bất biến với độ lớn — chỉ quan tâm hướng (chủ đề), hợp lý cho NLP",
+        "|v - w|; đo khoảng cách Euclidean trực tiếp",
+        "|v| + |w|; đo tổng độ lớn",
+        "(v+w)/(|v||w|); đo độ đối lập"
+      ],
+      "answerIndex": 0,
+      "explanation": "cos(θ) = (v·w)/(|v||w|) từ -1 đến 1. Cosine bất biến với độ lớn — chỉ quan tâm hướng. Văn bản dài có embedding 'độ lớn' khác văn bản ngắn nhưng có thể cùng chủ đề, cosine bỏ qua độ lớn so sánh hướng."
+    },
+    {
+      "id": "q2",
+      "prompt": "Theo bài, @ và * trong NumPy/PyTorch khác nhau thế nào?",
+      "options": [
+        "Cả hai đều là nhân ma trận (transform)",
+        "@ là nhân ma trận (transform); * là nhân element-wise (gating)",
+        "@ là element-wise; * là matmul",
+        "@ chỉ dùng cho vector; * chỉ dùng cho ma trận"
+      ],
+      "answerIndex": 1,
+      "explanation": "@ = matmul (transform) — W @ x là linear transform áp weight cho input. * = element-wise (Hadamard) — mask * x là gating element. Nhầm 2 cái này là bug kinh điển vì code vẫn chạy, chỉ ra kết quả sai."
+    },
+    {
+      "id": "q3",
+      "prompt": "Để giải hệ Ax = b, bài khuyên dùng cách nào và vì sao?",
+      "options": [
+        "inv(A) @ b vì trực tiếp dễ hiểu",
+        "np.linalg.eig(A) để tìm eigenvalue",
+        "np.linalg.solve(A, b) vì ổn định số hơn nhiều, hiếm khi cần inv trong code thật",
+        "np.linalg.det(A) rồi chia cho b"
+      ],
+      "answerIndex": 2,
+      "explanation": "Trong code thật hiếm khi cần inv(A). Để giải Ax = b, dùng np.linalg.solve(A, b) — ổn định số hơn nhiều. inv chỉ cho hiểu khái niệm, ma trận lớn nghịch đảo tốn memory và dễ unstable."
+    },
+    {
+      "id": "q4",
+      "prompt": "Eigenvalues và eigenvectors liên quan thế nào tới PCA theo bài?",
+      "options": [
+        "PCA không liên quan tới eigenvalues",
+        "PCA dùng eigenvector của ma trận đơn vị; eigenvalue không liên quan",
+        "PCA chỉ dùng eigenvalue, bỏ eigenvector",
+        "PCA dùng eigenvector của ma trận hiệp phương sai; eigenvalue lớn = hướng chứa nhiều thông tin → giữ lại"
+      ],
+      "answerIndex": 3,
+      "explanation": "PCA tìm các hướng phương sai lớn nhất trong data — đó chính là eigenvector của ma trận hiệp phương sai. Eigenvalue lớn = hướng chứa nhiều thông tin → giữ lại; nhỏ → bỏ (giảm chiều). PCA giảm 1000 chiều embedding xuống 50 mà giữ phần lớn thông tin."
+    },
+    {
+      "id": "q5",
+      "prompt": "SVD khác eigendecomposition ở điểm nào theo bài?",
+      "options": [
+        "SVD dùng cho mọi ma trận (m×n); eigendecomposition chỉ cho ma trận vuông (n×n)",
+        "SVD chỉ dùng cho ma trận vuông, eigendecomposition cho mọi ma trận",
+        "Cả hai giống hệt nhau",
+        "SVD chỉ tính singular values, không phân tách ma trận"
+      ],
+      "answerIndex": 0,
+      "explanation": "Eigendecomposition chỉ dùng cho ma trận vuông (n×n). SVD dùng cho mọi ma trận (m×n) — là 'phiên bản tổng quát' của eigendecomposition. Truncated SVD giữ top-k singular value để xấp xỉ hạng thấp — dùng trong LSA, PCA, model compression."
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Activation function dùng để làm gì trong neural network?",
+      "options": [
+        "Chuẩn hóa input về [0,1]",
+        "Tạo phi tuyến để model học quan hệ phức tạp",
+        "Giảm số parameter của model",
+        "Thay thế loss function"
+      ],
+      "answerIndex": 1,
+      "explanation": "Activation tạo phi tuyến; không có nó thì nhiều linear layers vẫn chỉ là một linear model."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao không nên apply softmax trước CrossEntropyLoss?",
+      "options": [
+        "Vì softmax làm loss luôn bằng 0",
+        "Vì softmax chỉ dùng cho binary classification",
+        "Vì CrossEntropyLoss đã gồm log_softmax ổn định số, apply softmax trước sẽ double-apply",
+        "Vì CrossEntropyLoss không nhận input dạng probability"
+      ],
+      "answerIndex": 2,
+      "explanation": "CrossEntropyLoss đã tích hợp log_softmax ổn định số; truyền softmax vào sẽ áp dụng hai lần, cho kết quả sai."
+    },
+    {
+      "id": "q3",
+      "prompt": "`loss.backward()` làm gì trong PyTorch?",
+      "options": [
+        "Cập nhật parameter bằng gradient descent",
+        "Xóa gradient cũ trước khi tính mới",
+        "Tính forward pass cho batch kế tiếp",
+        "Tính gradient của loss theo parameters"
+      ],
+      "answerIndex": 3,
+      "explanation": "`loss.backward()` tính gradient của loss theo tất cả parameters trong computation graph bằng chain rule."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao cần `zero_grad()` trước mỗi optimizer step?",
+      "options": [
+        "Vì gradient tích lũy mặc định trong PyTorch",
+        "Vì không có zero_grad thì loss không tính được",
+        "Vì zero_grad khởi tạo weight lại từ đầu",
+        "Vì zero_grad tăng learning rate"
+      ],
+      "answerIndex": 0,
+      "explanation": "PyTorch tích lũy gradient mặc định; nếu không zero_grad, gradient của các batch sẽ cộng dồn."
+    },
+    {
+      "id": "q5",
+      "prompt": "ReLU có nhược điểm gì?",
+      "options": [
+        "Tính gradient quá chậm trên GPU",
+        "Dying ReLU khi neuron luôn ở vùng âm",
+        "Không hoạt động với input dương",
+        "Luôn cho output lớn gây exploding gradient"
+      ],
+      "answerIndex": 1,
+      "explanation": "ReLU bị 'dying ReLU': khi neuron luôn ở vùng âm, gradient = 0 và neuron ngừng học hoàn toàn."
+    }
+  ]
+}

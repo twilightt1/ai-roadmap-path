@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Theo bài, khi nào nên chuyển logic từ Jupyter notebook ra file .py?",
+      "options": [
+        "Khi notebook đã ổn — trích logic ra .py thuần có test + lint cho production",
+        "Khi notebook chạy chậm hơn script",
+        "Khi cần vẽ biểu đồ matplotlib",
+        "Khi cần dùng GPU để train"
+      ],
+      "answerIndex": 0,
+      "explanation": "Notebook tuyệt vời cho khám phá nhưng không cho production: state cell phụ thuộc thứ tự chạy, khó test, khó version. Khi ổn → trích logic ra .py thuần có test + lint."
+    },
+    {
+      "id": "q2",
+      "prompt": "Rủi ro của việc hardcode API key trong code rồi push GitHub là gì theo bài?",
+      "options": [
+        "Code chạy chậm hơn do parse key",
+        "Bot quét key trong vài giây, chiếm tài khoản, tốn hàng nghìn đô",
+        "GitHub sẽ block repository của bạn",
+        "API key hết hạn nhanh hơn bình thường"
+      ],
+      "answerIndex": 1,
+      "explanation": "Bot quét key trong vài giây, chiếm tài khoản, tốn hàng nghìn đô. Nếu lỡ commit key — revoke ngay trên dashboard, tạo key mới. Git history vẫn còn key cũ."
+    },
+    {
+      "id": "q3",
+      "prompt": "Pattern đúng để quản lý API key theo bài là gì?",
+      "options": [
+        "Hardcode trong config.py rồi gitignore file đó",
+        "Lưu key trong database rồi query khi chạy",
+        ".env + python-dotenv; .env vào .gitignore, .env.example làm template",
+        "Truyền key qua command line argument mỗi lần"
+      ],
+      "answerIndex": 2,
+      "explanation": "Dùng file .env + python-dotenv; thêm .env vào .gitignore, commit .env.example làm template. load_dotenv() nạp .env vào env vars, os.getenv() lấy ra."
+    },
+    {
+      "id": "q4",
+      "prompt": "Tại sao cần seed (random + numpy + torch) theo bài?",
+      "options": [
+        "Để code chạy nhanh hơn",
+        "Để tăng độ chính xác của model",
+        "Để giảm memory sử dụng",
+        "Để tái lập kết quả — không seed thì mỗi lần chạy kết quả khác"
+      ],
+      "answerIndex": 3,
+      "explanation": "AI dùng random nhiều (khởi tạo weight, shuffle data, dropout). Không seed → mỗi lần chạy kết quả khác. Seed random + numpy + torch để tái lập. Một số op GPU vẫn có thể khác nhẹ."
+    },
+    {
+      "id": "q5",
+      "prompt": "Theo bài, vì sao ưu tiên state_dict thay vì lưu toàn bộ model PyTorch?",
+      "options": [
+        "state_dict chỉ chứa weight — nhẹ, không phụ thuộc định nghĩa class khi load",
+        "state_dict chạy nhanh hơn khi lưu",
+        "state_dict nén file nhỏ hơn",
+        "Lưu toàn bộ model không khả thi với PyTorch"
+      ],
+      "answerIndex": 0,
+      "explanation": "state_dict chỉ chứa weight — nhẹ, không phụ thuộc định nghĩa class khi load. Lưu toàn bộ model đòi môi trường phải có cùng code class, dễ vỡ khi deploy. Cho production, xét safetensors hoặc ONNX."
+    }
+  ]
+}

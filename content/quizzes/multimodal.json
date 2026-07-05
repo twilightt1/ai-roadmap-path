@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "CLIP học joint embedding space bằng cách nào?",
+      "options": [
+        "Dùng supervised classification trên từng lớp ảnh",
+        "Dùng reinforcement learning với reward từ caption",
+        "Dùng contrastive learning để kéo embedding của cặp ảnh-text đúng lại gần và đẩy các cặp sai ra xa",
+        "Dùng autoencoder reconstruction loss giữa ảnh và text"
+      ],
+      "answerIndex": 2,
+      "explanation": "CLIP dùng contrastive learning để kéo embedding của cặp ảnh-text đúng lại gần và đẩy các cặp sai ra xa, tạo joint embedding space."
+    },
+    {
+      "id": "q2",
+      "prompt": "Projection layer trong VLM có vai trò gì?",
+      "options": [
+        "Nó thay thế hoàn toàn vision encoder",
+        "Nó tăng độ phân giải ảnh đầu vào",
+        "Nó sinh text caption cho ảnh",
+        "Nó chuyển visual features từ vision encoder sang embedding space mà LLM có thể xử lý như image tokens"
+      ],
+      "answerIndex": 3,
+      "explanation": "Projection layer chuyển visual features từ vision encoder sang embedding space mà LLM có thể xử lý như image tokens."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao ảnh độ phân giải cao làm tăng cost/latency?",
+      "options": [
+        "Vì ảnh lớn tạo nhiều image tokens/tiles hơn, làm context dài hơn và model phải xử lý nhiều thông tin hơn",
+        "Vì ảnh lớn làm giảm độ chính xác của model",
+        "Vì ảnh lớn bắt buộc chạy trên CPU",
+        "Vì ảnh lớn phải tải lại model mỗi lần"
+      ],
+      "answerIndex": 0,
+      "explanation": "Ảnh độ phân giải cao tạo nhiều image tokens/tiles hơn, làm context dài hơn và model phải xử lý nhiều thông tin hơn, tăng cost và latency."
+    },
+    {
+      "id": "q4",
+      "prompt": "Multimodal RAG khác text-only RAG ở điểm nào?",
+      "options": [
+        "Multimodal RAG chỉ retrieve ảnh, không retrieve text",
+        "Multimodal RAG index và retrieve cả text chunks, image crops, page screenshots, OCR và visual embeddings, sau đó đưa cả evidence text/ảnh vào VLM",
+        "Multimodal RAG không cần embedding",
+        "Multimodal RAG chỉ dùng được với model không phải LLM"
+      ],
+      "answerIndex": 1,
+      "explanation": "Multimodal RAG index và retrieve cả text chunks, image crops, page screenshots, OCR và visual embeddings, sau đó đưa cả evidence text/ảnh vào VLM."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao prompt injection trong ảnh nguy hiểm?",
+      "options": [
+        "Vì ảnh lớn làm overload bộ nhớ của VLM",
+        "Vì ảnh chứa virus làm hỏng model weights",
+        "Vì text trong ảnh có thể được VLM hiểu như instruction, khiến model bỏ qua system prompt, schema hoặc policy nếu boundary không rõ",
+        "Vì ảnh luôn làm model chậm hơn nên dễ bị tấn công DoS"
+      ],
+      "answerIndex": 2,
+      "explanation": "Text trong ảnh có thể được VLM hiểu như instruction, khiến model bỏ qua system prompt, schema hoặc policy nếu boundary giữa ảnh và instruction không rõ."
+    }
+  ]
+}

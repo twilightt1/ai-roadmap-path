@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Objective `J(θ)` trong policy gradient là gì?",
+      "options": [
+        "Loss function của critic network",
+        "Tổng số parameter của model",
+        "Expected return của trajectories sinh bởi policy `πθ`",
+        "Gradient của reward function theo state"
+      ],
+      "answerIndex": 2,
+      "explanation": "Objective `J(θ)` trong policy gradient là expected return (kỳ vọng phần thưởng) của các trajectory do policy `πθ` sinh ra."
+    },
+    {
+      "id": "q2",
+      "prompt": "Advantage dương làm policy update theo hướng nào?",
+      "options": [
+        "Giảm log probability của action đó",
+        "Không thay đổi probability của action",
+        "Reset policy về giá trị ban đầu",
+        "Tăng log probability/xác suất của action đó"
+      ],
+      "answerIndex": 3,
+      "explanation": "Khi advantage dương, action tốt hơn baseline nên policy update theo hướng tăng log probability/xác suất của action đó."
+    },
+    {
+      "id": "q3",
+      "prompt": "`r_t(θ)` trong PPO là gì?",
+      "options": [
+        "Tỷ lệ xác suất action dưới policy mới so với policy cũ: `πθ(a|s) / πθ_old(a|s)`",
+        "Reward tại time step t",
+        "Hệ số discount `γ` tại time step t",
+        "Entropy của policy tại state s"
+      ],
+      "answerIndex": 0,
+      "explanation": "`r_t(θ)` trong PPO là tỷ lệ xác suất action dưới policy mới so với policy cũ: `πθ(a|s) / πθ_old(a|s)`, dùng để giới hạn size của mỗi update."
+    },
+    {
+      "id": "q4",
+      "prompt": "Entropy bonus dùng để làm gì?",
+      "options": [
+        "Giảm diversity để policy hội tụ nhanh hơn",
+        "Khuyến khích policy giữ diversity/exploration, tránh collapse quá sớm",
+        "Tăng reward của action tốt nhất lên mức tối đa",
+        "Giảm variance của gradient estimator"
+      ],
+      "answerIndex": 1,
+      "explanation": "Entropy bonus khuyến khích policy giữ diversity/exploration, tránh việc policy collapse quá sớm vào một tập action hẹp."
+    },
+    {
+      "id": "q5",
+      "prompt": "GRPO dùng group rewards để ước lượng gì?",
+      "options": [
+        "Value function `V(s)` của state",
+        "TD target cho Q-learning",
+        "Advantage tương đối của mỗi response so với nhóm responses cùng prompt",
+        "Tổng reward của toàn bộ episode"
+      ],
+      "answerIndex": 2,
+      "explanation": "GRPO dùng reward tương đối trong group để ước lượng advantage của mỗi response so với nhóm responses cùng prompt, không cần critic riêng."
+    }
+  ]
+}

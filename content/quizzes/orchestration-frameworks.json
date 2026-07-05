@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "LangGraph mạnh hơn LangChain ở use case nào?",
+      "options": [
+        "RAG data ingestion đơn giản",
+        "Một lần gọi API provider",
+        "Stateful cyclic workflows có branches, validation, human-in-the-loop",
+        "Static prompt không có state"
+      ],
+      "answerIndex": 2,
+      "explanation": "LangGraph phù hợp stateful cyclic workflows có branches, validation và human-in-the-loop — nơi LangChain chain tuyến tính không đủ kiểm soát."
+    },
+    {
+      "id": "q2",
+      "prompt": "LlamaIndex phù hợp nhất cho loại hệ thống nào?",
+      "options": [
+        "Multi-agent debate",
+        "Training model từ scratch",
+        "Real-time streaming chat đơn giản",
+        "RAG/data ingestion/index/query engine-heavy systems"
+      ],
+      "answerIndex": 3,
+      "explanation": "LlamaIndex mạnh về RAG/data layer — ingestion, indexing và query engine — nên phù hợp hệ thống nặng về retrieval và data."
+    },
+    {
+      "id": "q3",
+      "prompt": "Rủi ro khi dùng CrewAI (multi-agent framework) là gì?",
+      "options": [
+        "Không hỗ trợ tool calling",
+        "Over-agentify, cost/latency tăng, role theater, unclear accountability",
+        "Không thể log",
+        "Không hỗ trợ RAG"
+      ],
+      "answerIndex": 0,
+      "explanation": "CrewAI dễ dẫn tới over-agentify, cost/latency tăng, role theater và unclear accountability — cần architecture và policy rõ trước khi dùng."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao plain code đôi khi tốt hơn orchestration framework?",
+      "options": [
+        "Plain code luôn chậm hơn framework",
+        "Flow đơn giản, cần full control, dễ test/debug, ít dependencies",
+        "Plain code không hỗ trợ tool calling",
+        "Framework luôn rẻ hơn"
+      ],
+      "answerIndex": 1,
+      "explanation": "Khi flow đơn giản, plain code cho full control, dễ test/debug và ít dependencies — không nên dùng framework khi không cần abstraction của nó."
+    },
+    {
+      "id": "q5",
+      "prompt": "Một agent loop production cần những controls nào?",
+      "options": [
+        "Chỉ prompt tốt",
+        "Chỉ model mạnh",
+        "Max turns, termination criteria, cost cap, tool permissions, sandboxing, traces",
+        "Chỉ retry policy"
+      ],
+      "answerIndex": 2,
+      "explanation": "Agent loop cần max turns, termination criteria, cost cap, tool permissions, sandboxing và traces để ngăn loop vô hạn, cost explosion và uncontrolled actions."
+    }
+  ]
+}

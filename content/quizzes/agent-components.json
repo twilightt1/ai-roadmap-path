@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "State khác memory trong agent runtime ở đâu?",
+      "options": [
+        "State là thông tin reusable qua session; memory là tiến độ run hiện tại",
+        "State là tiến độ run hiện tại; memory là thông tin reusable qua bước/session",
+        "Hai khái niệm giống nhau",
+        "Memory luôn persistent, state thì không"
+      ],
+      "answerIndex": 1,
+      "explanation": "State là tiến độ của run hiện tại (current step, scratchpad); memory là thông tin reusable qua bước hoặc session — state, memory và knowledge là ba khái niệm khác nhau."
+    },
+    {
+      "id": "q2",
+      "prompt": "Một tool spec production cần gồm những field nào?",
+      "options": [
+        "Chỉ name và description",
+        "Chỉ name và schema",
+        "Name, description, schema, auth scope, timeout, side-effect, idempotency, output/error contract",
+        "Chỉ description và example"
+      ],
+      "answerIndex": 2,
+      "explanation": "Tool spec production cần name, description, schema, auth scope, timeout, side-effect flag, idempotency, output/error contract — đủ để validate, authorize và audit."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao memory trong agent cần lưu source và confidence?",
+      "options": [
+        "Để tăng tốc retrieval",
+        "Để thay thế cần state",
+        "Để giảm cost token",
+        "Để tránh biến hallucination thành fact persistent"
+      ],
+      "answerIndex": 3,
+      "explanation": "Memory cần source và confidence để tránh biến hallucination thành fact persistent — nếu không, sai sót của model lưu lại và bị dùng như sự thật trong các run sau."
+    },
+    {
+      "id": "q4",
+      "prompt": "Verifier trong agent kiểm tra những gì?",
+      "options": [
+        "Goal completion, schema, evidence, safety, citations, done criteria",
+        "Chỉ schema của output",
+        "Chỉ cost và latency",
+        "Chỉ tool permissions"
+      ],
+      "answerIndex": 0,
+      "explanation": "Verifier kiểm tra goal completion, schema, evidence, safety, citations và done criteria — đảm bảo output đạt yêu cầu trước khi kết thúc run."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao tool outputs được coi là untrusted content?",
+      "options": [
+        "Vì tool luôn trả sai format",
+        "Vì chúng có thể chứa prompt injection hoặc dữ liệu không đáng tin",
+        "Vì tool chạy quá chậm",
+        "Vì tool không có schema"
+      ],
+      "answerIndex": 1,
+      "explanation": "Tool outputs có thể chứa prompt injection hoặc dữ liệu không đáng tin — agent phải xử lý chúng như untrusted content, không đưa thẳng vào prompt mà không validate."
+    }
+  ]
+}

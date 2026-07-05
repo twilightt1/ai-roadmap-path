@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "CTE giúp gì cho query production AI telemetry?",
+      "options": [
+        "Chia query phức tạp thành các bước có tên rõ ràng, dễ review, debug và đưa vào dashboard",
+        "Tự động tối ưu index cho query",
+        "Thay thế hoàn toàn window functions",
+        "Lưu trữ kết quả query vĩnh viễn"
+      ],
+      "answerIndex": 0,
+      "explanation": "CTE chia query phức tạp thành các bước có tên rõ ràng, dễ review, debug và đưa vào dashboard — biến SQL phức tạp thành pipeline có thể đọc."
+    },
+    {
+      "id": "q2",
+      "prompt": "`GROUP BY` khác `PARTITION BY` như thế nào?",
+      "options": [
+        "Cả hai đều gom nhiều dòng thành summary",
+        "`GROUP BY` gom nhiều dòng thành summary; `PARTITION BY` giữ từng dòng nhưng thêm metric tính trong từng nhóm",
+        "`PARTITION BY` gom dòng còn `GROUP BY` giữ dòng",
+        "Hai mệnh đề giống hệt nhau"
+      ],
+      "answerIndex": 1,
+      "explanation": "`GROUP BY` gom nhiều dòng thành summary; `PARTITION BY` giữ từng dòng nhưng thêm metric tính trong từng nhóm — trả lời câu hỏi contextual."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao rolling baseline không nên bao gồm chính dòng/ngày đang kiểm tra?",
+      "options": [
+        "Vì baseline càng nhiều dữ liệu càng tốt",
+        "Vì rolling baseline phải gồm toàn bộ lịch sử",
+        "Vì nếu baseline chứa chính spike, trung bình sẽ bị kéo lên và làm bất thường khó bị phát hiện",
+        "Vì loại dòng hiện tại làm query chậm"
+      ],
+      "answerIndex": 2,
+      "explanation": "Nếu baseline chứa chính spike, trung bình sẽ bị kéo lên và làm bất thường khó bị phát hiện — rolling baseline nên loại trừ điểm đang kiểm tra."
+    },
+    {
+      "id": "q4",
+      "prompt": "Khi nào nên dùng `ROW_NUMBER()` thay vì `RANK()` hoặc `DENSE_RANK()`?",
+      "options": [
+        "Khi cần xếp hạng có tie giữa các dòng",
+        "Khi cần giữ lại mọi dòng trùng điểm",
+        "Khi muốn bỏ qua thứ tự sắp xếp",
+        "Khi cần đúng một dòng theo thứ tự ổn định, ví dụ request mới nhất hoặc pagination có tie-breaker"
+      ],
+      "answerIndex": 3,
+      "explanation": "Dùng `ROW_NUMBER()` khi cần đúng một dòng theo thứ tự ổn định, ví dụ request mới nhất hoặc pagination có tie-breaker — không có tie."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao recursive CTE cần điều kiện dừng hoặc cycle guard?",
+      "options": [
+        "Vì thiếu guard có thể khiến traversal chạy vô hạn hoặc scan quá sâu khi dữ liệu conversation/agent có vòng lặp",
+        "Vì recursive CTE không thể chạy nếu không có guard",
+        "Vì guard làm query nhanh hơn",
+        "Vì recursive CTE chỉ chạy được một lần"
+      ],
+      "answerIndex": 0,
+      "explanation": "Thiếu guard có thể khiến traversal chạy vô hạn hoặc scan quá sâu khi dữ liệu conversation/agent có vòng lặp — cần cycle guard và độ sâu tối đa."
+    }
+  ]
+}

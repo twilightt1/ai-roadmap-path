@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao FastAPI async phù hợp với AI API platform?",
+      "options": [
+        "Vì FastAPI không hỗ trợ async nên đơn giản hơn",
+        "Vì FastAPI luôn chậm hơn Flask",
+        "Vì AI APIs thường chờ network/provider calls và streaming; async giúp xử lý concurrency tốt hơn",
+        "Vì FastAPI chỉ dùng được cho training job"
+      ],
+      "answerIndex": 2,
+      "explanation": "AI APIs thường chờ network/provider calls và streaming; FastAPI async giúp xử lý concurrency tốt hơn trong khi chờ các I/O dài."
+    },
+    {
+      "id": "q2",
+      "prompt": "PostgreSQL và Redis đóng vai trò khác nhau thế nào?",
+      "options": [
+        "Cả hai đều chỉ là cache layer",
+        "Redis thay thế hoàn toàn PostgreSQL trong platform",
+        "PostgreSQL là cache, Redis là source of truth",
+        "PostgreSQL là source of truth transactional; Redis là hot state/cache/rate limit/pub-sub ngắn hạn"
+      ],
+      "answerIndex": 3,
+      "explanation": "PostgreSQL là source of truth transactional (durable); Redis đảm nhận hot state, cache, rate limit và pub-sub ngắn hạn — hai vai trò bổ sung cho nhau."
+    },
+    {
+      "id": "q3",
+      "prompt": "Khi nào cần native SDK thay vì LiteLLM abstraction?",
+      "options": [
+        "Khi cần provider-specific features như beta APIs, tool use đặc thù, streaming events hoặc file/batch APIs",
+        "Khi cần đơn giản hóa code càng nhiều càng tốt",
+        "Khi không cần bất kỳ provider-specific feature nào",
+        "Native SDK luôn tốt hơn LiteLLM trong mọi trường hợp"
+      ],
+      "answerIndex": 0,
+      "explanation": "Cần native SDK khi dùng provider-specific features như beta APIs, tool use đặc thù, streaming events hoặc file/batch APIs mà abstraction LiteLLM chưa cover."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao business logic không nên nằm sâu trong LangChain callbacks?",
+      "options": [
+        "Vì LangChain không hỗ trợ callbacks",
+        "Vì khó test, khó thay framework và dễ trộn policy/business logic với orchestration details",
+        "Vì callbacks chạy chậm hơn main logic",
+        "Vì business logic không cần thiết trong AI platform"
+      ],
+      "answerIndex": 1,
+      "explanation": "Business logic nằm sâu trong LangChain callbacks sẽ khó test, khó thay framework và dễ trộn policy/business logic với orchestration details — nên tách thành interface rõ."
+    },
+    {
+      "id": "q5",
+      "prompt": "Langfuse và Prometheus khác nhau ở tín hiệu nào?",
+      "options": [
+        "Cả hai thu thập cùng một loại tín hiệu",
+        "Prometheus tập trung LLM traces còn Langfuse tập trung infra",
+        "Langfuse tập trung LLM traces/prompts/model calls; Prometheus tập trung metrics hạ tầng/service như latency, error rate, queue length",
+        "Langfuse chỉ dùng cho frontend metrics"
+      ],
+      "answerIndex": 2,
+      "explanation": "Langfuse tập trung LLM traces/prompts/model calls (LLM observability); Prometheus tập trung metrics hạ tầng/service như latency, error rate, queue length — hai lớp tín hiệu bổ sung."
+    }
+  ]
+}

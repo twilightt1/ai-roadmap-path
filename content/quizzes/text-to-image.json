@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao image generation nên chạy bất đồng bộ?",
+      "options": [
+        "Vì generation chậm và dễ timeout; async jobs giúp không giữ request thread, hỗ trợ queue, retry, polling/webhook và scale tốt hơn",
+        "Vì async giảm số lượng ảnh cần sinh",
+        "Vì async giúp bỏ qua hoàn toàn bước moderation",
+        "Vì đồng bộ luôn cho ảnh chất lượng cao hơn"
+      ],
+      "answerIndex": 0,
+      "explanation": "Generation chậm và dễ timeout; async jobs giúp không giữ request thread, hỗ trợ queue, retry, polling/webhook và scale tốt hơn."
+    },
+    {
+      "id": "q2",
+      "prompt": "Negative prompt dùng để làm gì?",
+      "options": [
+        "Mô tả ảnh gốc cần giữ lại khi image-to-image",
+        "Mô tả các chi tiết model nên tránh như blur, watermark, extra fingers hoặc artifacts",
+        "Tăng độ phân giải của ảnh đầu ra",
+        "Chỉ định số bước sampling tối đa"
+      ],
+      "answerIndex": 1,
+      "explanation": "Negative prompt mô tả các chi tiết model nên tránh như blur, watermark, extra fingers hoặc artifacts, giúp cải thiện chất lượng ảnh."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao không nên lưu provider temporary URL làm asset chính?",
+      "options": [
+        "Vì URL không hỗ trợ HTTPS",
+        "Vì URL quá dài làm chậm hệ thống",
+        "Vì URL đó có thể hết hạn hoặc bị provider xóa; cần download và lưu vào storage của hệ thống",
+        "Vì URL tạm thời luôn có chi phí cao hơn storage tự host"
+      ],
+      "answerIndex": 2,
+      "explanation": "Provider temporary URL có thể hết hạn hoặc bị provider xóa, nên cần download và lưu vào storage của hệ thống làm asset chính."
+    },
+    {
+      "id": "q4",
+      "prompt": "Image-to-image `strength` điều khiển điều gì?",
+      "options": [
+        "Số bước sampling diffusion sẽ chạy",
+        "Độ phân giải ảnh đầu ra",
+        "Độ mạnh của CFG scale",
+        "Mức độ output giữ ảnh gốc hay biến đổi mạnh theo prompt"
+      ],
+      "answerIndex": 3,
+      "explanation": "Tham số `strength` điều khiển mức độ output giữ ảnh gốc hay biến đổi mạnh theo prompt — strength cao thì thay đổi nhiều theo prompt."
+    },
+    {
+      "id": "q5",
+      "prompt": "Pre-generation moderation và post-generation moderation khác nhau thế nào?",
+      "options": [
+        "Pre-generation moderation chặn prompt/input trước khi tốn tiền sinh ảnh; post-generation moderation kiểm tra output thực tế trước khi hiển thị/lưu hành",
+        "Pre chỉ dùng cho text-to-image, post chỉ dùng cho image-to-image",
+        "Cả hai giống hệt nhau, chỉ khác thời điểm chạy",
+        "Pre kiểm tra output trước khi hiển thị; post chặn prompt trước khi sinh"
+      ],
+      "answerIndex": 0,
+      "explanation": "Pre-generation moderation chặn prompt/input trước khi tốn tiền sinh ảnh; post-generation moderation kiểm tra output thực tế trước khi hiển thị/lưu hành."
+    }
+  ]
+}

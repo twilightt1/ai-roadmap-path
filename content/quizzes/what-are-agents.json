@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao 'LLM + tools' chưa đủ để định nghĩa agent?",
+      "options": [
+        "Vì agent cần state, goal, action loop, termination, guardrails và runtime policy",
+        "Vì agent chỉ cần LLM",
+        "Vì tools không cần thiết",
+        "Vì LLM không thể gọi tool"
+      ],
+      "answerIndex": 0,
+      "explanation": "Agent là stateful control loop — cần state, goal, action loop, termination conditions, guardrails và runtime policy — không chỉ là LLM gọi tool một lần."
+    },
+    {
+      "id": "q2",
+      "prompt": "Chain khác agent ở điểm nào?",
+      "options": [
+        "Chain chọn action tại runtime; agent có plan cố định",
+        "Chain có plan cố định trong code; agent chọn một phần plan/action tại runtime",
+        "Hai khái niệm giống hệt nhau",
+        "Agent không có state, chain có"
+      ],
+      "answerIndex": 1,
+      "explanation": "Chain có plan cố định được code sẵn; agent chọn một phần plan hoặc action tại runtime dựa trên observation — agent có autonomy cao hơn."
+    },
+    {
+      "id": "q3",
+      "prompt": "Agent formal model gồm những thành phần nào?",
+      "options": [
+        "Prompt, model, tools",
+        "Input, output",
+        "State, action, policy, observation, termination",
+        "Memory và tools"
+      ],
+      "answerIndex": 2,
+      "explanation": "Agent formal model gồm state (trạng thái), action (hành động), policy (chính sách chọn action), observation (quan sát) và termination (điều kiện dừng)."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao termination conditions bắt buộc trong agent?",
+      "options": [
+        "Để agent chạy nhanh hơn",
+        "Termination không cần thiết",
+        "Để giảm số tool",
+        "Để ngăn loop, cost explosion và unfinished runs"
+      ],
+      "answerIndex": 3,
+      "explanation": "Termination conditions ngăn agent loop vô hạn, cost explosion và unfinished runs — agent cần budgets, termination, validation và trace để production-safe."
+    },
+    {
+      "id": "q5",
+      "prompt": "Một weakness của pattern ReAct là gì?",
+      "options": [
+        "Myopic, dễ loop, planning dài hạn yếu",
+        "ReAct không dùng tool",
+        "ReAct không có observation",
+        "ReAct không cần termination"
+      ],
+      "answerIndex": 0,
+      "explanation": "ReAct (reason + act) myopic — dễ loop và planning dài hạn yếu — nên cho task dài cần plan-and-execute hoặc hierarchical planning với replanning."
+    }
+  ]
+}

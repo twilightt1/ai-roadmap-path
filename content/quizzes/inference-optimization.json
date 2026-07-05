@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Prefill và decode có bottleneck khác nhau — metric nào đo mỗi giai đoạn?",
+      "options": [
+        "Cả hai giai đoạn đều dùng TTFT",
+        "Cả hai giai đoạn đều chỉ đo throughput",
+        "Prefill dùng TPOT, decode dùng TTFT",
+        "Prefill là compute-bound (xử lý toàn prompt), metric TTFT; decode là memory-bound (sinh token), metric TPOT"
+      ],
+      "answerIndex": 3,
+      "explanation": "Prefill là compute-bound nên đo bằng TTFT (thời gian tới token đầu); decode là memory-bound nên đo bằng TPOT (tốc độ sinh token tiếp theo)."
+    },
+    {
+      "id": "q2",
+      "prompt": "KV cache là gì và vì sao nó phình to theo context length và concurrency?",
+      "options": [
+        "KV cache lưu key/value của mỗi token để tránh recomputation; kích thước tăng theo batch × context × layers × head_dim × dtype",
+        "KV cache giảm VRAM khi context dài",
+        "KV cache lưu toàn bộ model weights để inference nhanh hơn",
+        "KV cache không phụ thuộc vào context length"
+      ],
+      "answerIndex": 0,
+      "explanation": "KV cache lưu key/value của mỗi token để tránh recomputation, nhưng kích thước tăng theo batch × context × layers × head_dim × dtype nên phình to theo context và concurrency."
+    },
+    {
+      "id": "q3",
+      "prompt": "Continuous batching giải quyết vấn đề gì của static batching?",
+      "options": [
+        "Static batching luôn chạy nhanh hơn continuous batching",
+        "Static batching chờ cả batch xong, lãng phí GPU khi request ngắn; continuous batching ghép request mới vào slot khi có request xong, giữ GPU bận",
+        "Continuous batching giảm số lượng request cần xử lý",
+        "Continuous batching loại bỏ hoàn toàn cần KV cache"
+      ],
+      "answerIndex": 1,
+      "explanation": "Static batching chờ cả batch xong nên GPU nhàn rỗi khi request ngắn; continuous batching chèn request mới vào slot trống để giữ GPU luôn bận."
+    },
+    {
+      "id": "q4",
+      "prompt": "Speculative decoding phụ thuộc yếu tố nào để có lợi?",
+      "options": [
+        "Số lượng parameter của model chính",
+        "Độ dài prompt phải cố định",
+        "Acceptance rate (độ khớp của draft model); nếu thấp, chi phí draft lớn hơn lợi ích thu được",
+        "Loại activation function của draft model"
+      ],
+      "answerIndex": 2,
+      "explanation": "Speculative decoding phụ thuộc vào acceptance rate của draft model; nếu thấp, chi phí chạy draft vượt lợi ích giảm latency."
+    },
+    {
+      "id": "q5",
+      "prompt": "Khi nào tensor parallelism cần thiết, và khi nào pipeline parallelism phù hợp hơn?",
+      "options": [
+        "Tensor parallelism chỉ cho CPU, pipeline parallelism chỉ cho GPU",
+        "Tensor parallelism khi nhiều GPU chia layer theo stage; pipeline parallelism khi model vừa một GPU",
+        "Cả hai phương pháp giống hệt nhau",
+        "Tensor parallelism khi model không vừa một GPU và cần chia weights; pipeline parallelism khi nhiều GPU và cần chia layer theo stage"
+      ],
+      "answerIndex": 3,
+      "explanation": "Tensor parallelism chia weights khi model không vừa một GPU; pipeline parallelism chia layer theo stage khi có nhiều GPU."
+    }
+  ]
+}

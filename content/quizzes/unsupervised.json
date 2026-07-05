@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "K-Means cần chọn hyperparameter chính nào và có constraint gì về cluster shape?",
+      "options": [
+        "Không cần hyperparameter; cluster tự động hình any",
+        "Density `eps`; cluster shape bất kỳ",
+        "Số chiều giảm; cluster tuyến tính",
+        "Số cluster `k`; cluster dạng cầu (spherical), kích thước tương tự, dùng Euclidean"
+      ],
+      "answerIndex": 3,
+      "explanation": "K-Means cần chọn `k` và giả định cluster dạng cầu (spherical), kích thước tương tự, dùng Euclidean distance."
+    },
+    {
+      "id": "q2",
+      "prompt": "DBSCAN gán label `-1` nghĩa là gì và ưu điểm gì so với K-Means?",
+      "options": [
+        "Label `-1` là noise/outlier; ưu điểm: cluster shape bất kỳ, phát hiện noise, không cần `k`",
+        "Label `-1` là centroid chính; ưu điểm: luôn tìm đúng `k`",
+        "Label `-1` là cluster trung tâm; ưu điểm: nhanh hơn K-Means",
+        "Label `-1` là outlier nhưng vẫn cần chọn `k` trước"
+      ],
+      "answerIndex": 0,
+      "explanation": "Label `-1` là noise/outlier. DBSCAN hỗ trợ cluster shape bất kỳ, phát hiện noise và không cần chọn `k` trước."
+    },
+    {
+      "id": "q3",
+      "prompt": "PCA tối đa hóa đại lượng nào và tìm component bằng cách gì?",
+      "options": [
+        "Entropy của phân phối class",
+        "Variance của projection `Xv`; tìm component bằng SVD hoặc eigendecomposition covariance",
+        "Khoảng cách giữa các cluster",
+        "Số lượng feature giữ nguyên không đổi"
+      ],
+      "answerIndex": 1,
+      "explanation": "PCA tối đa hóa variance của projection `Xv`, tìm component bằng SVD của centered data hoặc eigendecomposition của covariance matrix."
+    },
+    {
+      "id": "q4",
+      "prompt": "t-SNE/UMAP chủ yếu dùng cho mục đích gì và vì sao không nên dùng cho downstream classifier?",
+      "options": [
+        "Làm embedding học cho downstream classifier",
+        "Giảm chiều tuyến tính giữ variance lớn nhất",
+        "Visualization/exploration high-dimensional data; không có transform ổn định cho data mới, không phải embedding học cho downstream",
+        "Phân loại trực tiếp trên plot 2D"
+      ],
+      "answerIndex": 2,
+      "explanation": "t-SNE/UMAP dùng để visualize/exploration. Không có transform ổn định cho data mới (đặc biệt t-SNE), không phải embedding học cho downstream."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao chạy K-Means trực tiếp trên embedding 1536 chiều thô bị cảnh báo?",
+      "options": [
+        "Vì 1536 chiều tốn quá nhiều RAM",
+        "Vì embedding 1536 chiều luôn đã cluster sẵn",
+        "Vì K-Means không hỗ trợ embedding",
+        "Curse of dimensionality: khoảng cách 'concentrate', mọi điểm xa đều tương tự nhau; cluster theo distance không còn ý nghĩa"
+      ],
+      "answerIndex": 3,
+      "explanation": "Curse of dimensionality khiến khoảng cách 'concentrate' — mọi điểm xa đều tương tự nhau, cluster theo distance không còn ý nghĩa."
+    }
+  ]
+}

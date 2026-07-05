@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao `transformers.pipeline` không phù hợp cho high-concurrency serving?",
+      "options": [
+        "Vì nó chỉ hỗ trợ model nhỏ dưới 1B parameters",
+        "Vì nó thiếu scheduler/memory manager production như continuous batching và KV cache paging",
+        "Vì nó không thể load model từ disk",
+        "Vì nó chỉ chạy được trên CPU"
+      ],
+      "answerIndex": 1,
+      "explanation": "`transformers.pipeline` thiếu scheduler/memory manager production như continuous batching và KV cache paging, nên không phù hợp high-concurrency serving."
+    },
+    {
+      "id": "q2",
+      "prompt": "KV cache dùng để làm gì trong LLM serving?",
+      "options": [
+        "Lưu trữ trọng số model để tải nhanh hơn",
+        "Lưu prompt của user để báo cáo privacy",
+        "Lưu keys/values attention để không tính lại toàn bộ context khi sinh token tiếp theo",
+        "Lưu cache kết quả retrieval của RAG"
+      ],
+      "answerIndex": 2,
+      "explanation": "KV cache lưu keys/values attention để không phải tính lại toàn bộ context khi sinh token tiếp theo — giảm latency sinh token."
+    },
+    {
+      "id": "q3",
+      "prompt": "PagedAttention giúp tiết kiệm VRAM như thế nào?",
+      "options": [
+        "Xóa KV cache khi memory đầy",
+        "Nén trọng số model xuống 4-bit",
+        "Tắt attention cho các token không quan trọng",
+        "Chia KV cache thành blocks/pages nhỏ, cấp phát động theo nhu cầu thay vì đặt chỗ tĩnh lớn"
+      ],
+      "answerIndex": 3,
+      "explanation": "PagedAttention chia KV cache thành blocks/pages nhỏ, cấp phát động theo nhu cầu thay vì đặt chỗ tĩnh lớn — giảm VRAM lãng phí."
+    },
+    {
+      "id": "q4",
+      "prompt": "TTFT cao thường liên quan đến giai đoạn nào của inference?",
+      "options": [
+        "Prefill: đọc prompt/context đầu vào trước khi sinh token đầu tiên",
+        "Decode: sinh từng token cuối cùng",
+        "Loading model từ registry vào VRAM",
+        "Ghi log request sau khi trả lời xong"
+      ],
+      "answerIndex": 0,
+      "explanation": "TTFT (time to first token) cao thường liên quan đến giai đoạn prefill — đọc prompt/context đầu vào trước khi sinh token đầu tiên."
+    },
+    {
+      "id": "q5",
+      "prompt": "Backpressure trong LLM serving là gì?",
+      "options": [
+        "Cơ chế tăng GPU clock khi request đông",
+        "Cơ chế giới hạn/điều tiết request khi hệ thống quá tải, ví dụ queue limit, 429, rate limit",
+        "Cách ép model sinh câu ngắn hơn để tiết kiệm token",
+        "Phương pháp nén gradient khi training"
+      ],
+      "answerIndex": 1,
+      "explanation": "Backpressure là cơ chế giới hạn/điều tiết request khi hệ thống quá tải, ví dụ queue limit, trả 429 hoặc rate limit — bảo vệ service."
+    }
+  ]
+}

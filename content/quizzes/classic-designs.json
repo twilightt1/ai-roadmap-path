@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao chatbot hot memory nên dùng Redis thay vì Postgres trực tiếp?",
+      "options": [
+        "Vì Redis có latency thấp và phù hợp session hot-path; Postgres phù hợp durable storage/analytics",
+        "Vì Redis lưu dữ liệu durable tốt hơn Postgres",
+        "Vì Postgres không hỗ trợ lưu session",
+        "Vì Redis thay thế hoàn toàn Postgres trong chatbot"
+      ],
+      "answerIndex": 0,
+      "explanation": "Redis có latency thấp và phù hợp session hot-path; Postgres phù hợp durable storage/analytics — nên tách hot memory và durable history."
+    },
+    {
+      "id": "q2",
+      "prompt": "RAG ingestion path và query path khác nhau thế nào?",
+      "options": [
+        "Ingestion retrieve/rerank/generate; query path xử lý tài liệu thành chunks/embeddings",
+        "Ingestion xử lý tài liệu thành chunks/embeddings; query path retrieve/rerank/generate cho user query",
+        "Hai path là cùng một quy trình",
+        "Query path chạy trước ingestion path"
+      ],
+      "answerIndex": 1,
+      "explanation": "Ingestion path xử lý tài liệu thành chunks/embeddings; query path retrieve/rerank/generate cho user query — hai path riêng biệt."
+    },
+    {
+      "id": "q3",
+      "prompt": "Intent router giúp giảm cost bằng cách nào?",
+      "options": [
+        "Gửi toàn bộ request sang model mạnh nhất để đảm bảo chất lượng",
+        "Tắt model mạnh để chỉ dùng template",
+        "Route request đơn giản sang template/model rẻ và chỉ dùng model mạnh cho case khó",
+        "Tăng số lượng model gọi cho mỗi request"
+      ],
+      "answerIndex": 2,
+      "explanation": "Intent router route request đơn giản sang template/model rẻ và chỉ dùng model mạnh cho case khó — đòn bẩy cost lớn nhưng cần confidence/fallback."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao xóa tài liệu trong SQL chưa đủ để xóa khỏi RAG?",
+      "options": [
+        "Vì SQL tự động đồng bộ vector DB",
+        "Vì vector DB không lưu tài liệu nào",
+        "Vì RAG không dùng tài liệu từ SQL",
+        "Vì embeddings/chunks nằm trong vector DB riêng, cần delete/tombstone theo `doc_id`"
+      ],
+      "answerIndex": 3,
+      "explanation": "Embeddings/chunks nằm trong vector DB riêng, nên cần delete hoặc tombstone theo `doc_id` — enterprise RAG cần deletion sync, không chỉ vector search."
+    },
+    {
+      "id": "q5",
+      "prompt": "Multi-LLM gateway mang lại lợi ích gì?",
+      "options": [
+        "Tập trung routing, fallback, budgets, logging và provider abstraction ở một lớp chung",
+        "Tăng số lượng model phải gọi cho mỗi request",
+        "Thay thế hoàn toàn mọi model bằng một model duy nhất",
+        "Loại bỏ cần observability trong hệ thống AI"
+      ],
+      "answerIndex": 0,
+      "explanation": "Multi-LLM gateway tập trung routing, fallback, budgets, logging và provider abstraction ở một lớp chung — kiểm soát provider, cost và observability."
+    }
+  ]
+}

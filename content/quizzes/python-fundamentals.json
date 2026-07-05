@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Theo bài, tại sao ưu tiên isinstance(x, int) thay vì type(x) == int?",
+      "options": [
+        "isinstance chạy nhanh hơn type()",
+        "isinstance tôn trọng kế thừa (subclass cũng khớp), type() == thì không",
+        "type() == không hoạt động với số",
+        "isinstance không cần import gì"
+      ],
+      "answerIndex": 1,
+      "explanation": "isinstance tôn trọng kế thừa — subclass cũng khớp. type() == thì không. Quan trọng khi làm việc với NumPy/PyTorch vì tensor của chúng là subclass của nhiều kiểu."
+    },
+    {
+      "id": "q2",
+      "prompt": "Theo bài, những kiểu dữ liệu nào là MUTABLE?",
+      "options": [
+        "int, float, str, tuple",
+        "int, str, bool",
+        "list, dict, set",
+        "tuple, str, int"
+      ],
+      "answerIndex": 2,
+      "explanation": "Immutable (không đổi sau khi tạo): int, float, str, bool, tuple. Mutable (đổi tại chỗ): list, dict, set. Hiểu sai cái này là nguồn bug thầm lặng trong AI pipeline."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao `def train(model, history=[])` là lỗi kinh điển theo bài?",
+      "options": [
+        "history không truy cập được trong hàm",
+        "Python sẽ báo SyntaxError khi chạy",
+        "List không thể làm default argument trong Python",
+        "Default chỉ tạo một lần khi định nghĩa hàm, các lần gọi sau dùng chung object đó"
+      ],
+      "answerIndex": 3,
+      "explanation": "Default mutable chỉ tạo một lần khi hàm định nghĩa, nên các lần gọi sau dùng chung object — lần gọi thứ 2 vẫn thấy loss của lần 1. Cách đúng: dùng None rồi khởi tạo trong hàm."
+    },
+    {
+      "id": "q4",
+      "prompt": "Theo bài, dùng gì để tránh KeyError khi đọc cấu hình JSON có thể thiếu field?",
+      "options": [
+        "dict.get(key, default)",
+        "dict[key] bọc trong try/except",
+        "dict[key] or default_value",
+        "dict.find(key, default)"
+      ],
+      "answerIndex": 0,
+      "explanation": "config.get('key', default) trả default nếu key không tồn tại, tránh crash. Trong AI bạn thường đọc cấu hình JSON có thể thiếu field — .get() an toàn hơn dict[key]."
+    },
+    {
+      "id": "q5",
+      "prompt": "Hai hàm enumerate và zip hữu ích cho việc gì theo bài?",
+      "options": [
+        "enumerate đếm số lần lặp, zip nén file",
+        "enumerate lấy cả index và giá trị; zip chạy song song nhiều list",
+        "Cả hai đều sắp xếp collection",
+        "enumerate đảo list, zip gộp nhiều list thành một"
+      ],
+      "answerIndex": 1,
+      "explanation": "enumerate + zip là cặp đôi vàng cho vòng lặp trong AI: enumerate cho cả index và giá trị (duyệt batch), zip chạy song song nhiều list (ghép cặp prompt-response)."
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao exact random split có thể gây leakage trong conversation dataset?",
+      "options": [
+        "Random split luôn xáo trộn token trong mỗi message nên mất ngữ cảnh",
+        "Random split tự động sinh thêm PII vào tập test",
+        "Random split làm dataset quá nhỏ để model học được behavior",
+        "Các message cùng thread/customer/document có thể bị chia giữa train và test, làm eval thấy thông tin gần giống training"
+      ],
+      "answerIndex": 3,
+      "explanation": "Trong conversation dataset, các message cùng thread/customer/document có thể rải ra cả train và test khi split ngẫu nhiên, khiến eval thấy thông tin gần giống training."
+    },
+    {
+      "id": "q2",
+      "prompt": "Near-dedup khác exact dedup ở điểm nào?",
+      "options": [
+        "Exact dedup xóa bản giống hệt; near-dedup phát hiện các mẫu rất giống nhau dù khác một vài từ hoặc format",
+        "Hai phương pháp giống hệt nhau, chỉ khác tên gọi",
+        "Near-dedup chạy trước tokenization, exact dedup chạy sau tokenization",
+        "Near-dedup chỉ xóa các sample có label sai, exact dedup xóa sample trùng label"
+      ],
+      "answerIndex": 0,
+      "explanation": "Exact dedup chỉ xóa các bản sao giống hệt nhau, trong khi near-dedup phát hiện các mẫu rất giống nhau dù khác một vài từ hoặc định dạng."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao cần scan PII/secrets trước training?",
+      "options": [
+        "Vì PII làm gradient bị vanish",
+        "Vì model/checkpoint có thể memorize và sinh lại thông tin nhạy cảm; checkpoint sau training cũng là artifact nhạy cảm",
+        "Vì PII làm tăng VRAM khi training",
+        "Vì scan PII giúp tăng số lượng training example"
+      ],
+      "answerIndex": 1,
+      "explanation": "Model và checkpoint có thể memorize rồi sinh lại thông tin nhạy cảm; bản thân checkpoint sau training cũng trở thành artifact nhạy cảm cần bảo vệ."
+    },
+    {
+      "id": "q4",
+      "prompt": "Preference dataset cần gì ngoài cặp `chosen` và `rejected`?",
+      "options": [
+        "Chỉ cần thêm số lượng parameter của model",
+        "Chỉ cần thêm learning rate dùng khi train",
+        "Rubric rõ, consistency giữa annotators, metadata nguồn và validation để tránh model học preference sai",
+        "Một ảnh minh họa cho mỗi preference"
+      ],
+      "answerIndex": 2,
+      "explanation": "Preference data cần rubric rõ, consistency giữa annotators, metadata nguồn và validation; thiếu những thứ này model có thể học preference sai."
+    },
+    {
+      "id": "q5",
+      "prompt": "Synthetic data nên được kiểm soát như thế nào?",
+      "options": [
+        "Dùng 100% synthetic data để tránh bias của human data",
+        "Chỉ giữ synthetic data có loss thấp nhất khi train",
+        "Không cần kiểm soát vì synthetic data luôn sạch hơn real data",
+        "Gắn tag nguồn, filter tự động, judge/critique, human spot-check và giới hạn tỷ lệ trong data mix"
+      ],
+      "answerIndex": 3,
+      "explanation": "Synthetic data cần gắn tag nguồn, filter tự động, judge/critique, human spot-check và giới hạn tỷ lệ trong data mix để đảm bảo chất lượng."
+    }
+  ]
+}

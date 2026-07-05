@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao middleware ordering quan trọng trong API pipeline?",
+      "options": [
+        "Rate limit và cache không ảnh hưởng cost",
+        "Logging phải chạy trước validation",
+        "Cần rate limit trước khi tốn token, cache trước khi tốn provider call",
+        "Thứ tự không ảnh hưởng kết quả"
+      ],
+      "answerIndex": 2,
+      "explanation": "Đúng thứ tự giúp rate limit chặn request trước khi tốn token, và cache trả kết quả trước khi tốn provider call — tiết kiệm cost và bảo vệ provider."
+    },
+    {
+      "id": "q2",
+      "prompt": "Một retry policy production cần gồm những gì?",
+      "options": [
+        "Chỉ max attempts",
+        "Chỉ retry khi status 200",
+        "Chỉ backoff cố định",
+        "Max attempts, exponential backoff, jitter, error matrix"
+      ],
+      "answerIndex": 3,
+      "explanation": "Retry policy production cần max attempts, exponential backoff, jitter (tránh thundering herd) và error matrix (retry theo loại lỗi)."
+    },
+    {
+      "id": "q3",
+      "prompt": "Circuit breaker có những states nào?",
+      "options": [
+        "Closed, open, half-open",
+        "Healthy, unhealthy",
+        "On, off",
+        "Retry, fallback, abort"
+      ],
+      "answerIndex": 0,
+      "explanation": "Circuit breaker có 3 states: closed (gọi bình thường), open (ngắt khi lỗi quá nhiều) và half-open (thử lại giới hạn để kiểm tra provider đã khỏe chưa)."
+    },
+    {
+      "id": "q4",
+      "prompt": "Fallback chain giúp gì trong API pipeline?",
+      "options": [
+        "Tăng accuracy của model chính",
+        "Tăng reliability: provider A fail thì chuyển sang provider B",
+        "Giảm latency mỗi request",
+        "Loại bỏ cần cache"
+      ],
+      "answerIndex": 1,
+      "explanation": "Fallback chain tăng reliability — khi provider A fail, request chuyển sang provider B, giữ service khả dụng thay vì trả lỗi."
+    },
+    {
+      "id": "q5",
+      "prompt": "Graceful degradation đảm bảo điều gì khi provider fail và không còn fallback?",
+      "options": [
+        "User nhận 500 error raw",
+        "App crash và retry vô hạn",
+        "User không nhận 500 error, nhận fallback response an toàn",
+        "System tự động train model mới"
+      ],
+      "answerIndex": 2,
+      "explanation": "Graceful degradation giữ UX — user nhận fallback response có kiểm soát thay vì 500 error raw khi provider fail và không còn fallback path."
+    }
+  ]
+}

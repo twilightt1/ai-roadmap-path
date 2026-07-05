@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "AI Engineer khác ML researcher ở điểm nào theo bài?",
+      "options": [
+        "AI Engineer tạo model mới, ML researcher dùng model có sẵn",
+        "AI Engineer là cầu nối model ↔ sản phẩm, ML researcher tập trung tạo model",
+        "AI Engineer chứng minh toán, ML researcher viết code",
+        "Hai role giống hệt nhau, chỉ khác tên"
+      ],
+      "answerIndex": 1,
+      "explanation": "ML researcher tập trung tạo model (paper, SOTA, math training). AI Engineer là cầu nối model ↔ sản phẩm — dùng model có sẵn, biến thành sản phẩm người dùng chạm vào."
+    },
+    {
+      "id": "q2",
+      "prompt": "Bốn công việc cốt lõi của AI Engineer theo bài là gì?",
+      "options": [
+        "Training, tuning, evaluation, deployment",
+        "Data cleaning, feature engineering, modeling, visualization",
+        "Integrate & orchestrate, RAG, agent, multi-LLM",
+        "Research, viết paper, benchmark, SOTA"
+      ],
+      "answerIndex": 2,
+      "explanation": "Bài nêu bốn công việc cốt lõi: integrate & orchestrate (routing, fallback, cache), build RAG systems, build AI agents, và multi-LLM (biết khi nào dùng model nào)."
+    },
+    {
+      "id": "q3",
+      "prompt": "Nguyên tắc routing model theo bài là gì?",
+      "options": [
+        "Luôn dùng model đắt nhất để đảm bảo chất lượng",
+        "Luôn dùng model có context window lớn nhất",
+        "Dùng random model để cân bằng tải giữa các provider",
+        "Bắt đầu với model rẻ nhất làm được job, chỉ nâng khi cần"
+      ],
+      "answerIndex": 3,
+      "explanation": "Nguyên tắc: bắt đầu với model rẻ nhất làm được job. GPT-4o-mini cho 90% request, GPT-4o chỉ khi cần reasoning — cách này giảm chi phí 50-70%."
+    },
+    {
+      "id": "q4",
+      "prompt": "Theo bài, AI Engineer KHÔNG cần kỹ năng nào sau đây?",
+      "options": [
+        "Train model từ đầu",
+        "Hiểu đủ LLM để biết tại sao nó fail",
+        "Programming vững (Python, async)",
+        "API + orchestration và system design"
+      ],
+      "answerIndex": 0,
+      "explanation": "Bài liệt kê 'Bạn không cần': train model từ đầu (trừ fine-tune chuyên sâu Phase 10), phát triển kiến trúc transformer, chứng minh toán, và nghiên cứu. Programming vững và orchestration là bắt buộc."
+    },
+    {
+      "id": "q5",
+      "prompt": "Trong orchestration production, 'fallback' mang ý nghĩa gì?",
+      "options": [
+        "Lưu trữ câu trả lời để dùng lại khi trùng query",
+        "Chuyển sang model dự phòng khi provider chính sập",
+        "Giới hạn số request không vượt quota provider",
+        "Ghi log token và tiền cho mỗi request"
+      ],
+      "answerIndex": 1,
+      "explanation": "Fallback: GPT-4o sập → Claude 3.5 → GPT-3.5 → cache → default. Caching là lưu trùng query, rate limiting là giới hạn quota, cost tracking là ghi log token và tiền."
+    }
+  ]
+}

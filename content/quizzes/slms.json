@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Định nghĩa \"Small Language Model\" (SLM) và vì sao \"nhỏ\" không phải là yếu tố duy nhất?",
+      "options": [
+        "SLM là model không cần quan tâm safety",
+        "SLM là bất kỳ model dưới 100M params bất kể chất lượng",
+        "SLM là model chỉ có thể chạy trên cloud server",
+        "SLM thường là model 1-3B params, được tối ưu cho latency, cost, deployment edge; cần đánh giá cả quality, context và license"
+      ],
+      "answerIndex": 3,
+      "explanation": "SLM thường là model 1-3B params tối ưu cho latency/cost/edge, nhưng kích thước không phải duy nhất — cần đánh giá cả quality, context length và license."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao SLM có thể thắng LLM về latency, privacy và unit economics trong một số use case?",
+      "options": [
+        "SLM decode nhanh hơn, có thể chạy local/edge nên tốt privacy, và cost per request thấp hơn; phù hợp khi workload hẹp và có thể route",
+        "SLM luôn thắng LLM trên mọi use case",
+        "SLM có nhiều parameter hơn LLM nên mạnh hơn",
+        "SLM không cần hardware nào để chạy"
+      ],
+      "answerIndex": 0,
+      "explanation": "SLM decode nhanh hơn, chạy được local/edge nên tốt privacy, và cost per request thấp hơn; lợi thế thể hiện rõ khi workload hẹp và có thể route."
+    },
+    {
+      "id": "q3",
+      "prompt": "Khi nào SLM không nên dùng và 2 lý do chính là gì?",
+      "options": [
+        "Khi cần privacy cao cho dữ liệu người dùng",
+        "Khi cần reasoning phức tạp, đa ngôn ngữ, hoặc context dài; 2 lý do là quality gap và khả năng hiểu context kém",
+        "Khi workload có volume cao và ổn định",
+        "Khi latency là ưu tiên số một của hệ thống"
+      ],
+      "answerIndex": 1,
+      "explanation": "SLM không nên dùng khi cần reasoning phức tạp, đa ngôn ngữ hoặc context dài; hai lý do chính là quality gap và khả năng hiểu context kém hơn LLM."
+    },
+    {
+      "id": "q4",
+      "prompt": "Hybrid architecture (SLM + LLM) là gì và vì sao nó phổ biến?",
+      "options": [
+        "Chỉ dùng SLM, LLM không cần thiết trong hybrid",
+        "LLM xử lý majority, SLM chỉ làm backup dự phòng",
+        "SLM xử lý majority request, LLM xử lý minority khó/rủi ro; phổ biến vì tối ưu cost và vẫn giữ quality",
+        "Chạy SLM và LLM song song rồi chọn kết quả tốt hơn mỗi lần"
+      ],
+      "answerIndex": 2,
+      "explanation": "Hybrid architecture cho SLM xử lý majority request, LLM xử lý minority khó/rủi ro; phổ biến vì tối ưu cost mà vẫn giữ quality cho case khó."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao benchmark SLM cần dữ liệu production thật, không chỉ demo prompt sạch?",
+      "options": [
+        "Demo prompt sạch phản ánh đầy đủ mọi edge case",
+        "Demo prompt sạch luôn chạy nhanh hơn production",
+        "Dữ liệu production thật dễ lấy hơn demo prompt sạch",
+        "Demo prompt sạch không phản ánh phân phối, noise và edge cases của data thật; SLM có thể fail trên data thật mà không fail trên demo"
+      ],
+      "answerIndex": 3,
+      "explanation": "Demo prompt sạch không phản ánh phân phối, noise và edge cases của data thật; SLM có thể fail trên production data mà vẫn pass demo prompt sạch."
+    }
+  ]
+}

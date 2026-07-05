@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Gini impurity bằng 0 và bằng 0.5 (binary) nghĩa là gì?",
+      "options": [
+        "Gini=0: maximum impurity; Gini=0.5: node pure",
+        "Gini=0: không có sample; Gini=0.5: hai class đều có",
+        "Gini=0: node thuần một class (pure); Gini=0.5: binary 50/50, maximum impurity",
+        "Gini=0 và 0.5 đều là maximum impurity"
+      ],
+      "answerIndex": 2,
+      "explanation": "Gini=0: node thuần một class (pure). Gini=0.5 (binary): 50/50, là maximum impurity."
+    },
+    {
+      "id": "q2",
+      "prompt": "CART split như thế nào?",
+      "options": [
+        "Chỉ split theo feature đầu tiên trong dataset",
+        "Global: tìm cấu hình split tối ưu trên toàn cây",
+        "Ngẫu nhiên: chọn feature và threshold theo phân phối đều",
+        "Greedy: chọn feature và threshold giảm impurity nhiều nhất cục bộ, không nhìn global optimum"
+      ],
+      "answerIndex": 3,
+      "explanation": "CART split greedy: chọn feature và threshold giảm impurity nhiều nhất cục bộ, không nhìn global optimum."
+    },
+    {
+      "id": "q3",
+      "prompt": "Random forest giảm variance bằng cách nào và có hai nguồn randomness gì?",
+      "options": [
+        "Train nhiều cây decorrelated rồi average/vote; bootstrap sample + random feature subset (`max_features`)",
+        "Train một cây rất sâu rồi prune; randomness từ learning rate",
+        "Train cây tuần tự sửa residual; randomness từ bagging và dropout",
+        "Chỉ dùng random feature subset, không có bootstrap"
+      ],
+      "answerIndex": 0,
+      "explanation": "RF train nhiều cây decorrelated rồi average/vote. Hai nguồn randomness: bootstrap sample và random feature subset (`max_features`)."
+    },
+    {
+      "id": "q4",
+      "prompt": "Gradient boosting học cây mới để làm gì và giảm bias hay variance?",
+      "options": [
+        "Học cây mới để tăng variance",
+        "Sửa lỗi/residual/gradient còn lại của ensemble hiện tại, giảm bias",
+        "Học cây mới song song độc lập rồi average",
+        "Học cây mới để thay thế cây cũ hoàn toàn"
+      ],
+      "answerIndex": 1,
+      "explanation": "Gradient boosting học cây mới để sửa residual/gradient còn lại của ensemble hiện tại, giảm bias. (Early stopping ngăn variance tăng quá muộn.)"
+    },
+    {
+      "id": "q5",
+      "prompt": "OOB (Out-of-Bag) score là gì và hữu ích cho việc gì?",
+      "options": [
+        "Score trên training set để đo overfit",
+        "Sample test được giữ riêng từ đầu và chỉ dùng một lần",
+        "Mỗi cây train trên ~63% bootstrap, ~37% OOB samples còn lại dùng để đánh giá; như CV miễn phí",
+        "Score khi dùng toàn bộ data train mọi cây"
+      ],
+      "answerIndex": 2,
+      "explanation": "Mỗi cây train trên ~63% bootstrap, ~37% OOB samples còn lại dùng để đánh giá — hữu ích như CV miễn phí, không tốn thêm data."
+    }
+  ]
+}

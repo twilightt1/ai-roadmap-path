@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Attention giải quyết bottleneck nào của Seq2Seq truyền thống?",
+      "options": [
+        "Seq2Seq không có bottleneck — attention chỉ tăng tốc",
+        "Bottleneck nén toàn input vào một context vector duy nhất",
+        "Bottleneck do quá nhiều layer",
+        "Bottleneck do không dùng activation function"
+      ],
+      "answerIndex": 1,
+      "explanation": "Seq2Seq nén toàn bộ input vào một context vector duy nhất cho decoder — attention cho phép decoder nhìn trực tiếp tất cả encoder states."
+    },
+    {
+      "id": "q2",
+      "prompt": "Attention weights được tạo bằng hàm gì?",
+      "options": [
+        "Sigmoid trên scores",
+        "Tanh trên scores",
+        "Softmax trên scores",
+        "ReLU trên scores"
+      ],
+      "answerIndex": 2,
+      "explanation": "Softmax trên scores cho ra phân phối trọng số (tổng = 1) thể hiện mức chú ý của mỗi input."
+    },
+    {
+      "id": "q3",
+      "prompt": "Trong Query/Key/Value, 'Value' mang ý nghĩa gì?",
+      "options": [
+        "Thông tin dùng để match",
+        "Thông tin tìm kiếm",
+        "Tham số cần học",
+        "Thông tin được truyền đi"
+      ],
+      "answerIndex": 3,
+      "explanation": "Query tìm thông tin, key là thứ để match, value là thông tin thực sự được truyền đi (weighted sum)."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao scaled dot-product chia cho √d_k?",
+      "options": [
+        "Giữ scale dot product ổn định, tránh softmax quá sắc",
+        "Để giảm số phép tính",
+        "Để chuẩn hóa về [0,1]",
+        "Để tránh gradient vanishing"
+      ],
+      "answerIndex": 0,
+      "explanation": "Khi d_k lớn, dot product có thể rất lớn → softmax cực sắc (gradient gần 0). Chia √d_k giữ score ổn định."
+    },
+    {
+      "id": "q5",
+      "prompt": "Self-attention khác Seq2Seq attention ở điểm gì?",
+      "options": [
+        "Self-attention không dùng weight",
+        "Self-attention tokens trong cùng sequence chú ý lẫn nhau; Seq2Seq attention decoder chú ý encoder states",
+        "Self-attention chỉ dùng cho generation",
+        "Self-attention không cần softmax"
+      ],
+      "answerIndex": 1,
+      "explanation": "Self-attention: các token trong cùng một sequence chú ý lẫn nhau. Seq2Seq attention: decoder chú ý tới encoder states."
+    }
+  ]
+}

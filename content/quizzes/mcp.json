@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Trong MCP, resource khác tool ở điểm nào?",
+      "options": [
+        "Resource là action; tool là dữ liệu đọc",
+        "Resource là dữ liệu đọc; tool là action/function thực thi",
+        "Cả hai đều là action",
+        "Cả hai đều là dữ liệu đọc"
+      ],
+      "answerIndex": 1,
+      "explanation": "Resource là dữ liệu đọc (read-only data); tool là action/function thực thi có thể có side effects — ranh giới quan trọng cho security."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao tool `execute_sql(query)` do model sinh raw SQL là nguy hiểm?",
+      "options": [
+        "SQL luôn chậm",
+        "SQL không hỗ trợ transactions",
+        "Model có thể tạo raw SQL sai/độc hại, leak data hoặc mutate DB",
+        "Tool này không tốn cost"
+      ],
+      "answerIndex": 2,
+      "explanation": "Model có thể tạo raw SQL sai hoặc độc hại (SQL injection) gây leak data hoặc mutate DB — nên hạn chế capability và validate chặt."
+    },
+    {
+      "id": "q3",
+      "prompt": "Confused deputy problem trong MCP/tool use là gì?",
+      "options": [
+        "Hai agent nói chuyện với nhau",
+        "Tool trả kết quả sai format",
+        "Model quên context window",
+        "Agent dùng quyền của hệ thống/user để làm action không nên được phép"
+      ],
+      "answerIndex": 3,
+      "explanation": "Confused deputy xảy ra khi agent dùng quyền của hệ thống/user để thực hiện action mà bản thân agent/user không nên được phép — cần enforce authz riêng."
+    },
+    {
+      "id": "q4",
+      "prompt": "MCP có thay thế authorization (authz) trong app không?",
+      "options": [
+        "Không; server/app vẫn phải enforce authz",
+        "Có, MCP tự enforce authz",
+        "Có, nếu dùng read-only tools",
+        "Có, nhưng chỉ cho multi-tenant"
+      ],
+      "answerIndex": 0,
+      "explanation": "MCP chuẩn hóa connectivity nhưng không tự bảo mật — server/app vẫn phải enforce authz, least privilege, ACL và audit."
+    },
+    {
+      "id": "q5",
+      "prompt": "Tool result poisoning là gì?",
+      "options": [
+        "Tool trả status code sai",
+        "Tool/API trả nội dung chứa instruction độc hại mà model có thể follow",
+        "Tool chạy quá chậm",
+        "Tool không có schema"
+      ],
+      "answerIndex": 1,
+      "explanation": "Tool result poisoning xảy ra khi tool/API trả nội dung chứa instruction độc hại (indirect prompt injection) mà model có thể follow — tool results cũng là untrusted content."
+    }
+  ]
+}

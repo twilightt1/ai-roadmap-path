@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Routing được mô hình hóa là constrained optimization nghĩa là gì?",
+      "options": [
+        "Chọn model rẻ nhất bất chấp quality",
+        "Chọn model nhanh nhất bất chấp compliance",
+        "Chọn model tối đa quality kỳ vọng dưới ràng buộc cost, latency, compliance, context, capabilities",
+        "Luôn dùng cùng một model"
+      ],
+      "answerIndex": 2,
+      "explanation": "Router là constrained optimizer — tối đa quality kỳ vọng dưới hard constraints (cost, latency, compliance, context, capabilities), không chỉ if/else theo task label."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao classifier router cần confidence threshold?",
+      "options": [
+        "Để luôn chọn model đắt nhất",
+        "Để loại bỏ cần logging",
+        "Để giảm số model trong registry",
+        "Để xử lý uncertainty; confidence thấp nên route safe/default hoặc ask clarification"
+      ],
+      "answerIndex": 3,
+      "explanation": "Confidence threshold xử lý uncertainty — khi confidence thấp, router nên route tới safe/default model hoặc ask clarification thay vì guess mù quáng."
+    },
+    {
+      "id": "q3",
+      "prompt": "Shadow routing khác A/B routing ở đâu?",
+      "options": [
+        "Shadow không trả output model mới cho user; A/B trả output thật cho một phần traffic",
+        "Shadow trả output model mới cho user; A/B thì không",
+        "Hai phương pháp giống hệt nhau",
+        "Shadow chỉ dùng cho training"
+      ],
+      "answerIndex": 0,
+      "explanation": "Shadow routing chạy model mới song song nhưng không trả output cho user (chỉ collect metrics); A/B trả output thật cho một phần traffic — rủi ro cao hơn."
+    },
+    {
+      "id": "q4",
+      "prompt": "Bandit routing phù hợp trong điều kiện nào?",
+      "options": [
+        "Low-volume, high-risk, không có feedback",
+        "High-volume, low-risk, feedback rõ, có guardrails",
+        "Khi compliance là hard constraint",
+        "Khi không có eval scores"
+      ],
+      "answerIndex": 1,
+      "explanation": "Bandit routing phù hợp khi high-volume, low-risk, feedback rõ và có guardrails — đủ data để học mà rủi ro sai thấp."
+    },
+    {
+      "id": "q5",
+      "prompt": "Giới hạn của rule-based router khi tasks đa dạng là gì?",
+      "options": [
+        "Rules tự học từ performance",
+        "Rules không tốn compute",
+        "Rules phình to, conflict khó quản lý, không tự học, brittle khi tasks đa dạng",
+        "Rules không cần logging"
+      ],
+      "answerIndex": 2,
+      "explanation": "Rule-based router khi tasks đa dạng làm rules phình to, conflict khó quản lý, không tự học từ performance và brittle — cần chuyển sang learned/calibrated router."
+    }
+  ]
+}

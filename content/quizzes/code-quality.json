@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Tại sao phải dùng venv/conda cho mỗi project?",
+      "options": [
+        "Để cô lập dependency từng project, tránh xung đột phiên bản",
+        "Để code chạy nhanh hơn",
+        "Để commit code lên git dễ hơn",
+        "Để không cần requirements.txt nữa"
+      ],
+      "answerIndex": 0,
+      "explanation": "Mỗi project cần môi trường riêng cô lập dependency, tránh xung đột. Bài nhắc đừng cài package global và luôn thêm .venv vào .gitignore."
+    },
+    {
+      "id": "q2",
+      "prompt": "field(default_factory=list) trong dataclass giải quyết vấn đề gì?",
+      "options": [
+        "Tăng tốc độ khởi tạo object",
+        "Tránh bug mutable default — list chia sẻ giữa các instance",
+        "Ẩn field khỏi repr khi in object",
+        "Đặt field là immutable không sửa được"
+      ],
+      "answerIndex": 1,
+      "explanation": "Dùng list literal làm default khiến mọi instance chia sẻ cùng list. field(default_factory=list) tạo list mới cho mỗi instance — giải quyết đúng vấn đề mutable default."
+    },
+    {
+      "id": "q3",
+      "prompt": "Khác biệt giữa TypedDict, dataclass, và Pydantic theo bài là gì?",
+      "options": [
+        "Cả ba giống hệt nhau, chỉ khác tên",
+        "TypedDict validate runtime, dataclass không, Pydantic chỉ cho dict",
+        "TypedDict cho dict, dataclass cho object có method, Pydantic validate runtime + serialize JSON",
+        "dataclass serialize JSON, Pydantic không validate runtime"
+      ],
+      "answerIndex": 2,
+      "explanation": "TypedDict là kiểu cho dict (input/output API JSON). dataclass là object Python có method, mutable. Pydantic (BaseModel) = dataclass + validate runtime + serialize JSON, phổ biến trong FastAPI/LangChain."
+    },
+    {
+      "id": "q4",
+      "prompt": "Theo bài, pattern test cho phần gọi LLM thật là gì?",
+      "options": [
+        "Luôn gọi LLM thật để test end-to-end",
+        "Chỉ test phần gọi LLM khi deploy production",
+        "Bỏ qua không test phần gọi LLM",
+        "Mock thay vì gọi thật — test nhanh, rẻ, không tốn API"
+      ],
+      "answerIndex": 3,
+      "explanation": "Bài khuyên tách logic thuần khỏi I/O: test hàm thuần (chunk_text, parse, metric) dễ, còn phần gọi LLM thật thì mock để test nhanh, rẻ, không tốn API."
+    },
+    {
+      "id": "q5",
+      "prompt": "Ruff thay thế cặp công cụ nào và có ưu điểm gì theo bài?",
+      "options": [
+        "Thay flake8 + black, nhanh hơn 10-100×",
+        "Thay pytest, chậm hơn nhưng chi tiết hơn",
+        "Thay mypy, chạy type check",
+        "Thay pip, cài package nhanh hơn"
+      ],
+      "answerIndex": 0,
+      "explanation": "Ruff là linter + formatter hiện đại thay flake8 + black, nhanh 10-100×. Nó bắt import không dùng, biến không dùng, lỗi cú pháp tiềm ẩn, vi phạm style."
+    }
+  ]
+}

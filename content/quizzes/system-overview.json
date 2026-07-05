@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao Capstone nên dùng `content/phase-18` trong repo này?",
+      "options": [
+        "Vì phase-18 có nhiều code nhất trong repo",
+        "Vì `lib/content.ts` load theo `content/phase-${phaseNumber}/${topicId}.mdx`, và Capstone có `number: 18`",
+        "Vì chỉ phase-18 hỗ trợ TypeScript",
+        "Vì phase-18 không cần build gì thêm"
+      ],
+      "answerIndex": 1,
+      "explanation": "`lib/content.ts` load theo `content/phase-${phaseNumber}/${topicId}.mdx`, và Capstone có `number: 18` nên dùng `content/phase-18` để content loader hoạt động đúng."
+    },
+    {
+      "id": "q2",
+      "prompt": "Control plane trong AI platform quản lý những gì?",
+      "options": [
+        "Chỉ quản lý user accounts và login",
+        "Chỉ quản lý database connection pool",
+        "Policies, routing, model registry, prompt versions, cost tracking, safety, experiments và observability controls",
+        "Chỉ quản lý frontend UI components"
+      ],
+      "answerIndex": 2,
+      "explanation": "Control plane quản lý policies, routing, model registry, prompt versions, cost tracking, safety, experiments và observability controls — là não bộ của platform."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao tenant context phải xuất hiện trong cache keys và vector filters?",
+      "options": [
+        "Để tăng throughput của hệ thống",
+        "Để giảm VRAM sử dụng",
+        "Tenant context không cần nằm trong cache keys",
+        "Nếu thiếu tenant context, cache/vector retrieval có thể trả dữ liệu cross-tenant hoặc tính cost sai"
+      ],
+      "answerIndex": 3,
+      "explanation": "Nếu thiếu tenant context trong cache keys và vector filters, hệ thống có thể trả dữ liệu cross-tenant (vi phạm isolation) hoặc tính cost sai cho tenant."
+    },
+    {
+      "id": "q4",
+      "prompt": "Một Capstone deliverable production-grade khác chatbot demo ở điểm nào?",
+      "options": [
+        "Có NFRs, multi-tenancy, routing/fallback, RAG, observability, cost tracking, safety, audit, deployment và runbooks",
+        "Có UI đẹp hơn chatbot demo",
+        "Chỉ khác về kích thước model được dùng",
+        "Production-grade luôn chạy nhanh hơn demo"
+      ],
+      "answerIndex": 0,
+      "explanation": "Deliverable production-grade có NFRs, multi-tenancy, routing/fallback, RAG, observability, cost tracking, safety, audit, deployment và runbooks — nhiều hơn hẳn một chatbot demo."
+    },
+    {
+      "id": "q5",
+      "prompt": "Safety gateway nên nằm ở đâu trong architecture?",
+      "options": [
+        "Chỉ nằm ở model provider bên trong",
+        "Ở gateway/control plane chung, trước và sau mọi model/RAG/agent/fallback path",
+        "Chỉ nằm ở frontend client",
+        "Safety gateway không cần thiết trong platform"
+      ],
+      "answerIndex": 1,
+      "explanation": "Safety gateway nên nằm ở gateway/control plane chung, áp dụng trước và sau mọi model/RAG/agent/fallback path để đảm bảo không path nào bypass safety."
+    }
+  ]
+}

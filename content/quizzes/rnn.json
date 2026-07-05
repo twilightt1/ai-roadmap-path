@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Hidden state trong RNN lưu gì?",
+      "options": [
+        "Token đầu vào hiện tại",
+        "Tóm tắt thông tin quá khứ đã đọc",
+        "Weight của layer kế tiếp",
+        "Gradient cho backprop"
+      ],
+      "answerIndex": 1,
+      "explanation": "Hidden state là memory của RNN, tóm tắt thông tin quá khứ đã đọc qua các time step."
+    },
+    {
+      "id": "q2",
+      "prompt": "LSTM có những gate nào?",
+      "options": [
+        "Input, output, attention gate",
+        "Encoder, decoder, attention gate",
+        "Forget, input, output gate",
+        "Reset, update, output gate"
+      ],
+      "answerIndex": 2,
+      "explanation": "LSTM có ba gate: forget (quên), input (ghi mới), output (đọc ra) — kiểm soát memory cell."
+    },
+    {
+      "id": "q3",
+      "prompt": "GRU khác LSTM ra sao?",
+      "options": [
+        "Nhiều gate hơn, có cell state riêng",
+        "Không dùng gate nào",
+        "Cùng số gate nhưng nhiều parameter hơn",
+        "Ít gate hơn, không có cell state riêng, ít parameter hơn"
+      ],
+      "answerIndex": 3,
+      "explanation": "GRU ít gate hơn (reset, update), không có cell state riêng nên ít parameter hơn LSTM."
+    },
+    {
+      "id": "q4",
+      "prompt": "Bidirectional RNN làm output hidden dim thay đổi thế nào?",
+      "options": [
+        "Hidden dim thường nhân đôi vì concat forward/backward",
+        "Hidden dim không đổi vì 2 hướng chia sẻ weight",
+        "Hidden dim bằng số layer",
+        "Hidden dim giảm một nửa vì chia cho 2 hướng"
+      ],
+      "answerIndex": 0,
+      "explanation": "Bidirectional RNN concat hidden state của forward và backward, nên hidden dim thường nhân đôi."
+    },
+    {
+      "id": "q5",
+      "prompt": "Beam search khác greedy decoding thế nào?",
+      "options": [
+        "Cả hai đều giữ top-k candidates",
+        "Greedy giữ 1 candidate tốt nhất mỗi bước; beam giữ top-k candidates",
+        "Beam giữ 1 candidate, greedy giữ top-k",
+        "Greedy luôn cho kết quả tốt hơn beam"
+      ],
+      "answerIndex": 1,
+      "explanation": "Greedy chỉ giữ 1 candidate tốt nhất mỗi bước; beam search giữ top-k candidates nên tránh được lỗi cục bộ."
+    }
+  ]
+}

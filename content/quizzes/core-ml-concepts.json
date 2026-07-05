@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vai trò chính của validation set khác gì so với test set?",
+      "options": [
+        "Validation đánh giá cuối cùng, test chọn hyperparameters",
+        "Validation và test là hai tên gọi của cùng một tập",
+        "Cả hai đều dùng để train model",
+        "Validation chọn model/hyperparameters/threshold, test đánh giá cuối không dùng trong lựa chọn"
+      ],
+      "answerIndex": 3,
+      "explanation": "Train học parameters; Validation chọn model/hyperparameters/threshold; Test đánh giá cuối, không tham gia vào lựa chọn."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao accuracy không đủ khi dữ liệu bị imbalance?",
+      "options": [
+        "Majority-class baseline có thể accuracy cao nhưng bỏ sót minority (vd luôn đoán 'not spam' vẫn 95%)",
+        "Imbalance làm accuracy luôn bằng 0%",
+        "Accuracy không tính được trên dữ liệu imbalance",
+        "Accuracy chỉ dùng được cho bài toán regression"
+      ],
+      "answerIndex": 0,
+      "explanation": "Khi imbalance (vd spam 5%), luôn đoán majority class cho accuracy 95% nhưng vô dụng — bỏ sót toàn bộ minority."
+    },
+    {
+      "id": "q3",
+      "prompt": "Recall trả lời câu hỏi gì?",
+      "options": [
+        "Trong các prediction positive, bao nhiêu là positive thật",
+        "Trong các positive thật, model bắt được bao nhiêu",
+        "Tỉ lệ prediction đúng trên toàn bộ mẫu",
+        "Tỉ lệ false positive trên tổng negative"
+      ],
+      "answerIndex": 1,
+      "explanation": "Precision: trong prediction positive, bao nhiêu positive thật. Recall: trong positive thật, model bắt bao nhiêu."
+    },
+    {
+      "id": "q4",
+      "prompt": "Khi nào nên chọn F2 thay vì F1?",
+      "options": [
+        "Khi false positive đắt hơn false negative",
+        "Khi cần cân bằng precision và recall",
+        "Khi miss positive đắt hơn false alarm (vd bệnh nặng)",
+        "Khi dữ liệu hoàn toàn cân bằng"
+      ],
+      "answerIndex": 2,
+      "explanation": "F2 cho recall trọng số gấp 4 precision — ưu tiên bắt positive. Dùng khi bỏ sót positive (miss) đắt hơn false alarm."
+    },
+    {
+      "id": "q5",
+      "prompt": "Train score cao nhưng validation score thấp — model đang bị gì?",
+      "options": [
+        "Underfitting (high bias)",
+        "Calibration sai",
+        "Data leakage",
+        "Overfitting (high variance)"
+      ],
+      "answerIndex": 3,
+      "explanation": "Train cao + val thấp = overfitting/high variance. Xử lý: regularization, thêm data, giảm complexity, early stopping, ensemble."
+    }
+  ]
+}

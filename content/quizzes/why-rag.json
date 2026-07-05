@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Parametric memory khác external memory ở đâu?",
+      "options": [
+        "Parametric nằm trong weights; external nằm trong docs/databases/tools",
+        "Parametric nằm trong docs; external nằm trong weights",
+        "Cả hai đều trong weights",
+        "Cả hai đều ngoài model"
+      ],
+      "answerIndex": 0,
+      "explanation": "Parametric memory nằm trong weights của model (train vào), còn external memory nằm trong docs/databases/tools được truy xuất tại inference time — RAG dùng external memory."
+    },
+    {
+      "id": "q2",
+      "prompt": "Khi nào nên dùng RAG, khi nào nên dùng fine-tuning?",
+      "options": [
+        "RAG cho behavior/style; fine-tuning cho facts",
+        "RAG cho facts/evidence; fine-tuning cho behavior/style/format/domain adaptation",
+        "Luôn dùng fine-tuning",
+        "Hai kỹ thuật thay thế hoàn toàn nhau"
+      ],
+      "answerIndex": 1,
+      "explanation": "RAG phù hợp cho facts/evidence cập nhật được; fine-tuning phù hợp cho behavior, style, format hoặc domain adaptation — hai kỹ thuật giải quyết vấn đề khác nhau, thường kết hợp."
+    },
+    {
+      "id": "q3",
+      "prompt": "Long-context window có thay thế hoàn toàn RAG không?",
+      "options": [
+        "Có, long context luôn rẻ hơn RAG",
+        "Có, long context không có limitation",
+        "Không hoàn toàn; long context đắt, nhiễu và vẫn có lost-in-the-middle",
+        "RAG không cần khi có long context"
+      ],
+      "answerIndex": 2,
+      "explanation": "Long context đắt (cost token cao), nhiễu và vẫn bị lost-in-the-middle — không thay thế hoàn toàn RAG, đặc biệt với corpus lớn hoặc fresh data."
+    },
+    {
+      "id": "q4",
+      "prompt": "Retrieval miss ảnh hưởng đến answer như thế nào?",
+      "options": [
+        "Answer vẫn grounded nếu model mạnh",
+        "Answer tự động đúng nhờ training",
+        "Retrieval miss không ảnh hưởng answer",
+        "Evidence không vào context, generator khó trả lời grounded"
+      ],
+      "answerIndex": 3,
+      "explanation": "Retrieval quality giới hạn answer quality — khi evidence không vào context, generator thiếu cơ sở để trả lời grounded, dễ hallucinate."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao citations trong RAG cần validation?",
+      "options": [
+        "Model có thể fabricate citation hoặc cite chunk không support claim",
+        "Model luôn cite đúng",
+        "Citation không cần validation vì có metadata",
+        "Validation làm tăng latency không đáng"
+      ],
+      "answerIndex": 0,
+      "explanation": "Model có thể fabricate citation (bịa nguồn) hoặc cite chunk không thực sự support claim — cần validate citation vs chunk để giữ trustworthiness."
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao AdamW làm Full Fine-Tuning tốn VRAM hơn inference rất nhiều?",
+      "options": [
+        "Vì AdamW tự động nhân đôi số layer khi training",
+        "Vì AdamW không hỗ trợ mixed precision nên phải dùng FP32 cho mọi tính toán",
+        "Vì training cần lưu weights, gradients, optimizer states và activations; AdamW có hai trạng thái optimizer FP32 cho mỗi tham số",
+        "Vì AdamW chỉ chạy được trên CPU nên phải copy weights sang GPU mỗi bước"
+      ],
+      "answerIndex": 2,
+      "explanation": "Training cần lưu weights, gradients, optimizer states và activations; AdamW thêm hai trạng thái optimizer FP32 cho mỗi tham số, khiến VRAM cao hơn inference nhiều."
+    },
+    {
+      "id": "q2",
+      "prompt": "Loss masking sai có thể gây lỗi gì?",
+      "options": [
+        "Model train nhanh hơn nhưng mất khả năng inference",
+        "Model tự động giảm learning rate về 0",
+        "Loss masking sai chỉ làm logs khó đọc, không ảnh hưởng model",
+        "Model có thể học copy prompt, sinh role tokens, không dừng hoặc tối ưu loss không liên quan đến assistant response"
+      ],
+      "answerIndex": 3,
+      "explanation": "Khi loss masking sai, model có thể học copy prompt, sinh role tokens, không dừng hoặc tối ưu loss không liên quan đến assistant response."
+    },
+    {
+      "id": "q3",
+      "prompt": "Effective batch size được tính như thế nào?",
+      "options": [
+        "per_device_batch_size * num_gpus * gradient_accumulation_steps",
+        "per_device_batch_size + num_gpus + gradient_accumulation_steps",
+        "num_gpus / per_device_batch_size * gradient_accumulation_steps",
+        "per_device_batch_size * learning_rate / num_gpus"
+      ],
+      "answerIndex": 0,
+      "explanation": "Effective batch size = per_device_batch_size × num_gpus × gradient_accumulation_steps, kết hợp batch trên mỗi GPU, số GPU và số bước tích lũy gradient."
+    },
+    {
+      "id": "q4",
+      "prompt": "Khi nào nên cân nhắc ZeRO/FSDP?",
+      "options": [
+        "Khi muốn tăng learning rate lên mức cao nhất",
+        "Khi full training không fit trên một GPU hoặc cần shard weights/gradients/optimizer states cho multi-GPU",
+        "Khi muốn bỏ qua hoàn toàn việc lưu checkpoint",
+        "Khi model nhỏ và chạy dễ trên một GPU"
+      ],
+      "answerIndex": 1,
+      "explanation": "ZeRO/FSDP nên dùng khi full training không fit trên một GPU hoặc cần shard weights/gradients/optimizer states across multi-GPU."
+    },
+    {
+      "id": "q5",
+      "prompt": "Catastrophic forgetting nên được phát hiện bằng loại eval nào?",
+      "options": [
+        "Chỉ cần eval task chuyên biệt mà model mới fine-tune",
+        "Chỉ cần theo dõi training loss",
+        "Regression eval trên năng lực tổng quát, safety eval và domain holdout eval, không chỉ task eval chuyên biệt",
+        "Đo bằng số parameter thay đổi sau training"
+      ],
+      "answerIndex": 2,
+      "explanation": "Catastrophic forgetting cần phát hiện qua regression eval trên năng lực tổng quát, safety eval và domain holdout eval, chứ không chỉ task eval chuyên biệt."
+    }
+  ]
+}

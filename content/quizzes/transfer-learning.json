@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Feature extraction khác fine-tuning thế nào?",
+      "options": [
+        "Cả hai đều cập nhật toàn bộ backbone",
+        "Feature extraction cập nhật toàn bộ backbone; fine-tuning freeze backbone",
+        "Cả hai đều freeze backbone hoàn toàn",
+        "Feature extraction freeze backbone; fine-tuning cập nhật một phần/toàn bộ backbone"
+      ],
+      "answerIndex": 3,
+      "explanation": "Feature extraction freeze backbone, chỉ train head mới; fine-tuning cập nhật một phần hoặc toàn bộ backbone."
+    },
+    {
+      "id": "q2",
+      "prompt": "Catastrophic forgetting là gì?",
+      "options": [
+        "Model quên kiến thức pretrained do update quá mạnh trên data nhỏ/hẹp",
+        "Model quên cách khởi tạo weight",
+        "Model không thể nhớ label train",
+        "Model quên số layer của chính nó"
+      ],
+      "answerIndex": 0,
+      "explanation": "Catastrophic forgetting xảy ra khi model quên kiến thức pretrained do update quá mạnh trên data nhỏ/hẹp."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao learning rate fine-tune thường nhỏ?",
+      "options": [
+        "Để tăng tốc convergence",
+        "Để tránh phá representation đã học",
+        "Để tăng regularization L2",
+        "Để giảm batch size"
+      ],
+      "answerIndex": 1,
+      "explanation": "LR nhỏ tránh update quá mạnh phá vỡ representation đã học từ pretraining (tránh catastrophic forgetting)."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao tokenizer phải khớp với pretrained model?",
+      "options": [
+        "Tokenizer quyết định số layer của model",
+        "Tokenizer ảnh hưởng learning rate",
+        "Embedding matrix gắn với token IDs của tokenizer đó",
+        "Tokenizer phải cùng ngôn ngữ với dataset thôi"
+      ],
+      "answerIndex": 2,
+      "explanation": "Embedding matrix gắn cố định với token IDs của tokenizer gốc; dùng tokenizer khác sẽ map sai embedding."
+    },
+    {
+      "id": "q5",
+      "prompt": "Khi nào nên freeze backbone khi transfer learning?",
+      "options": [
+        "Khi backbone quá chậm",
+        "Dataset rất lớn và domain rất khác pretrained",
+        "Khi muốn train lại từ scratch",
+        "Dataset nhỏ hoặc domain gần pretrained"
+      ],
+      "answerIndex": 3,
+      "explanation": "Freeze backbone hợp khi dataset nhỏ hoặc domain gần pretrained — tránh overfit và catastrophic forgetting."
+    }
+  ]
+}

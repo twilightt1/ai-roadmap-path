@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "LayerNorm khác BatchNorm ở điểm quan trọng nào?",
+      "options": [
+        "LayerNorm chuẩn hóa theo batch statistics cho từng feature/channel",
+        "LayerNorm và BatchNorm giống hệt nhau",
+        "LayerNorm chuẩn hóa theo feature của từng sample, không phụ thuộc batch",
+        "LayerNorm chỉ dùng cho CNN, BatchNorm cho transformer"
+      ],
+      "answerIndex": 2,
+      "explanation": "LayerNorm chuẩn hóa theo feature của từng sample, không phụ thuộc batch; BatchNorm chuẩn hóa theo batch statistics."
+    },
+    {
+      "id": "q2",
+      "prompt": "Dropout bật/tắt theo mode nào?",
+      "options": [
+        "Bật khi model.eval(), tắt khi model.train()",
+        "Luôn bật ở cả train và eval",
+        "Dropout không phụ thuộc mode",
+        "Bật khi model.train(), tắt khi model.eval()"
+      ],
+      "answerIndex": 3,
+      "explanation": "Dropout bật khi `model.train()` (regularization) và tắt khi `model.eval()` (inference ổn định)."
+    },
+    {
+      "id": "q3",
+      "prompt": "Residual connection giúp gì cho gradient?",
+      "options": [
+        "Tạo đường đi tắt cho gradient và identity mapping",
+        "Tăng learning rate tự động",
+        "Xóa gradient nhỏ trước khi update",
+        "Chuẩn hóa gradient về [0,1]"
+      ],
+      "answerIndex": 0,
+      "explanation": "Residual connection tạo đường đi tắt cho gradient và identity mapping, giúp gradient flow qua mạng sâu."
+    },
+    {
+      "id": "q4",
+      "prompt": "Gradient clipping đặt ở đâu trong training loop?",
+      "options": [
+        "Trước forward pass",
+        "Sau loss.backward() và trước optimizer.step()",
+        "Ngay khi khởi tạo optimizer",
+        "Sau optimizer.step() và trước epoch kế tiếp"
+      ],
+      "answerIndex": 1,
+      "explanation": "Gradient clipping đặt sau `loss.backward()` (đã có gradient) và trước `optimizer.step()` (cập nhật parameter)."
+    },
+    {
+      "id": "q5",
+      "prompt": "Quên `model.eval()` trước validation gây hậu quả gì?",
+      "options": [
+        "Model tự động xóa weight",
+        "Loss luôn bằng 0",
+        "Dropout/BatchNorm hoạt động sai, metrics/inference không ổn định",
+        "Gradient không tính được"
+      ],
+      "answerIndex": 2,
+      "explanation": "Không gọi `model.eval()` khiến Dropout/BatchNorm vẫn ở chế độ train, metrics và inference không ổn định."
+    }
+  ]
+}

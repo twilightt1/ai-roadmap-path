@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao các cột như `tenant_id`, `feature`, `created_at` không nên chỉ nằm trong JSONB?",
+      "options": [
+        "Vì chúng thường dùng để filter/join/index; để trong cột thật giúp query nhanh hơn, rõ quyền truy cập hơn và dễ enforce constraint hơn",
+        "Vì JSONB không thể lưu các giá trị này",
+        "Vì JSONB luôn nhanh hơn cột thật",
+        "Vì cột thật không thể index được"
+      ],
+      "answerIndex": 0,
+      "explanation": "Các cột access control như `tenant_id`, `feature`, `created_at` thường dùng để filter/join/index; để trong cột thật giúp query nhanh, rõ quyền và dễ enforce constraint."
+    },
+    {
+      "id": "q2",
+      "prompt": "`ORDER BY random()` có vấn đề gì trên bảng lớn?",
+      "options": [
+        "Không có vấn đề gì vì random nhẹ",
+        "Database phải gán số ngẫu nhiên và sort rất nhiều dòng, có thể gây chậm hoặc nghẽn primary DB",
+        "Chỉ ảnh hưởng đến kết quả, không ảnh hưởng hiệu năng",
+        "Chỉ vấn đề khi bảng dưới 1,000 dòng"
+      ],
+      "answerIndex": 1,
+      "explanation": "`ORDER BY random()` bắt database gán số ngẫu nhiên và sort rất nhiều dòng, có thể gây chậm hoặc nghẽn primary DB — nên dùng sampling hiệu quả hơn."
+    },
+    {
+      "id": "q3",
+      "prompt": "Với pgvector, `<=>` biểu thị điều gì?",
+      "options": [
+        "L2 distance",
+        "Negative inner product",
+        "Cosine distance; giá trị nhỏ hơn nghĩa là vector gần hơn theo góc cosine",
+        "Dot product"
+      ],
+      "answerIndex": 2,
+      "explanation": "`<=>` là cosine distance; giá trị nhỏ hơn nghĩa là vector gần hơn theo góc cosine. (`<->` là L2, `<#>` là negative inner product.)"
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao embedding model change có thể gây lỗi dimension mismatch?",
+      "options": [
+        "Vì pgvector không hỗ trợ đổi model",
+        "Vì dimension mismatch chỉ xảy ra với L2 distance",
+        "Vì embedding model luôn cho cùng số chiều",
+        "Vì cột `vector(1536)` chỉ nhận vector đúng 1536 chiều; model mới 3072 chiều cần schema/table/version mới"
+      ],
+      "answerIndex": 3,
+      "explanation": "Cột `vector(1536)` chỉ nhận vector đúng 1536 chiều; model mới 3072 chiều cần schema, table hoặc version mới — gây lỗi dimension mismatch."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao vector search và metadata filtering nên nằm trong cùng SQL query?",
+      "options": [
+        "Vì nếu lấy top-k toàn cục rồi filter ở app layer, kết quả có thể leak tenant khác hoặc bỏ mất chunk đúng; filter security phải cùng nằm trong truy vấn retrieval",
+        "Vì tách ra app layer luôn nhanh hơn",
+        "Vì metadata filtering không quan trọng trong RAG",
+        "Vì SQL không hỗ trợ filter metadata"
+      ],
+      "answerIndex": 0,
+      "explanation": "Nếu lấy top-k toàn cục rồi filter ở app layer, kết quả có thể leak tenant khác hoặc bỏ mất chunk đúng — filter security phải cùng nằm trong truy vấn retrieval."
+    }
+  ]
+}

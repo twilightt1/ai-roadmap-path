@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "LLM đọc raw text hay token IDs?",
+      "options": [
+        "Token IDs",
+        "Raw text trực tiếp",
+        "Cả hai đều được",
+        "Chỉ đọc embedding vector"
+      ],
+      "answerIndex": 0,
+      "explanation": "LLM đọc token IDs, không đọc raw text trực tiếp — text được tokenize thành IDs trước khi vào model."
+    },
+    {
+      "id": "q2",
+      "prompt": "BPE merge những gì?",
+      "options": [
+        "Các từ hiếm xuất hiện ít lần",
+        "Các cặp ký tự/byte/subword xuất hiện thường xuyên",
+        "Các stopword phổ biến",
+        "Các embedding vector gần nhau"
+      ],
+      "answerIndex": 1,
+      "explanation": "BPE merge các cặp ký tự/byte/subword xuất hiện thường xuyên nhất, dần xây vocabulary từ các unit phổ biến."
+    },
+    {
+      "id": "q3",
+      "prompt": "WordPiece thường thấy trong model family nào?",
+      "options": [
+        "GPT-style models",
+        "LLaMA-family models",
+        "BERT-style models",
+        "T5-family models"
+      ],
+      "answerIndex": 2,
+      "explanation": "WordPiece thường thấy trong BERT-style models; GPT dùng BPE/byte-level BPE, T5/LLaMA dùng SentencePiece hoặc biến thể."
+    },
+    {
+      "id": "q4",
+      "prompt": "SentencePiece khác tokenizer phụ thuộc whitespace ở điểm nào?",
+      "options": [
+        "Phụ thuộc whitespace để tách từ",
+        "Chỉ hoạt động với tiếng Anh",
+        "Không hỗ trợ multilingual",
+        "Tokenize raw text trực tiếp và có ký hiệu biểu diễn space như `▁`"
+      ],
+      "answerIndex": 3,
+      "explanation": "SentencePiece tokenize raw text trực tiếp không phụ thuộc whitespace, và dùng ký hiệu như `▁` để biểu diễn space."
+    },
+    {
+      "id": "q5",
+      "prompt": "`attention_mask` dùng để làm gì?",
+      "options": [
+        "Phân biệt token thật và padding token",
+        "Tăng attention weight cho token quan trọng",
+        "Xóa token ít quan trọng khỏi vocabulary",
+        "Chuẩn hóa embedding vector"
+      ],
+      "answerIndex": 0,
+      "explanation": "`attention_mask` phân biệt token thật (1) và padding token (0), để model bỏ qua padding khi tính attention."
+    }
+  ]
+}

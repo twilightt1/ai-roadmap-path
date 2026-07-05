@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Experiment tracking khác gì với chỉ lưu checkpoint?",
+      "options": [
+        "Tracking chỉ lưu trọng số model, giống hệt checkpoint",
+        "Tracking lưu metadata, metrics, config, artifacts, eval report và lineage; checkpoint chỉ là trọng số model",
+        "Tracking thay thế hoàn toàn checkpoint",
+        "Checkpoint luôn đầy đủ hơn tracking"
+      ],
+      "answerIndex": 1,
+      "explanation": "Tracking lưu metadata, metrics, config, artifacts, eval report và lineage; checkpoint chỉ là trọng số model — tracking có thể audit được."
+    },
+    {
+      "id": "q2",
+      "prompt": "Vì sao dataset hash phải nằm trong run config?",
+      "options": [
+        "Để tăng tốc độ training",
+        "Để giảm kích thước metadata log",
+        "Để đảm bảo so sánh hợp lệ và reproduce đúng dữ liệu đã dùng",
+        "Để thay thế cho code commit hash"
+      ],
+      "answerIndex": 2,
+      "explanation": "Dataset hash trong run config đảm bảo so sánh hợp lệ giữa các run và reproduce đúng dữ liệu đã dùng."
+    },
+    {
+      "id": "q3",
+      "prompt": "Khi nào nên dùng MLflow self-host thay vì W&B SaaS?",
+      "options": [
+        "Khi muốn dashboard đẹp nhất có thể",
+        "Khi không quan tâm đến cost",
+        "Khi team rất nhỏ và không cần audit",
+        "Khi có yêu cầu bảo mật/on-prem/data residency hoặc không thể gửi metadata ra SaaS"
+      ],
+      "answerIndex": 3,
+      "explanation": "Nên dùng MLflow self-host khi có yêu cầu bảo mật, on-prem, data residency hoặc không thể gửi metadata ra SaaS như W&B."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao chỉ main process nên log metrics trong distributed training?",
+      "options": [
+        "Vì nếu mọi process cùng log, metrics bị duplicate và dashboard sai",
+        "Vì main process là process duy nhất có GPU",
+        "Vì worker process không có quyền ghi file",
+        "Vì log từ worker luôn sai thứ tự thời gian"
+      ],
+      "answerIndex": 0,
+      "explanation": "Nếu mọi process cùng log, metrics bị duplicate và dashboard sai — cần rank/process discipline, chỉ main process log."
+    },
+    {
+      "id": "q5",
+      "prompt": "Một run có eval loss thấp hơn nhưng latency cao hơn 2 lần — có nên tự động deploy không?",
+      "options": [
+        "Có, vì eval loss thấp luôn là tốt nhất",
+        "Không tự động; cần scorecard cân bằng quality, latency, cost, safety và regression",
+        "Có, vì latency không quan trọng trong production",
+        "Có, vì model mới luôn tốt hơn model cũ"
+      ],
+      "answerIndex": 1,
+      "explanation": "Không tự động deploy; cần scorecard cân bằng quality, latency, cost, safety và regression — loss chỉ là một tín hiệu."
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao prompt không phải là một deterministic program?",
+      "options": [
+        "Vì prompt luôn cho output giống nhau",
+        "Vì prompt không thể chứa logic",
+        "Vì LLM dự đoán token theo xác suất; prompt chỉ điều kiện hóa distribution",
+        "Vì API không hỗ trợ prompt"
+      ],
+      "answerIndex": 2,
+      "explanation": "LLM dự đoán token theo xác suất, prompt chỉ điều kiện hóa distribution — nên prompt là specification xác suất, không phải guarantee deterministic."
+    },
+    {
+      "id": "q2",
+      "prompt": "Self-consistency đổi quality lấy cái gì?",
+      "options": [
+        "Giảm cost và latency",
+        "Loại bỏ cần schema validation",
+        "Giảm số lượng examples cần thiết",
+        "Tăng cost/latency vì generate nhiều candidates"
+      ],
+      "answerIndex": 3,
+      "explanation": "Self-consistency generate nhiều candidates rồi chọn câu trả lời nhất quán — tăng quality nhưng tăng cost và latency."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao RAG prompt cần abstention rule ('tôi không biết')?",
+      "options": [
+        "Để model không bịa khi context không đủ evidence",
+        "Để model luôn trả lời ngắn",
+        "Để tăng số citation",
+        "Để giảm cost token"
+      ],
+      "answerIndex": 0,
+      "explanation": "Abstention rule buộc model từ chối thay vì bịa (hallucinate) khi context không đủ evidence — giữ groundedness của RAG."
+    },
+    {
+      "id": "q4",
+      "prompt": "Prompt overfitting là gì?",
+      "options": [
+        "Prompt quá dài vượt context window",
+        "Sửa prompt để thắng vài cases cụ thể nhưng kém generalization",
+        "Prompt dùng quá nhiều tokens",
+        "Prompt không có examples"
+      ],
+      "answerIndex": 1,
+      "explanation": "Prompt overfitting là việc tinh chỉnh prompt để thắng vài cases cụ thể nhưng làm prompt kém generalization trên cases mới."
+    },
+    {
+      "id": "q5",
+      "prompt": "Prompt injection indirect khác direct ở chỗ nào?",
+      "options": [
+        "Indirect đến từ user; direct đến từ docs",
+        "Indirect chỉ xảy ra trong training",
+        "Indirect nằm trong retrieved docs/web/tool results; direct đến từ user",
+        "Hai loại hoàn toàn giống nhau"
+      ],
+      "answerIndex": 2,
+      "explanation": "Direct injection đến trực tiếp từ user input; indirect injection ẩn trong retrieved docs, web content hoặc tool results mà model đọc vào."
+    }
+  ]
+}

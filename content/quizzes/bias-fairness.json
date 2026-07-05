@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Demographic parity đo điều gì?",
+      "options": [
+        "Độ chính xác tổng thể giữa các nhóm",
+        "Độ trễ latency khi serve từng nhóm",
+        "Số lượng parameter dùng cho từng nhóm",
+        "Selection rate giữa các nhóm có tương tự nhau không"
+      ],
+      "answerIndex": 3,
+      "explanation": "Demographic parity đo xem selection rate giữa các nhóm có tương tự nhau không, tức tỷ lệ được chọn có cân bằng giữa nhóm không."
+    },
+    {
+      "id": "q2",
+      "prompt": "Equalized odds yêu cầu những error rates nào cân bằng giữa các nhóm?",
+      "options": [
+        "True positive rate và false positive rate",
+        "Precision và recall",
+        "Accuracy và F1",
+        "Chỉ cần accuracy cân bằng"
+      ],
+      "answerIndex": 0,
+      "explanation": "Equalized odds yêu cầu true positive rate và false positive rate cân bằng giữa các nhóm, đảm bảo cả cơ hội đúng và sai đều công bằng."
+    },
+    {
+      "id": "q3",
+      "prompt": "Proxy bias là gì?",
+      "options": [
+        "Khi feature nhạy cảm trực tiếp được dùng làm input của model",
+        "Khi feature không nhạy cảm nhưng tương quan với protected attribute và tạo outcome lệch",
+        "Khi model hoàn toàn không có bias",
+        "Khi dữ liệu training quá ít để đánh giá"
+      ],
+      "answerIndex": 1,
+      "explanation": "Proxy bias xảy ra khi một feature không nhạy cảm nhưng tương quan với protected attribute (ví dụ ZIP code ↔ race), tạo ra outcome lệch."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao fairness metrics có thể xung đột với nhau?",
+      "options": [
+        "Vì chúng luôn đồng ý với nhau về định nghĩa",
+        "Vì fairness metrics không tồn tại thực sự",
+        "Vì các định nghĩa fairness khác nhau áp đặt ràng buộc khác nhau; trong nhiều phân phối dữ liệu không thể thỏa tất cả cùng lúc",
+        "Vì cần thu thập nhiều dữ liệu hơn là đủ"
+      ],
+      "answerIndex": 2,
+      "explanation": "Các định nghĩa fairness (demographic parity, equalized odds, calibration...) áp đặt ràng buộc khác nhau; trong nhiều phân phối dữ liệu không thể thỏa tất cả cùng lúc."
+    },
+    {
+      "id": "q5",
+      "prompt": "AI Fairness 360 và Fairlearn dùng để làm gì?",
+      "options": [
+        "Train model nhanh hơn trên GPU",
+        "Tăng độ chính xác tổng thể của model",
+        "Loại bỏ hoàn toàn bias trong mọi model",
+        "Hỗ trợ tính toán fairness metrics, audit disparity và một số mitigation algorithms"
+      ],
+      "answerIndex": 3,
+      "explanation": "AI Fairness 360 và Fairlearn là toolkit hỗ trợ tính fairness metrics, audit disparity giữa các nhóm và cung cấp một số mitigation algorithms."
+    }
+  ]
+}

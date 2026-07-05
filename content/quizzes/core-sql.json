@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao usage query cho AI logs gần như luôn cần filter theo thời gian?",
+      "options": [
+        "Vì bảng logs/token usage tăng rất nhanh; thiếu time filter có thể scan quá nhiều dữ liệu và làm dashboard chậm hoặc đắt",
+        "Vì logs chỉ lưu được 24 giờ",
+        "Vì time filter làm query chậm hơn",
+        "Vì AI logs không có cột thời gian"
+      ],
+      "answerIndex": 0,
+      "explanation": "Bảng logs/token usage tăng rất nhanh; thiếu time filter có thể scan quá nhiều dữ liệu, làm dashboard chậm hoặc đắt — luôn filter theo thời gian."
+    },
+    {
+      "id": "q2",
+      "prompt": "`COUNT(*)` khác gì `COUNT(error_code)` khi tính error rate?",
+      "options": [
+        "Cả hai đều chỉ đếm dòng có error code không null",
+        "`COUNT(*)` đếm mọi dòng, còn `COUNT(error_code)` chỉ đếm dòng có error code không null; error rate cần error count chia total count",
+        "`COUNT(*)` luôn nhỏ hơn `COUNT(error_code)`",
+        "Không có khác biệt giữa hai hàm"
+      ],
+      "answerIndex": 1,
+      "explanation": "`COUNT(*)` đếm mọi dòng, còn `COUNT(error_code)` chỉ đếm dòng có error code không null — error rate thường cần error count chia cho total count."
+    },
+    {
+      "id": "q3",
+      "prompt": "Khi nào nên dùng `HAVING` thay vì `WHERE`?",
+      "options": [
+        "Khi muốn lọc dòng trước khi aggregate",
+        "`HAVING` và `WHERE` hoàn toàn thay thế được cho nhau",
+        "Dùng `HAVING` để lọc kết quả sau khi aggregate, ví dụ `HAVING SUM(cost_usd) > 50`",
+        "`HAVING` chỉ dùng với SELECT mà không có GROUP BY"
+      ],
+      "answerIndex": 2,
+      "explanation": "Dùng `HAVING` để lọc kết quả sau khi aggregate, ví dụ `HAVING SUM(cost_usd) > 50` — `WHERE` lọc trước khi gom nhóm."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao join một-nhiều có thể làm dashboard cost sai?",
+      "options": [
+        "Vì join một-nhiều luôn làm giảm số dòng",
+        "Vì join một-nhiều không ảnh hưởng đến tổng chi phí",
+        "Vì join một-nhiều chỉ dùng được với INNER JOIN",
+        "Vì một dòng cost có thể bị lặp nhiều lần khi join sang bảng có nhiều dòng liên quan, làm tổng chi phí bị nhân đôi hoặc hơn"
+      ],
+      "answerIndex": 3,
+      "explanation": "Một dòng cost có thể bị lặp nhiều lần khi join sang bảng có nhiều dòng liên quan, làm tổng chi phí bị nhân đôi hoặc hơn — cẩn thận với fan-out."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao billing query không nên chỉ tính `status = 'success'`?",
+      "options": [
+        "Vì failed/timeout requests vẫn có thể bị provider tính tiền; billing nên dựa vào `cost_usd`/invoice và status chỉ là thông tin reliability",
+        "Vì status không quan trọng trong billing",
+        "Vì failed request không bao giờ tốn tiền",
+        "Vì `status = 'success'` luôn cho tổng đúng"
+      ],
+      "answerIndex": 0,
+      "explanation": "Failed/timeout requests vẫn có thể bị provider tính tiền; billing nên dựa vào `cost_usd`/invoice, status chỉ là thông tin reliability."
+    }
+  ]
+}

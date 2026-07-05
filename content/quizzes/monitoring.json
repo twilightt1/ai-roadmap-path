@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao HTTP 200 không đủ để đánh giá health của LLM app?",
+      "options": [
+        "Vì HTTP 200 luôn có nghĩa là câu trả lời đúng",
+        "Vì LLM app không bao giờ trả HTTP 200",
+        "Vì LLM có thể trả câu sai/hallucinated/unsafe dù request thành công về mặt HTTP",
+        "Vì HTTP 200 chỉ dùng cho non-AI service"
+      ],
+      "answerIndex": 2,
+      "explanation": "LLM có thể trả câu sai, hallucinated hoặc unsafe dù request thành công về mặt HTTP — cần traces, metrics, evals và feedback."
+    },
+    {
+      "id": "q2",
+      "prompt": "Traces khác metrics như thế nào trong observability?",
+      "options": [
+        "Traces và metrics là hai tên gọi của cùng một thứ",
+        "Traces chỉ dùng cho training, metrics chỉ dùng cho serving",
+        "Metrics luôn chi tiết hơn traces",
+        "Metrics là số tổng hợp theo thời gian; traces là đường đi chi tiết của từng request/span"
+      ],
+      "answerIndex": 3,
+      "explanation": "Metrics là số tổng hợp theo thời gian; traces là đường đi chi tiết của từng request/span — cả hai đều cần cho LLMOps."
+    },
+    {
+      "id": "q3",
+      "prompt": "Ba metric token/cost nào nên log cho mỗi request?",
+      "options": [
+        "Input tokens, output tokens, total cost hoặc model price-derived cost",
+        "Chỉ log total cost là đủ",
+        "Chỉ log số request, không cần token",
+        "GPU temperature, fan speed, power draw"
+      ],
+      "answerIndex": 0,
+      "explanation": "Mỗi request nên log input tokens, output tokens và total cost (hoặc model price-derived cost) để theo dõi chi phí và mức sử dụng."
+    },
+    {
+      "id": "q4",
+      "prompt": "Vì sao logging phải async trong LLM app?",
+      "options": [
+        "Để log nhiều dữ liệu hơn user path",
+        "Để observability vendor chậm/down không làm chậm hoặc sập user path",
+        "Vì sync logging luôn chính xác hơn async",
+        "Vì async logging chỉ dùng cho training"
+      ],
+      "answerIndex": 1,
+      "explanation": "Logging async đảm bảo observability vendor chậm hoặc down không làm chậm hoặc sập user path — bảo vệ trải nghiệm người dùng."
+    },
+    {
+      "id": "q5",
+      "prompt": "Privacy risk lớn nhất của LLM observability là gì?",
+      "options": [
+        "Logs chỉ chứa metadata nên không có rủi ro",
+        "Observability vendor tự động mã hóa mọi thứ",
+        "Prompt/output có thể chứa PII, secrets hoặc dữ liệu nhạy cảm và bị lưu nguyên văn",
+        "LLM không bao giờ lưu prompt vào logs"
+      ],
+      "answerIndex": 2,
+      "explanation": "Prompt/output có thể chứa PII, secrets hoặc dữ liệu nhạy cảm và bị lưu nguyên văn vào logs — cần mask PII, retention và access control."
+    }
+  ]
+}

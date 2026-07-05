@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "RAG giải quyết vấn đề gì của LLM theo bài?",
+      "options": [
+        "LLM có knowledge cutoff, không biết dữ liệu private",
+        "LLM hallucinate quá nhiều khi trả lời",
+        "LLM xử lý tiếng Việt kém",
+        "LLM trả lời quá chậm"
+      ],
+      "answerIndex": 0,
+      "explanation": "LLM có knowledge cutoff — không biết dữ liệu private. RAG (Embedding search + LLM) là cách phổ biến nhất để LLM truy cập kiến thức riêng."
+    },
+    {
+      "id": "q2",
+      "prompt": "Theo bài, AI Agent được cấu tạo từ những thành phần nào?",
+      "options": [
+        "LLM + Database + UI",
+        "LLM + Tools + Memory + Planning",
+        "LLM + Vector DB + Embedding",
+        "LLM + Prompt + Cache"
+      ],
+      "answerIndex": 1,
+      "explanation": "Agent = LLM + Tools + Memory + Planning. LLM tự quyết định gọi tool nào, bao nhiêu bước, và khi nào dừng — đây là lĩnh vực lên nhanh nhất 2026."
+    },
+    {
+      "id": "q3",
+      "prompt": "LoRA (PEFT) được dùng để làm gì theo bài?",
+      "options": [
+        "Tăng tốc inference của LLM",
+        "Nén model xuống 4-bit để giảm cost",
+        "Fine-tune model lớn (ví dụ 70B) trên consumer GPU",
+        "Giảm số lượng token đầu vào"
+      ],
+      "answerIndex": 2,
+      "explanation": "LoRA (PEFT) cho phép fine-tune model lớn như 70B trên consumer GPU — dùng khi RAG không đủ, cho domain chuyên sâu hoặc format nhất quán."
+    },
+    {
+      "id": "q4",
+      "prompt": "MCP (Model Context Protocol) là gì theo bài?",
+      "options": [
+        "Một loại vector DB tối ưu cho embedding",
+        "Phương pháp đánh giá chất lượng LLM",
+        "Kỹ thuật nén prompt giảm token",
+        "Chuẩn mở của Anthropic kết nối AI với tool (DB, file, API, agent)"
+      ],
+      "answerIndex": 3,
+      "explanation": "MCP là chuẩn mở của Anthropic — kết nối AI với tool (DB, file, API, agent). Đây là công nghệ mới 2025 nhưng đang lên nhanh."
+    },
+    {
+      "id": "q5",
+      "prompt": "Theo bài, kỹ thuật nào sau đây KHÔNG thuộc cost optimization & inference efficiency?",
+      "options": [
+        "Prompt injection bảo vệ user input",
+        "Caching trùng query lấy từ Redis",
+        "Quantization 4-bit, 8-bit giảm cost",
+        "Model routing — model rẻ cho 90% request"
+      ],
+      "answerIndex": 0,
+      "explanation": "Cost optimization gồm model routing, caching, quantization, và vLLM (PagedAttention). Prompt injection thuộc prompt engineering at scale (bảo mật), không phải cost optimization."
+    }
+  ]
+}

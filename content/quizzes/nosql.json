@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao NoSQL không nên được hiểu là thay thế hoàn toàn cho SQL trong AI platform?",
+      "options": [
+        "Vì SQL không còn được dùng trong AI",
+        "Vì NoSQL không hỗ trợ lưu trữ dữ liệu AI",
+        "Vì SQL vẫn rất mạnh cho transaction, billing, audit và relational analytics; NoSQL bổ sung cho hot path, TTL state, document linh hoạt hoặc event throughput cao",
+        "Vì SQL và NoSQL không thể dùng cùng nhau"
+      ],
+      "answerIndex": 2,
+      "explanation": "SQL vẫn rất mạnh cho transaction, billing, audit và relational analytics; NoSQL bổ sung cho hot path, TTL state, document linh hoạt hoặc event throughput cao — không thay thế."
+    },
+    {
+      "id": "q2",
+      "prompt": "Redis phù hợp với loại dữ liệu nào và không phù hợp với loại dữ liệu nào?",
+      "options": [
+        "Phù hợp làm source of truth dài hạn cho billing và audit",
+        "Chỉ phù hợp lưu trọng số model",
+        "Phù hợp lưu transcript cuối cùng của mọi conversation",
+        "Phù hợp cache/session/rate limit/pub-sub ngắn hạn; không nên là source of truth dài hạn cho billing, audit hoặc transcript cuối cùng"
+      ],
+      "answerIndex": 3,
+      "explanation": "Redis hợp cache, session, rate limit, pub-sub ngắn hạn; không nên là source of truth dài hạn cho billing, audit hoặc transcript cuối cùng."
+    },
+    {
+      "id": "q3",
+      "prompt": "Cache key thiếu tenant boundary có thể gây sự cố gì?",
+      "options": [
+        "Hai tenant/user có prompt giống nhau có thể nhận response của nhau, gây data leak nghiêm trọng",
+        "Làm cache hit rate tăng cao",
+        "Không gây vấn đề gì vì cache shared luôn an toàn",
+        "Làm cache tự động purge đúng cách"
+      ],
+      "answerIndex": 0,
+      "explanation": "Hai tenant/user có prompt giống nhau có thể nhận response của nhau nếu cache key thiếu tenant boundary — gây data leak nghiêm trọng."
+    },
+    {
+      "id": "q4",
+      "prompt": "DynamoDB yêu cầu bạn thiết kế gì trước khi tạo bảng production?",
+      "options": [
+        "Chỉ cần tạo bảng, các phần khác tự động",
+        "Cần thiết kế access patterns, partition/sort key, TTL, throughput/capacity và idempotency cho writes",
+        "Chỉ cần chọn tên bảng",
+        "Chỉ cần index secondary"
+      ],
+      "answerIndex": 1,
+      "explanation": "DynamoDB yêu cầu thiết kế access patterns, partition/sort key, TTL, throughput/capacity và idempotency cho writes trước khi tạo bảng production."
+    },
+    {
+      "id": "q5",
+      "prompt": "Khi nào nên chấp nhận polyglot persistence dù vận hành phức tạp hơn?",
+      "options": [
+        "Khi muốn dùng nhiều database cho đẹp",
+        "Khi team rảnh rỗi và muốn thử nghiệm",
+        "Khi workload thật sự khác biệt: counter/cache quá nóng cho PostgreSQL, event writes quá lớn, payload document quá linh hoạt hoặc latency yêu cầu hot storage riêng",
+        "Khi không quan tâm đến cost vận hành"
+      ],
+      "answerIndex": 2,
+      "explanation": "Nên chấp nhận polyglot persistence khi workload thật sự khác biệt — mỗi database mới là một chi phí vận hành mới, đừng polyglot chỉ vì thời thượng."
+    }
+  ]
+}

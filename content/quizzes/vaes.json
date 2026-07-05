@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "VAE khác Autoencoder thường ở điểm cốt lõi nào?",
+      "options": [
+        "Autoencoder thường mã hóa thành vector cố định; VAE mã hóa thành phân phối xác suất với `mu` và `logvar`, cho phép sampling và latent space mượt hơn",
+        "VAE không có decoder, chỉ có encoder",
+        "VAE chỉ dùng cho text, autoencoder chỉ dùng cho ảnh",
+        "VAE train bằng reinforcement learning, autoencoder train bằng gradient descent"
+      ],
+      "answerIndex": 0,
+      "explanation": "Autoencoder thường mã hóa thành vector cố định, còn VAE mã hóa thành phân phối xác suất với mu và logvar, cho phép sampling và latent space mượt hơn."
+    },
+    {
+      "id": "q2",
+      "prompt": "KL divergence trong VAE có vai trò gì?",
+      "options": [
+        "Đo sai số giữa ảnh gốc và ảnh reconstruct",
+        "Regularize phân phối latent học được gần prior chuẩn, giúp latent space dày đặc và lấy mẫu được",
+        "Chọn số layer cho decoder",
+        "Tăng learning rate khi training"
+      ],
+      "answerIndex": 1,
+      "explanation": "KL divergence regularize phân phối latent học được gần prior chuẩn (thường là normal), giúp latent space dày đặc và lấy mẫu được."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao cần Reparameterization Trick?",
+      "options": [
+        "Để giảm số parameter của model",
+        "Để tăng tốc độ inference",
+        "Nó tách randomness thành `epsilon` độc lập để gradient vẫn chảy qua `mu` và `std` trong backpropagation",
+        "Để bỏ qua hoàn toàn KL term trong loss"
+      ],
+      "answerIndex": 2,
+      "explanation": "Reparameterization Trick tách randomness thành epsilon độc lập để gradient vẫn chảy qua mu và std trong backpropagation, cho phép train sampling bằng gradient descent."
+    },
+    {
+      "id": "q4",
+      "prompt": "Posterior collapse là gì?",
+      "options": [
+        "Khi encoder sinh ra ảnh sắc nét quá mức",
+        "Khi decoder trở nên lớn hơn encoder",
+        "Khi KL divergence tăng lên vô hạn",
+        "Là khi encoder không mã hóa thông tin hữu ích vào `z`, KL về 0 và decoder bỏ qua latent variable"
+      ],
+      "answerIndex": 3,
+      "explanation": "Posterior collapse là khi encoder không mã hóa thông tin hữu ích vào z, KL về 0 và decoder bỏ qua latent variable, khiến VAE không học được representation có nghĩa."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao VAE quan trọng với Stable Diffusion?",
+      "options": [
+        "Stable Diffusion chạy denoising trong latent space nén bởi VAE, giúp giảm VRAM/latency so với pixel-space diffusion",
+        "Vì VAE sinh text prompt cho người dùng",
+        "Vì VAE làm nhiệm vụ text encoding trong Stable Diffusion",
+        "Vì VAE thay thế hoàn toàn U-Net trong Stable Diffusion"
+      ],
+      "answerIndex": 0,
+      "explanation": "Stable Diffusion chạy denoising trong latent space nén bởi VAE, giúp giảm VRAM/latency so với pixel-space diffusion — đây là nền tảng kinh tế của mô hình."
+    }
+  ]
+}

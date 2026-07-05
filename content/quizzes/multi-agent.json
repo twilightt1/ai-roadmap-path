@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Multi-agent có ích trong điều kiện nào?",
+      "options": [
+        "Khi work phân rã được, cần specialists, parallel research, critique hoặc human checkpoints rõ",
+        "Khi task đơn giản, một model đủ",
+        "Khi muốn tối giản cost",
+        "Khi không cần observability"
+      ],
+      "answerIndex": 0,
+      "explanation": "Multi-agent có ích khi work phân rã được, cần specialists, parallel research, critique hoặc human checkpoints rõ — không phải magic intelligence, là coordination architecture."
+    },
+    {
+      "id": "q2",
+      "prompt": "Weakness chính của pattern supervisor-worker là gì?",
+      "options": [
+        "Worker không có role rõ",
+        "Supervisor bottleneck và bad routing hại toàn bộ work",
+        "Không thể parallel hóa",
+        "Không hỗ trợ human checkpoint"
+      ],
+      "answerIndex": 1,
+      "explanation": "Supervisor-worker có rủi ro: supervisor là bottleneck và bad routing từ supervisor hại toàn bộ work — cần supervisor mạnh và routing có fallback."
+    },
+    {
+      "id": "q3",
+      "prompt": "Vì sao multi-agent cần communication contracts?",
+      "options": [
+        "Để agent chat free-form tự do",
+        "Để giảm số agent",
+        "Để validate handoff, trace artifacts, tránh ambiguity và test role compliance",
+        "Để loại bỏ cần observability"
+      ],
+      "answerIndex": 2,
+      "explanation": "Communication contracts (structured, không free-form) giúp validate handoff, trace artifacts, tránh ambiguity và test role compliance — giữ coordination debug được."
+    },
+    {
+      "id": "q4",
+      "prompt": "LangGraph state graph gồm những thành phần nào?",
+      "options": [
+        "Chỉ nodes và edges",
+        "Chỉ model và memory",
+        "Chỉ prompts và tools",
+        "Nodes, edges, conditional edges, parallel branches, checkpoints, shared state, human approval nodes"
+      ],
+      "answerIndex": 3,
+      "explanation": "LangGraph state graph gồm nodes, edges, conditional edges, parallel branches, checkpoints, shared state và human approval nodes — cho control flow rõ và test được."
+    },
+    {
+      "id": "q5",
+      "prompt": "Vì sao multi-agent cost multiply nhanh?",
+      "options": [
+        "Nhiều agents × steps × tool calls; không có budget per role sẽ mất kiểm soát",
+        "Vì chỉ có một agent chạy",
+        "Vì multi-agent giảm số tool call",
+        "Vì agent chia sẻ cost"
+      ],
+      "answerIndex": 0,
+      "explanation": "Multi-agent cost = nhiều agents × steps × tool calls — không có budget per role thì cost mất kiểm soát nhanh, cần kill switch và budget per role."
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Vì sao NumPy ndarray nhanh hơn Python list theo bài?",
+      "options": [
+        "ndarray dùng thuật toán sắp xếp tốt hơn",
+        "ndarray không cần import nên nhanh hơn",
+        "ndarray lưu ít phần tử hơn list",
+        "ndarray là block memory liên tục cùng dtype, tính bằng C/Fortran SIMD"
+      ],
+      "answerIndex": 3,
+      "explanation": "Python list lưu object rời rạc, mỗi phép + qua interpreter. ndarray là block memory liên tục cùng dtype, tính bằng C/Fortran SIMD — nhanh 50-100× Python loop."
+    },
+    {
+      "id": "q2",
+      "prompt": "Khác biệt giữa ravel() và flatten() là gì?",
+      "options": [
+        "ravel() trả view (sửa ảnh hưởng gốc), flatten() luôn copy",
+        "Cả hai đều copy ra array mới",
+        "flatten() trả view, ravel() copy",
+        "Cả hai đều trả view chia sẻ memory"
+      ],
+      "answerIndex": 0,
+      "explanation": "ravel() trả view (chia sẻ memory) khi có thể — nhanh nhưng sửa view ảnh hưởng gốc. flatten() luôn copy ra array mới."
+    },
+    {
+      "id": "q3",
+      "prompt": "Theo bài, @ và * trong NumPy khác nhau thế nào?",
+      "options": [
+        "Cả hai đều là nhân ma trận",
+        "@ là nhân ma trận (matmul), * là nhân element-wise",
+        "@ là element-wise, * là matmul",
+        "@ chỉ dùng cho vector, * chỉ dùng cho ma trận"
+      ],
+      "answerIndex": 1,
+      "explanation": "@ là nhân ma trận (matmul) — dùng cho Q·Kᵀ trong attention. * là nhân element-wise (Hadamard) — dùng cho mask/gating. Nhầm 2 cái này là bug rất khó tìm."
+    },
+    {
+      "id": "q4",
+      "prompt": "Quy tắc broadcasting so sánh shape thế nào theo bài?",
+      "options": [
+        "Từ trái sang phải, trục nào cũng phải khớp",
+        "Phải cùng shape hoàn toàn mới tính được",
+        "Từ phải sang trái; trục khớp hoặc bằng 1 hoặc bằng nhau; trục bằng 1 được nhân bản",
+        "Chỉ cần khớp trục đầu tiên"
+      ],
+      "answerIndex": 2,
+      "explanation": "Broadcasting so sánh shape từ phải sang trái; trục khớp hoặc bằng 1 hoặc bằng nhau; trục bằng 1 được nhân bản. Nhưng broadcasting giấu bug — luôn in .shape khi kết quả lạ."
+    },
+    {
+      "id": "q5",
+      "prompt": "Theo bài, để giải hệ Ax=b nên dùng cách nào và tại sao?",
+      "options": [
+        "inv(A) @ b vì trực tiếp dễ hiểu",
+        "np.linalg.det(A) rồi chia cho b",
+        "np.linalg.eig(A) để tìm eigenvalue",
+        "np.linalg.solve(A, b) vì ổn định hơn inv(A) @ b"
+      ],
+      "answerIndex": 3,
+      "explanation": "np.linalg.solve(A, b) giải hệ Ax=b ổn định hơn inv(A) @ b. Bài khuyên đừng tính nghịch đảo nếu chỉ cần giải hệ."
+    }
+  ]
+}
