@@ -65,11 +65,11 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">
+      <body className="min-h-full flex flex-col" suppressHydrationWarning>
         <ThemeProvider>
           <ScrollProgress />
           <Navbar />
-          <main className="flex-1">{children}</main>
+          <main className="flex-1" data-pagefind-body>{children}</main>
           <Footer />
           <SearchCommand />
         </ThemeProvider>

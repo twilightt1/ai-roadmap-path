@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# superpowers brainstorming
+.superpowers/
+
+# pagefind search index (built by postbuild, do not commit)
+public/pagefind/
