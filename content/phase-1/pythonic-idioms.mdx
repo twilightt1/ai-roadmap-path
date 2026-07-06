@@ -52,7 +52,7 @@ squares_gen = (x ** 2 for x in range(1_000_000))    # ~120 bytes
 
 Generator là iterator — chỉ duyệt được **một lần**:
 
-```python
+```python playable
 gen = (x for x in range(5))
 print(list(gen))   # [0, 1, 2, 3, 4]
 print(list(gen))   # [] — đã cạn!

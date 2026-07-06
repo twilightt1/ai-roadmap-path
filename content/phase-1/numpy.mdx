@@ -14,17 +14,14 @@ result = arr * 2     # một phép C, ~1ms
 
 ## Tạo array
 
-```python
-np.array([1, 2, 3])                       # từ list
-np.zeros(5)                               # [0,0,0,0,0]
-np.zeros((2, 3))                          # ma trận 2x3 số 0
-np.ones((2, 2))                           # ma trận 2x2 số 1
-np.eye(3)                                 # ma trận đơn vị 3x3
-np.arange(0, 10, 2)                       # [0,2,4,6,8]
-np.linspace(0, 1, 5)                      # [0, 0.25, 0.5, 0.75, 1.0]
-np.random.rand(3, 3)                      # uniform [0,1)
-np.random.randn(3, 3)                     # standard normal
-np.random.randint(0, 10, size=5)          # int ngẫu nhiên
+```python playable
+import numpy as np
+
+print(np.array([1, 2, 3]))                # [1 2 3]
+print(np.zeros(5))                        # [0. 0. 0. 0. 0.]
+print(np.arange(0, 10, 2))                # [0 2 4 6 8]
+print(np.linspace(0, 1, 5))               # [0.   0.25 0.5  0.75 1.  ]
+print(np.eye(3))                          # ma trận đơn vị 3x3
 ```
 
 ## Thuộc tính array
@@ -104,12 +101,14 @@ arr[[0, 2, 4]]            # [10, 30, 50]
 
 Broadcasting cho phép tính giữa array shape khác, "nhân bản" trục nhỏ để khớp:
 
-```python
+```python playable
+import numpy as np
+
 a = np.array([[1, 2, 3],
               [4, 5, 6]])     # shape (2, 3)
 b = np.array([10, 20, 30])    # shape (3,)
 
-a + b        # [[11,22,33],[14,25,36]] — b được "cộng" vào mỗi hàng
+print(a + b)  # [[11 22 33] [14 25 36]] — b được "cộng" vào mỗi hàng
 ```
 
 **Quy tắc**: so sánh shape từ phải sang trái; trục khớp hoặc bằng 1 hoặc bằng nhau; trục bằng 1 được nhân bản.

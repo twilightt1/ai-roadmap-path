@@ -1,6 +1,7 @@
 import type { ReactNode, ComponentPropsWithoutRef } from "react";
 import { Info, Lightbulb, TriangleAlert, Flame } from "lucide-react";
 import { CodeBlock } from "./code-block";
+import { Playground } from "@/components/playground/playground";
 import { cn } from "@/lib/utils";
 
 type CalloutType = "info" | "tip" | "warning" | "danger";
@@ -72,4 +73,5 @@ export const mdxComponents = {
     />
   ),
   Callout,
+  Playground,
 };
