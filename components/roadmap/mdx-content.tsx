@@ -2,6 +2,7 @@ import { MDXRemote } from "next-mdx-remote/rsc";
 import remarkGfm from "remark-gfm";
 import rehypeSlug from "rehype-slug";
 import rehypePrettyCode, { type Options as PrettyCodeOptions } from "rehype-pretty-code";
+import { remarkPlayable } from "@/lib/remark-playable";
 import { mdxComponents } from "./mdx-components";
 
 const prettyCodeOptions: PrettyCodeOptions = {
@@ -28,7 +29,7 @@ export function MdxContent({ source }: { source: string }) {
         components={mdxComponents}
         options={{
           mdxOptions: {
-            remarkPlugins: [remarkGfm],
+            remarkPlugins: [remarkGfm, remarkPlayable],
             rehypePlugins: [rehypeSlug, [rehypePrettyCode, prettyCodeOptions]],
           },
         }}

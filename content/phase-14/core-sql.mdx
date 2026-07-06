@@ -47,6 +47,33 @@ Ta sẽ dùng một schema nhỏ nhưng đủ thực tế cho AI usage analytics
 
 Trong một AI platform, bảng `model_calls` thường là “hộp đen máy bay” của hệ thống. Mọi câu hỏi về chi phí, latency, lỗi và usage đều bắt đầu từ bảng này.
 
+<Callout type="tip" title="Thử ngay trong browser">
+Bấm **Run** trên playground dưới đây để chạy SQL thật trên SQLite (sql.js) — không cần cài đặt. Sửa query rồi chạy lại để xem kết quả đổi.
+
+```sql playable
+CREATE TABLE model_calls (
+  id INTEGER PRIMARY KEY,
+  feature TEXT,
+  model TEXT,
+  cost_usd REAL,
+  status TEXT
+);
+
+INSERT INTO model_calls (feature, model, cost_usd, status) VALUES
+  ('chat', 'gpt-4o', 0.012, 'success'),
+  ('chat', 'gpt-4o-mini', 0.001, 'success'),
+  ('embed', 'text-embedding-3', 0.0003, 'success'),
+  ('chat', 'gpt-4o', 0.008, 'timeout'),
+  ('chat', 'gpt-4o', 0.015, 'success');
+
+SELECT feature, model, SUM(cost_usd) AS total_cost, COUNT(*) AS calls
+FROM model_calls
+WHERE status = 'success'
+GROUP BY feature, model
+ORDER BY total_cost DESC;
+```
+</Callout>
+
 ---
 
 ## 3. Core Query Patterns (Mẫu truy vấn cốt lõi)
