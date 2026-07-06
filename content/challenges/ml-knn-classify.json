@@ -1,0 +1,16 @@
+{
+  "id": "ml-knn-classify",
+  "title": "Phân loại KNN",
+  "difficulty": "medium",
+  "category": "ml",
+  "tags": ["classification", "knn"],
+  "description": "## Đề bài\n\nViết hàm `solve(X, y, X_test, k)` huấn luyện `KNeighborsClassifier(n_neighbors=k)` trên `(X, y)` và trả về nhãn dự đoán cho `X_test`.\n\n## Ví dụ\n```python\nX = np.array([[0,0],[0,1],[1,1],[1,0]])\ny = np.array([0,1,1,0])\nsolve(X, y, np.array([[0.1,0.1]]), 1)  # -> [0]\n```",
+  "starterCode": "import numpy as np\nfrom sklearn.neighbors import KNeighborsClassifier\n\ndef solve(X, y, X_test, k):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "int(solve(np.array([[0,0],[0,1],[1,1],[1,0]]), np.array([0,1,1,0]), np.array([[0.1,0.1]]), 1)[0])", "expected": "0", "compare": "exact", "hidden": false },
+    { "name": "Gần cụm lớp 1", "call": "int(solve(np.array([[0,0],[0,1],[1,1],[1,0]]), np.array([0,1,1,0]), np.array([[0.9,0.9]]), 1)[0])", "expected": "1", "compare": "exact", "hidden": true },
+    { "name": "Số lượng dự đoán", "call": "len(solve(np.array([[0,0],[0,1],[1,1],[1,0]]), np.array([0,1,1,0]), np.array([[0.1,0.1],[0.9,0.9]]), 1))", "expected": "2", "compare": "exact", "hidden": true }
+  ],
+  "solution": "import numpy as np\nfrom sklearn.neighbors import KNeighborsClassifier\n\ndef solve(X, y, X_test, k):\n    model = KNeighborsClassifier(n_neighbors=k)\n    model.fit(X, y)\n    return model.predict(X_test)",
+  "hint": "Tạo `KNeighborsClassifier(n_neighbors=k)`, `.fit(X, y)` rồi `.predict(X_test)`."
+}

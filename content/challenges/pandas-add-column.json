@@ -1,0 +1,17 @@
+{
+  "id": "pandas-add-column",
+  "title": "Thêm cột tính toán",
+  "difficulty": "easy",
+  "category": "pandas",
+  "tags": ["columns", "arithmetic"],
+  "description": "## Đề bài\n\nViết hàm `solve(df)` nhận DataFrame có các cột `a` và `b`. Thêm cột `total` bằng `a + b` và trả về DataFrame kết quả (giữ nguyên các cột cũ, cột mới ở cuối).\n\n## Ví dụ\n```python\ndf = pd.DataFrame({'a': [1, 2], 'b': [3, 4]})\nsolve(df)\n# → DataFrame có cột total: [4, 6]\n```",
+  "starterCode": "import pandas as pd\n\ndef solve(df):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(pd.DataFrame({'a':[1,2],'b':[3,4]}))", "expected": "pd.DataFrame({'a':[1,2],'b':[3,4],'total':[4,6]}, index=[0,1])", "compare": "pd_frame", "hidden": false },
+    { "name": "Ba dòng", "call": "solve(pd.DataFrame({'a':[10,20,30],'b':[1,2,3]}))", "expected": "pd.DataFrame({'a':[10,20,30],'b':[1,2,3],'total':[11,22,33]}, index=[0,1,2])", "compare": "pd_frame", "hidden": true },
+    { "name": "Một dòng", "call": "solve(pd.DataFrame({'a':[5],'b':[5]}))", "expected": "pd.DataFrame({'a':[5],'b':[5],'total':[10]}, index=[0])", "compare": "pd_frame", "hidden": true },
+    { "name": "Giá trị 0", "call": "solve(pd.DataFrame({'a':[0,0],'b':[0,0]}))", "expected": "pd.DataFrame({'a':[0,0],'b':[0,0],'total':[0,0]}, index=[0,1])", "compare": "pd_frame", "hidden": true }
+  ],
+  "solution": "import pandas as pd\n\ndef solve(df):\n    df = df.copy()\n    df['total'] = df['a'] + df['b']\n    return df",
+  "hint": "Gán cột mới: `df['total'] = df['a'] + df['b']`. Dùng `df.copy()` để tránh thay đổi đầu vào."
+}

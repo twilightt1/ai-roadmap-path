@@ -1,0 +1,17 @@
+{
+  "id": "pandas-fillna",
+  "title": "Điền giá trị thiếu",
+  "difficulty": "medium",
+  "category": "pandas",
+  "tags": ["missing-data", "fillna"],
+  "description": "## Đề bài\n\nViết hàm `solve(df)` nhận DataFrame có cột `score` chứa một số giá trị bị thiếu (`NaN`). Điền các giá trị thiếu trong cột `score` bằng trung bình của các giá trị còn lại, sau đó trả về DataFrame kết quả.\n\n## Ví dụ\n```python\ndf = pd.DataFrame({'name': ['A', 'B', 'C'], 'score': [10, None, 20]})\nsolve(df)\n# → score: [10.0, 15.0, 20.0]\n```",
+  "starterCode": "import pandas as pd\n\ndef solve(df):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(pd.DataFrame({'name':['A','B','C'],'score':[10,None,20]}))", "expected": "pd.DataFrame({'name':['A','B','C'],'score':[10.0,15.0,20.0]}, index=[0,1,2])", "compare": "pd_frame", "hidden": false },
+    { "name": "Thiếu dòng cuối", "call": "solve(pd.DataFrame({'name':['X','Y'],'score':[5,None]}))", "expected": "pd.DataFrame({'name':['X','Y'],'score':[5.0,5.0]}, index=[0,1])", "compare": "pd_frame", "hidden": true },
+    { "name": "Thiếu dòng giữa", "call": "solve(pd.DataFrame({'name':['P','Q','R'],'score':[2,4,None]}))", "expected": "pd.DataFrame({'name':['P','Q','R'],'score':[2.0,4.0,3.0]}, index=[0,1,2])", "compare": "pd_frame", "hidden": true },
+    { "name": "Nhiều giá trị thiếu", "call": "solve(pd.DataFrame({'name':['A','B','C','D'],'score':[10,None,30,None]}))", "expected": "pd.DataFrame({'name':['A','B','C','D'],'score':[10.0,20.0,30.0,20.0]}, index=[0,1,2,3])", "compare": "pd_frame", "hidden": true }
+  ],
+  "solution": "import pandas as pd\n\ndef solve(df):\n    df = df.copy()\n    df['score'] = df['score'].fillna(df['score'].mean())\n    return df",
+  "hint": "Dùng `df['score'].fillna(df['score'].mean())` để điền giá trị thiếu bằng trung bình."
+}

@@ -1,0 +1,18 @@
+{
+  "id": "python-flatten-nested",
+  "title": "Làm phẳng list lồng",
+  "difficulty": "medium",
+  "category": "python",
+  "tags": ["recursion", "list", "flatten"],
+  "description": "## Đề bài\n\nViết hàm `solve(nested)` nhận một list có thể chứa phần tử là số nguyên hoặc list lồng nhau (độ sâu bất kỳ). Trả về list \"phẳng\" gồm tất cả số nguyên theo thứ tự duyệt sâu (depth-first).\n\n## Ví dụ\n\n```python\nsolve([[1, 2], [3, 4]])     # → [1, 2, 3, 4]\nsolve([1, [2, [3, [4]]]])   # → [1, 2, 3, 4]\n```",
+  "starterCode": "def solve(nested):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ cơ bản", "call": "solve([[1, 2], [3, 4]])", "expected": "[1, 2, 3, 4]", "compare": "exact", "hidden": false },
+    { "name": "List rỗng", "call": "solve([])", "expected": "[]", "compare": "exact", "hidden": true },
+    { "name": "Lồng sâu", "call": "solve([1, [2, [3, [4]]]])", "expected": "[1, 2, 3, 4]", "compare": "exact", "hidden": true },
+    { "name": "Cấu trúc hỗn hợp", "call": "solve([[1], [2, [3, 4]], 5])", "expected": "[1, 2, 3, 4, 5]", "compare": "exact", "hidden": true },
+    { "name": "Mỗi phần tử là list một phần tử", "call": "solve([[[1]], [[2]]])", "expected": "[1, 2]", "compare": "exact", "hidden": true }
+  ],
+  "solution": "def solve(nested):\n    result = []\n    for item in nested:\n        if isinstance(item, list):\n            result.extend(solve(item))\n        else:\n            result.append(item)\n    return result",
+  "hint": "Duyệt từng phần tử: nếu là list thì đệ quy `extend`, ngược lại thì `append`."
+}

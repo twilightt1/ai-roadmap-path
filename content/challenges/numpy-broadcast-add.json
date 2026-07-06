@@ -1,0 +1,17 @@
+{
+  "id": "numpy-broadcast-add",
+  "title": "Broadcasting cộng vector",
+  "difficulty": "medium",
+  "category": "numpy",
+  "tags": ["broadcasting", "arithmetic"],
+  "description": "## Đề bài\n\nViết hàm `solve(matrix, vector)` nhận một numpy array 2D `matrix` (kích thước `m × n`) và một array 1D `vector` (độ dài `n`). Dùng **broadcasting** để cộng `vector` vào mỗi hàng của `matrix`, trả về ma trận kết quả.\n\n## Ví dụ\n```python\nsolve(np.array([[1, 2, 3],\n                [4, 5, 6]]), np.array([10, 20, 30]))\n# → [[11, 22, 33],\n#    [14, 25, 36]]\n```",
+  "starterCode": "import numpy as np\n\ndef solve(matrix, vector):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(np.array([[1,2,3],[4,5,6]]), np.array([10,20,30]))", "expected": "np.array([[11,22,33],[14,25,36]])", "compare": "np_array", "hidden": false },
+    { "name": "Cộng 100,200", "call": "solve(np.array([[1,1],[2,2],[3,3]]), np.array([100,200]))", "expected": "np.array([[101,201],[102,202],[103,203]])", "compare": "np_array", "hidden": true },
+    { "name": "Ma trận 0", "call": "solve(np.zeros((2,3), dtype=int), np.array([1,2,3]))", "expected": "np.array([[1,2,3],[1,2,3]])", "compare": "np_array", "hidden": true },
+    { "name": "Broadcast cột", "call": "solve(np.array([[0],[10],[20]]), np.array([1,2,3]))", "expected": "np.array([[1,2,3],[11,12,13],[21,22,23]])", "compare": "np_array", "hidden": true }
+  ],
+  "solution": "import numpy as np\n\ndef solve(matrix, vector):\n    return matrix + vector",
+  "hint": "NumPy tự broadcasting khi cộng `matrix + vector` (vector dài = số cột). Không cần vòng lặp."
+}

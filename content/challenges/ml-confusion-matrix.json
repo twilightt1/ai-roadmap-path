@@ -1,0 +1,16 @@
+{
+  "id": "ml-confusion-matrix",
+  "title": "Ma trận nhầm lẫn",
+  "difficulty": "hard",
+  "category": "ml",
+  "tags": ["metrics", "classification", "confusion-matrix"],
+  "description": "## Đề bài\n\nViết hàm `solve(y_true, y_pred)` nhận nhãn thật `y_true` và nhãn dự đoán `y_pred` (numpy array 1D). Trả về **ma trận nhầm lẫn** (confusion matrix) bằng `confusion_matrix`. Hàng là nhãn thật, cột là nhãn dự đoán.\n\n## Ví dụ\n```python\ny_true = np.array([0,1,0,1,0,1])\ny_pred = np.array([0,1,1,1,0,0])\nsolve(y_true, y_pred)  # -> [[2,1],[1,2]]\n```",
+  "starterCode": "import numpy as np\nfrom sklearn.metrics import confusion_matrix\n\ndef solve(y_true, y_pred):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(np.array([0,1,0,1,0,1]), np.array([0,1,1,1,0,0]))", "expected": "[[2, 1], [1, 2]]", "compare": "np_array", "hidden": false },
+    { "name": "Phân loại hoàn hảo", "call": "solve(np.array([0,0,1,1]), np.array([0,0,1,1]))", "expected": "[[2, 0], [0, 2]]", "compare": "np_array", "hidden": true },
+    { "name": "Sai đều cả hai lớp", "call": "solve(np.array([1,1,0,0]), np.array([1,0,1,0]))", "expected": "[[1, 1], [1, 1]]", "compare": "np_array", "hidden": true }
+  ],
+  "solution": "import numpy as np\nfrom sklearn.metrics import confusion_matrix\n\ndef solve(y_true, y_pred):\n    return confusion_matrix(y_true, y_pred)",
+  "hint": "Dùng `confusion_matrix(y_true, y_pred)` (hàng = thật, cột = dự đoán)."
+}

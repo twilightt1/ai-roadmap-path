@@ -1,0 +1,17 @@
+{
+  "id": "pandas-groupby-mean",
+  "title": "Groupby tính trung bình",
+  "difficulty": "medium",
+  "category": "pandas",
+  "tags": ["groupby", "aggregation"],
+  "description": "## Đề bài\n\nViết hàm `solve(df)` nhận DataFrame có cột `category` và `value`. Nhóm theo `category` và tính trung bình của `value`. Trả về DataFrame có hai cột `category` và `value` (chỉ số 0, 1, 2, ...).\n\n## Ví dụ\n```python\ndf = pd.DataFrame({'category': ['A', 'A', 'B'], 'value': [10, 20, 30]})\nsolve(df)\n# → DataFrame 2 dòng: A=15.0, B=30.0\n```",
+  "starterCode": "import pandas as pd\n\ndef solve(df):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(pd.DataFrame({'category':['A','A','B'],'value':[10,20,30]}))", "expected": "pd.DataFrame({'category':['A','B'],'value':[15.0,30.0]}, index=[0,1])", "compare": "pd_frame", "hidden": false },
+    { "name": "Hai nhóm lớn", "call": "solve(pd.DataFrame({'category':['X','X','Y','Y'],'value':[1,3,2,4]}))", "expected": "pd.DataFrame({'category':['X','Y'],'value':[2.0,3.0]}, index=[0,1])", "compare": "pd_frame", "hidden": true },
+    { "name": "Một nhóm", "call": "solve(pd.DataFrame({'category':['A','A'],'value':[5,7]}))", "expected": "pd.DataFrame({'category':['A'],'value':[6.0]}, index=[0])", "compare": "pd_frame", "hidden": true },
+    { "name": "Ba nhóm", "call": "solve(pd.DataFrame({'category':['A','B','C'],'value':[3,6,9]}))", "expected": "pd.DataFrame({'category':['A','B','C'],'value':[3.0,6.0,9.0]}, index=[0,1,2])", "compare": "pd_frame", "hidden": true }
+  ],
+  "solution": "import pandas as pd\n\ndef solve(df):\n    return df.groupby('category', as_index=False)['value'].mean()",
+  "hint": "Dùng `df.groupby('category', as_index=False)['value'].mean()` để giữ `category` là cột thường."
+}

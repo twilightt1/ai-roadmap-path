@@ -1,0 +1,16 @@
+{
+  "id": "ml-standardize",
+  "title": "Chuẩn hóa Z-score",
+  "difficulty": "easy",
+  "category": "ml",
+  "tags": ["preprocessing", "scaling"],
+  "description": "## Đề bài\n\nViết hàm `solve(X)` chuẩn hóa Z-score cho ma trận `X` (numpy 2D): mỗi cột trừ trung bình và chia cho độ lệch chuẩn. Trả về mảng đã chuẩn hóa sao cho trung bình ≈ 0 và độ lệch chuẩn ≈ 1.\n\nGợi ý: dùng `StandardScaler`.\n\n## Ví dụ\n```python\nX = np.array([[1.0],[2.0],[3.0],[4.0]])\nsolve(X)  # mean ≈ 0, std ≈ 1\n```",
+  "starterCode": "import numpy as np\nfrom sklearn.preprocessing import StandardScaler\n\ndef solve(X):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Trung bình ≈ 0", "call": "round(float(np.mean(solve(np.array([[1.0],[2.0],[3.0],[4.0]])))),5)", "expected": "0.0", "compare": "approx", "hidden": false },
+    { "name": "Độ lệch chuẩn ≈ 1", "call": "round(float(np.std(solve(np.array([[1.0],[2.0],[3.0],[4.0]])))),5)", "expected": "1.0", "compare": "approx", "hidden": true },
+    { "name": "Giữ nguyên số hàng", "call": "solve(np.array([[1.0],[2.0],[3.0],[4.0]])).shape[0]", "expected": "4", "compare": "exact", "hidden": true }
+  ],
+  "solution": "import numpy as np\nfrom sklearn.preprocessing import StandardScaler\n\ndef solve(X):\n    scaler = StandardScaler()\n    return scaler.fit_transform(X)",
+  "hint": "Dùng `StandardScaler().fit_transform(X)`."
+}

@@ -11,6 +11,7 @@ import { ThemeToggle } from "@/components/layout/theme-toggle";
 
 const navItems = [
   { href: "/roadmap", label: "Lộ trình" },
+  { href: "/practice", label: "Luyện tập" },
   { href: "/projects", label: "Dự án" },
   { href: "/skills", label: "Kỹ năng" },
   { href: "/paths", label: "Con đường" },

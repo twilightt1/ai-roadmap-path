@@ -1,0 +1,17 @@
+{
+  "id": "pandas-select-columns",
+  "title": "Chọn cột theo tên",
+  "difficulty": "easy",
+  "category": "pandas",
+  "tags": ["indexing", "columns"],
+  "description": "## Đề bài\n\nViết hàm `solve(df)` nhận một DataFrame có nhiều cột. Trả về DataFrame chỉ giữ lại hai cột `name` và `age` (theo đúng thứ tự đó).\n\n## Ví dụ\n```python\ndf = pd.DataFrame({'name': ['Alice'], 'age': [20], 'city': ['NY']})\nsolve(df)\n# → DataFrame có 2 cột: name, age\n```",
+  "starterCode": "import pandas as pd\n\ndef solve(df):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(pd.DataFrame({'name':['Alice','Bob'],'age':[20,15],'city':['NY','LA']}))", "expected": "pd.DataFrame({'name':['Alice','Bob'],'age':[20,15]}, index=[0,1])", "compare": "pd_frame", "hidden": false },
+    { "name": "Nhiều cột thừa", "call": "solve(pd.DataFrame({'id':[1,2],'name':['X','Y'],'age':[30,40],'score':[5,6]}))", "expected": "pd.DataFrame({'name':['X','Y'],'age':[30,40]}, index=[0,1])", "compare": "pd_frame", "hidden": true },
+    { "name": "Một dòng", "call": "solve(pd.DataFrame({'name':['A'],'age':[1],'extra':[9]}))", "expected": "pd.DataFrame({'name':['A'],'age':[1]}, index=[0])", "compare": "pd_frame", "hidden": true },
+    { "name": "Ba dòng", "call": "solve(pd.DataFrame({'name':['P','Q','R'],'age':[1,2,3],'z':[0,0,0]}))", "expected": "pd.DataFrame({'name':['P','Q','R'],'age':[1,2,3]}, index=[0,1,2])", "compare": "pd_frame", "hidden": true }
+  ],
+  "solution": "import pandas as pd\n\ndef solve(df):\n    return df[['name', 'age']]",
+  "hint": "Truyền danh sách tên cột: `df[['col1', 'col2']]`."
+}

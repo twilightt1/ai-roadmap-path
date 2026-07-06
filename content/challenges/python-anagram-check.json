@@ -1,0 +1,19 @@
+{
+  "id": "python-anagram-check",
+  "title": "Kiểm tra anagram",
+  "difficulty": "easy",
+  "category": "python",
+  "tags": ["string", "sorting", "anagram"],
+  "description": "## Đề bài\n\nViết hàm `solve(a, b)` nhận hai chuỗi `a` và `b`. Trả về `True` nếu chúng là anagram của nhau (cùng tập ký tự và cùng tần suất, **phân biệt hoa thường**, kể cả khoảng trắng), ngược lại trả về `False`.\n\n## Ví dụ\n\n```python\nsolve('listen', 'silent')  # → True\nsolve('hello', 'world')    # → False\n```",
+  "starterCode": "def solve(a, b):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ anagram", "call": "solve('listen', 'silent')", "expected": "True", "compare": "exact", "hidden": false },
+    { "name": "Đảo chữ đơn giản", "call": "solve('abc', 'cba')", "expected": "True", "compare": "exact", "hidden": true },
+    { "name": "Không phải anagram", "call": "solve('hello', 'world')", "expected": "False", "compare": "exact", "hidden": true },
+    { "name": "Hai chuỗi rỗng", "call": "solve('', '')", "expected": "True", "compare": "exact", "hidden": true },
+    { "name": "Khác độ dài", "call": "solve('a', 'ab')", "expected": "False", "compare": "exact", "hidden": true },
+    { "name": "Phân biệt hoa thường", "call": "solve('Listen', 'silent')", "expected": "False", "compare": "exact", "hidden": true }
+  ],
+  "solution": "def solve(a, b):\n    return sorted(a) == sorted(b)",
+  "hint": "So sánh `sorted(a) == sorted(b)`."
+}

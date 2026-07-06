@@ -1,0 +1,19 @@
+{
+  "id": "python-fibonacci",
+  "title": "Fibonacci thứ n",
+  "difficulty": "medium",
+  "category": "python",
+  "tags": ["fibonacci", "loop", "math"],
+  "description": "## Đề bài\n\nViết hàm `solve(n)` trả về số Fibonacci thứ `n`, với quy ước `F(0) = 0`, `F(1) = 1` và `F(n) = F(n-1) + F(n-2)`.\n\nGiới hạn: `0 <= n <= 30`. Khuyến khích dùng cách lặp (iterative) thay vì đệ quy để tránh chậm.\n\n## Ví dụ\n\n```python\nsolve(10)  # → 55\nsolve(0)   # → 0\nsolve(1)   # → 1\n```",
+  "starterCode": "def solve(n):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ F(10)", "call": "solve(10)", "expected": "55", "compare": "exact", "hidden": false },
+    { "name": "F(0)", "call": "solve(0)", "expected": "0", "compare": "exact", "hidden": true },
+    { "name": "F(1)", "call": "solve(1)", "expected": "1", "compare": "exact", "hidden": true },
+    { "name": "F(2)", "call": "solve(2)", "expected": "1", "compare": "exact", "hidden": true },
+    { "name": "F(7)", "call": "solve(7)", "expected": "13", "compare": "exact", "hidden": true },
+    { "name": "F(15)", "call": "solve(15)", "expected": "610", "compare": "exact", "hidden": true }
+  ],
+  "solution": "def solve(n):\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a",
+  "hint": "Dùng hai biến `a, b = 0, 1` và lặp `n` lần với `a, b = b, a + b`."
+}

@@ -3,6 +3,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { phases, allProjects } from "./roadmap-data";
 import { QUIZ_PASS_THRESHOLD } from "./quiz-types";
+import type { ChallengeResult } from "./challenge-types";
 
 /**
  * Progress tracking store — localStorage-based, không cần auth.
@@ -16,6 +17,7 @@ const COMPLETED_KEY = "ai-roadmap:completed:v1";
 const STARTED_KEY = "ai-roadmap:started:v1";
 const PROJECT_FEATURES_KEY = "ai-roadmap:project-features:v1";
 const QUIZ_RESULTS_KEY = "ai-roadmap:quiz-results:v1";
+const CHALLENGE_RESULTS_KEY = "ai-roadmap:challenge-results:v1";
 
 export type ProgressStats = {
   /** 0..100 */
@@ -65,6 +67,7 @@ type StoreState = {
   completed: Set<string>;
   projectFeatures: Set<string>;
   quizResults: Map<string, QuizResult>;
+  challengeResults: Map<string, ChallengeResult>;
   startedAt: string | null;
   lastVisit: string | null;
 };
@@ -73,6 +76,7 @@ const emptyState: StoreState = {
   completed: new Set(),
   projectFeatures: new Set(),
   quizResults: new Map(),
+  challengeResults: new Map(),
   startedAt: null,
   lastVisit: null,
 };
@@ -94,9 +98,15 @@ function loadState(): StoreState {
     const quizResults = quizRaw
       ? new Map<string, QuizResult>(Object.entries(JSON.parse(quizRaw) as Record<string, QuizResult>))
       : new Map<string, QuizResult>();
+    const challengeRaw = localStorage.getItem(CHALLENGE_RESULTS_KEY);
+    const challengeResults = challengeRaw
+      ? new Map<string, ChallengeResult>(
+          Object.entries(JSON.parse(challengeRaw) as Record<string, ChallengeResult>)
+        )
+      : new Map<string, ChallengeResult>();
     const lastVisit = localStorage.getItem(STORAGE_KEY);
     const startedAt = localStorage.getItem(STARTED_KEY);
-    return { completed, projectFeatures, quizResults, lastVisit, startedAt };
+    return { completed, projectFeatures, quizResults, challengeResults, lastVisit, startedAt };
   } catch {
     return emptyState;
   }
@@ -108,6 +118,10 @@ function persistState(s: StoreState) {
     localStorage.setItem(COMPLETED_KEY, JSON.stringify([...s.completed]));
     localStorage.setItem(PROJECT_FEATURES_KEY, JSON.stringify([...s.projectFeatures]));
     localStorage.setItem(QUIZ_RESULTS_KEY, JSON.stringify(Object.fromEntries(s.quizResults)));
+    localStorage.setItem(
+      CHALLENGE_RESULTS_KEY,
+      JSON.stringify(Object.fromEntries(s.challengeResults))
+    );
     const now = new Date().toISOString();
     localStorage.setItem(STORAGE_KEY, now);
     if (!s.startedAt) localStorage.setItem(STARTED_KEY, now);
@@ -311,12 +325,40 @@ export function useProgress() {
     [store.quizResults]
   );
 
+  const setChallengeResult = useCallback((challengeId: string, passed: boolean) => {
+    const prev = state.challengeResults.get(challengeId);
+    const nextResults = new Map(state.challengeResults);
+    nextResults.set(challengeId, {
+      // Giữ solvedAt cũ nếu đã giải rồi; đặt mới nếu pass lần đầu.
+      solvedAt: passed ? prev?.solvedAt ?? new Date().toISOString() : prev?.solvedAt ?? null,
+      attempts: (prev?.attempts ?? 0) + 1,
+      lastPassed: passed,
+    });
+    setState({
+      ...state,
+      challengeResults: nextResults,
+      lastVisit: new Date().toISOString(),
+    });
+  }, []);
+
+  const getChallengeResult = useCallback(
+    (challengeId: string): ChallengeResult | undefined =>
+      store.challengeResults.get(challengeId),
+    [store.challengeResults]
+  );
+
+  const isChallengeSolved = useCallback(
+    (challengeId: string) => state.challengeResults.get(challengeId)?.solvedAt != null,
+    [state.challengeResults]
+  );
+
   const reset = useCallback(() => {
     setState({ ...emptyState, lastVisit: new Date().toISOString() });
     if (typeof window !== "undefined") {
       localStorage.removeItem(COMPLETED_KEY);
       localStorage.removeItem(PROJECT_FEATURES_KEY);
       localStorage.removeItem(QUIZ_RESULTS_KEY);
+      localStorage.removeItem(CHALLENGE_RESULTS_KEY);
       localStorage.removeItem(STARTED_KEY);
     }
   }, []);
@@ -347,6 +389,10 @@ export function useProgress() {
     isProjectDone: isProjectDoneCb,
     setQuizResult,
     getQuizResult,
+    setChallengeResult,
+    getChallengeResult,
+    isChallengeSolved,
+    challengeResults: store.challengeResults,
     projectStats,
     startedAt: store.startedAt,
     lastVisit: store.lastVisit,
