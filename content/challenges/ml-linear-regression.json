@@ -1,0 +1,16 @@
+{
+  "id": "ml-linear-regression",
+  "title": "Hồi quy tuyến tính",
+  "difficulty": "medium",
+  "category": "ml",
+  "tags": ["regression", "linear-model"],
+  "description": "## Đề bài\n\nViết hàm `solve(X, y, X_pred)` nhận đặc trưng huấn luyện `X` (numpy 2D), nhãn `y` (numpy 1D) và ma trận cần dự đoán `X_pred`. Huấn luyện mô hình `LinearRegression`, sau đó trả về mảng dự đoán cho `X_pred`.\n\nVì dữ liệu đơn giản có thể khớp hoàn hảo (ví dụ `y = 2x`), kết quả dự đoán là xác định.\n\n## Ví dụ\n```python\nX = np.array([[1],[2],[3]])\ny = np.array([2,4,6])\nsolve(X, y, np.array([[4]]))  # -> [8.]\n```",
+  "starterCode": "import numpy as np\nfrom sklearn.linear_model import LinearRegression\n\ndef solve(X, y, X_pred):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "float(solve(np.array([[1],[2],[3]]), np.array([2,4,6]), np.array([[4]]))[0])", "expected": "8.0", "compare": "approx", "hidden": false },
+    { "name": "Số lượng dự đoán", "call": "len(solve(np.array([[1],[2],[3]]), np.array([2,4,6]), np.array([[4],[5]])))", "expected": "2", "compare": "exact", "hidden": true },
+    { "name": "Dự đoán xa", "call": "round(float(solve(np.array([[1],[2],[3],[4]]), np.array([2,4,6,8]), np.array([[10]]))[0]),5)", "expected": "20.0", "compare": "approx", "hidden": true }
+  ],
+  "solution": "import numpy as np\nfrom sklearn.linear_model import LinearRegression\n\ndef solve(X, y, X_pred):\n    model = LinearRegression()\n    model.fit(X, y)\n    return model.predict(X_pred)",
+  "hint": "Tạo `LinearRegression()`, gọi `.fit(X, y)` rồi `.predict(X_pred)`."
+}

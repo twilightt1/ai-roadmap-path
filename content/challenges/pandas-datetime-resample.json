@@ -1,0 +1,17 @@
+{
+  "id": "pandas-datetime-resample",
+  "title": "Resample theo thời gian",
+  "difficulty": "hard",
+  "category": "pandas",
+  "tags": ["datetime", "resample", "timeseries"],
+  "description": "## Đề bài\n\nViết hàm `solve(df)` nhận DataFrame có cột `date` (chuỗi ngày) và cột `value` (số). Chuyển `date` sang datetime, đặt làm chỉ số, rồi tổng hợp (`resample`) theo **tháng** tính tổng `value`. Trả về DataFrame có hai cột `date` (cuối mỗi tháng) và `value`, với chỉ số 0, 1, 2, ...\n\n## Ví dụ\n```python\ndf = pd.DataFrame({'date': ['2024-01-01', '2024-01-15', '2024-02-01'], 'value': [10, 20, 30]})\nsolve(df)\n# → DataFrame 2 dòng: 2024-01-31 → 30, 2024-02-29 → 30\n```",
+  "starterCode": "import pandas as pd\n\ndef solve(df):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(pd.DataFrame({'date':['2024-01-01','2024-01-15','2024-02-01'],'value':[10,20,30]}))", "expected": "pd.DataFrame({'date':pd.to_datetime(['2024-01-31','2024-02-29']),'value':[30,30]}, index=[0,1])", "compare": "pd_frame", "hidden": false },
+    { "name": "Tháng bị thiếu", "call": "solve(pd.DataFrame({'date':['2024-01-01','2024-01-15','2024-03-01'],'value':[5,5,7]}))", "expected": "pd.DataFrame({'date':pd.to_datetime(['2024-01-31','2024-02-29','2024-03-31']),'value':[10,0,7]}, index=[0,1,2])", "compare": "pd_frame", "hidden": true },
+    { "name": "Một tháng", "call": "solve(pd.DataFrame({'date':['2024-05-01','2024-05-20'],'value':[3,4]}))", "expected": "pd.DataFrame({'date':pd.to_datetime(['2024-05-31']),'value':[7]}, index=[0])", "compare": "pd_frame", "hidden": true },
+    { "name": "Xuyên năm", "call": "solve(pd.DataFrame({'date':['2023-12-01','2024-01-01'],'value':[100,50]}))", "expected": "pd.DataFrame({'date':pd.to_datetime(['2023-12-31','2024-01-31']),'value':[100,50]}, index=[0,1])", "compare": "pd_frame", "hidden": true }
+  ],
+  "solution": "import pandas as pd\n\ndef solve(df):\n    df = df.copy()\n    df['date'] = pd.to_datetime(df['date'])\n    result = df.set_index('date').resample('ME')['value'].sum().reset_index()\n    return result",
+  "hint": "Dùng `pd.to_datetime(df['date'])`, `.set_index('date')`, rồi `.resample('ME')['value'].sum()` và `.reset_index()`."
+}

@@ -1,0 +1,17 @@
+{
+  "id": "pandas-apply",
+  "title": "Áp dụng hàm lên cột",
+  "difficulty": "medium",
+  "category": "pandas",
+  "tags": ["apply", "string"],
+  "description": "## Đề bài\n\nViết hàm `solve(df)` nhận DataFrame có cột `name` chứa các chuỗi viết thường. Tạo cột mới `upper` chứa phiên bản viết HOA của cột `name`, rồi trả về DataFrame kết quả.\n\n## Ví dụ\n```python\ndf = pd.DataFrame({'name': ['alice', 'bob']})\nsolve(df)\n# → DataFrame có cột upper: ['ALICE', 'BOB']\n```",
+  "starterCode": "import pandas as pd\n\ndef solve(df):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(pd.DataFrame({'name':['alice','bob']}))", "expected": "pd.DataFrame({'name':['alice','bob'],'upper':['ALICE','BOB']}, index=[0,1])", "compare": "pd_frame", "hidden": false },
+    { "name": "Ba dòng", "call": "solve(pd.DataFrame({'name':['cat','dog','bird']}))", "expected": "pd.DataFrame({'name':['cat','dog','bird'],'upper':['CAT','DOG','BIRD']}, index=[0,1,2])", "compare": "pd_frame", "hidden": true },
+    { "name": "Một dòng", "call": "solve(pd.DataFrame({'name':['hello']}))", "expected": "pd.DataFrame({'name':['hello'],'upper':['HELLO']}, index=[0])", "compare": "pd_frame", "hidden": true },
+    { "name": "Độ dài khác nhau", "call": "solve(pd.DataFrame({'name':['a','bb']}))", "expected": "pd.DataFrame({'name':['a','bb'],'upper':['A','BB']}, index=[0,1])", "compare": "pd_frame", "hidden": true }
+  ],
+  "solution": "import pandas as pd\n\ndef solve(df):\n    df = df.copy()\n    df['upper'] = df['name'].apply(lambda s: s.upper())\n    return df",
+  "hint": "Dùng `df['name'].apply(lambda s: s.upper())` để biến đổi từng phần tử."
+}

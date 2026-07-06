@@ -1,0 +1,19 @@
+{
+  "id": "python-most-frequent",
+  "title": "Phần tử xuất hiện nhiều nhất",
+  "difficulty": "medium",
+  "category": "python",
+  "tags": ["dict", "counting", "max"],
+  "description": "## Đề bài\n\nViết hàm `solve(nums)` nhận list các phần tử, trả về phần tử xuất hiện nhiều nhất. Nếu có nhiều phần tử cùng tần suất cao nhất, trả về phần tử **xuất hiện đầu tiên** trong list. Nếu list rỗng, trả về `None`.\n\n## Ví dụ\n\n```python\nsolve([1, 2, 2, 3, 2])  # → 2\nsolve([1, 1, 2, 2])     # → 1  (hai số cùng tần suất, lấy số xuất hiện đầu tiên)\n```",
+  "starterCode": "def solve(nums):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ cơ bản", "call": "solve([1, 2, 2, 3, 2])", "expected": "2", "compare": "exact", "hidden": false },
+    { "name": "Hoà — lấy phần tử đầu", "call": "solve([1, 1, 2, 2])", "expected": "1", "compare": "exact", "hidden": true },
+    { "name": "Một phần tử", "call": "solve([5])", "expected": "5", "compare": "exact", "hidden": true },
+    { "name": "List rỗng", "call": "solve([])", "expected": "None", "compare": "exact", "hidden": true },
+    { "name": "Phần tử đầu thắng", "call": "solve([3, 3, 3, 1, 1])", "expected": "3", "compare": "exact", "hidden": true },
+    { "name": "Phần tử sau thắng", "call": "solve([4, 4, 5, 5, 5])", "expected": "5", "compare": "exact", "hidden": true }
+  ],
+  "solution": "def solve(nums):\n    if not nums:\n        return None\n    counts = {}\n    for x in nums:\n        counts[x] = counts.get(x, 0) + 1\n    return max(nums, key=lambda x: counts[x])",
+  "hint": "Đếm bằng dict, rồi dùng `max(nums, key=lambda x: counts[x])` (max trả về phần tử đầu tiên khi hoà)."
+}

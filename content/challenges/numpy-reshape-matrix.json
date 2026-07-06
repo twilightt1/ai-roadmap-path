@@ -1,0 +1,17 @@
+{
+  "id": "numpy-reshape-matrix",
+  "title": "Reshape ma trận",
+  "difficulty": "easy",
+  "category": "numpy",
+  "tags": ["reshape", "array-manipulation"],
+  "description": "## Đề bài\n\nViết hàm `solve(arr, shape)` nhận một numpy array 1D và một tuple `shape`, trả về array đã được **reshape** theo hình dạng mới.\n\nGiả định tổng số phần tử luôn khớp với `shape` (không cần xử lý lỗi).\n\n## Ví dụ\n```python\nsolve(np.array([1, 2, 3, 4]), (2, 2))\n# → [[1, 2],\n#    [3, 4]]\n```",
+  "starterCode": "import numpy as np\n\ndef solve(arr, shape):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(np.array([1,2,3,4]), (2,2))", "expected": "np.array([[1,2],[3,4]])", "compare": "np_array", "hidden": false },
+    { "name": "Reshape 2x3", "call": "solve(np.array([1,2,3,4,5,6]), (2,3))", "expected": "np.array([[1,2,3],[4,5,6]])", "compare": "np_array", "hidden": true },
+    { "name": "Reshape 3x2", "call": "solve(np.array([1,2,3,4,5,6]), (3,2))", "expected": "np.array([[1,2],[3,4],[5,6]])", "compare": "np_array", "hidden": true },
+    { "name": "Arange 3x4", "call": "solve(np.arange(12), (3,4))", "expected": "np.array([[0,1,2,3],[4,5,6,7],[8,9,10,11]])", "compare": "np_array", "hidden": true }
+  ],
+  "solution": "import numpy as np\n\ndef solve(arr, shape):\n    return arr.reshape(shape)",
+  "hint": "Dùng `arr.reshape(shape)`."
+}

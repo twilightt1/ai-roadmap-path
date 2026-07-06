@@ -1,0 +1,51 @@
+{
+  "id": "numpy-dot-product",
+  "title": "Tích vô hướng",
+  "difficulty": "easy",
+  "category": "numpy",
+  "tags": [
+    "dot",
+    "linear-algebra"
+  ],
+  "description": "## Đề bài\n\nViết hàm `solve(a, b)` nhận hai numpy array 1D có cùng độ dài, trả về **tích vô hướng** (dot product) dưới dạng `int`.\n\nCông thức: `a · b = Σ(a[i] * b[i])` — tổng các tích phần tử tương ứng.\n\n## Ví dụ\n```python\nsolve(np.array([1, 2, 3]), np.array([4, 5, 6]))  # → 32  (1*4 + 2*5 + 3*6)\n```",
+  "starterCode": "import numpy as np\n\ndef solve(a, b):\n    # code here\n    pass",
+  "testCases": [
+    {
+      "name": "Ví dụ",
+      "call": "solve(np.array([1,2,3]), np.array([4,5,6]))",
+      "expected": "32",
+      "compare": "exact",
+      "hidden": false
+    },
+    {
+      "name": "Đơn vị",
+      "call": "solve(np.array([1,1,1]), np.array([2,2,2]))",
+      "expected": "6",
+      "compare": "exact",
+      "hidden": true
+    },
+    {
+      "name": "Vector 0",
+      "call": "solve(np.array([0,0,0]), np.array([1,2,3]))",
+      "expected": "0",
+      "compare": "exact",
+      "hidden": true
+    },
+    {
+      "name": "Số âm",
+      "call": "solve(np.array([-1,2,3]), np.array([4,-5,6]))",
+      "expected": "4",
+      "compare": "exact",
+      "hidden": true
+    },
+    {
+      "name": "Tổng 1..4",
+      "call": "solve(np.array([1,2,3,4]), np.array([1,1,1,1]))",
+      "expected": "10",
+      "compare": "exact",
+      "hidden": true
+    }
+  ],
+  "solution": "import numpy as np\n\ndef solve(a, b):\n    return int(np.dot(a, b))",
+  "hint": "Dùng `np.dot(a, b)` rồi ép về `int()`."
+}

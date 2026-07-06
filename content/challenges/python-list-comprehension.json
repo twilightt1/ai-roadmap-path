@@ -1,0 +1,18 @@
+{
+  "id": "python-list-comprehension",
+  "title": "Bình phương list",
+  "difficulty": "easy",
+  "category": "python",
+  "tags": ["comprehension", "list"],
+  "description": "## Đề bài\n\nViết hàm `solve(nums)` nhận một list số nguyên `nums`, trả về list mới chứa bình phương của từng phần tử (giữ nguyên thứ tự).\n\n## Ví dụ\n\n```python\nsolve([1, 2, 3])  # → [1, 4, 9]\nsolve([-1, -2])   # → [1, 4]\n```",
+  "starterCode": "def solve(nums):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ cơ bản", "call": "solve([1, 2, 3])", "expected": "[1, 4, 9]", "compare": "exact", "hidden": false },
+    { "name": "List rỗng", "call": "solve([])", "expected": "[]", "compare": "exact", "hidden": true },
+    { "name": "Số âm", "call": "solve([-1, -2])", "expected": "[1, 4]", "compare": "exact", "hidden": true },
+    { "name": "Có số 0", "call": "solve([0, 5, 10])", "expected": "[0, 25, 100]", "compare": "exact", "hidden": true },
+    { "name": "Một phần tử", "call": "solve([100])", "expected": "[10000]", "compare": "exact", "hidden": true }
+  ],
+  "solution": "def solve(nums):\n    return [x ** 2 for x in nums]",
+  "hint": "Dùng list comprehension: `[x**2 for x in nums]`."
+}

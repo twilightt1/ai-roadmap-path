@@ -1,0 +1,16 @@
+{
+  "id": "ml-cross-val-score",
+  "title": "Cross-validation score",
+  "difficulty": "hard",
+  "category": "ml",
+  "tags": ["validation", "cross-validation", "classification"],
+  "description": "## Đề bài\n\nViết hàm `solve(X, y, cv)` thực hiện cross-validation với mô hình `LogisticRegression(random_state=42)` và `cross_val_score(..., cv=cv)`. Trả về **mảng các điểm** (scores) của từng fold.\n\nĐiểm accuracy luôn nằm trong khoảng `[0, 1]`.\n\n## Ví dụ\n```python\nX = np.array([[0],[1],[2],[3],[4],[5],[6],[7]])\ny = np.array([0,0,0,0,1,1,1,1])\nsolve(X, y, 4)  # -> mảng 4 điểm, mỗi điểm trong [0,1]\n```",
+  "starterCode": "import numpy as np\nfrom sklearn.linear_model import LogisticRegression\nfrom sklearn.model_selection import cross_val_score\n\ndef solve(X, y, cv):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Điểm trung bình trong [0,1]", "call": "0 <= float(np.mean(solve(np.array([[0],[1],[2],[3],[4],[5],[6],[7]]), np.array([0,0,0,0,1,1,1,1]), 4))) <= 1", "expected": "True", "compare": "exact", "hidden": false },
+    { "name": "Số fold đúng", "call": "len(solve(np.array([[0],[1],[2],[3],[4],[5],[6],[7]]), np.array([0,0,0,0,1,1,1,1]), 4))", "expected": "4", "compare": "exact", "hidden": true },
+    { "name": "Mọi điểm không âm", "call": "float(np.min(solve(np.array([[0],[1],[2],[3],[4],[5],[6],[7]]), np.array([0,0,0,0,1,1,1,1]), 4))) >= 0", "expected": "True", "compare": "exact", "hidden": true }
+  ],
+  "solution": "import numpy as np\nfrom sklearn.linear_model import LogisticRegression\nfrom sklearn.model_selection import cross_val_score\n\ndef solve(X, y, cv):\n    model = LogisticRegression(random_state=42)\n    return cross_val_score(model, X, y, cv=cv)",
+  "hint": "Dùng `cross_val_score(LogisticRegression(random_state=42), X, y, cv=cv)` và trả về mảng điểm."
+}

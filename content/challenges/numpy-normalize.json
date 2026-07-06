@@ -1,0 +1,45 @@
+{
+  "id": "numpy-normalize",
+  "title": "Chuẩn hóa z-score",
+  "difficulty": "medium",
+  "category": "numpy",
+  "tags": [
+    "statistics",
+    "normalize",
+    "broadcasting"
+  ],
+  "description": "## Đề bài\n\nViết hàm `solve(arr)` nhận một numpy array 1D và trả về array đã được **chuẩn hóa z-score**: `z = (x - mean) / std`.\n\nVới `mean` là trung bình cộng và `std` là độ lệch chuẩn của `arr`. Dùng độ lệch chuẩn **theo population** (mặc định của `arr.std()`).\n\n## Ví dụ\n```python\nsolve(np.array([0, 0, 3, 3]))  # → [-1., -1., 1., 1.]\n```",
+  "starterCode": "import numpy as np\n\ndef solve(arr):\n    # code here\n    pass",
+  "testCases": [
+    {
+      "name": "Ví dụ",
+      "call": "solve(np.array([0,0,3,3]))",
+      "expected": "np.array([-1.0,-1.0,1.0,1.0])",
+      "compare": "np_array",
+      "hidden": false
+    },
+    {
+      "name": "Đối xứng",
+      "call": "solve(np.array([-3,-3,3,3]))",
+      "expected": "np.array([-1.0,-1.0,1.0,1.0])",
+      "compare": "np_array",
+      "hidden": false
+    },
+    {
+      "name": "Hai phần tử",
+      "call": "solve(np.array([1,5]))",
+      "expected": "np.array([-1.0,1.0])",
+      "compare": "np_array",
+      "hidden": true
+    },
+    {
+      "name": "Sáu phần tử",
+      "call": "solve(np.array([0,0,0,4,4,4]))",
+      "expected": "np.array([-1.0,-1.0,-1.0,1.0,1.0,1.0])",
+      "compare": "np_array",
+      "hidden": true
+    }
+  ],
+  "solution": "import numpy as np\n\ndef solve(arr):\n    return (arr - arr.mean()) / arr.std()",
+  "hint": "Dùng `arr.mean()` và `arr.std()`. NumPy tự broadcasting: `(arr - arr.mean()) / arr.std()`."
+}

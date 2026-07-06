@@ -1,0 +1,19 @@
+{
+  "id": "python-matrix-transpose",
+  "title": "Chuyển vị ma trận",
+  "difficulty": "hard",
+  "category": "python",
+  "tags": ["matrix", "zip", "transpose"],
+  "description": "## Đề bài\n\nViết hàm `solve(matrix)` nhận một ma trận `m x n` (list của list, có thể rỗng). Trả về ma trận chuyển vị kích thước `n x m`: hàng `i` của kết quả chính là cột `i` của `matrix`.\n\n## Ví dụ\n\n```python\nsolve([[1, 2, 3], [4, 5, 6]])  # → [[1, 4], [2, 5], [3, 6]]\nsolve([[1, 2], [3, 4]])        # → [[1, 3], [2, 4]]\n```",
+  "starterCode": "def solve(matrix):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ 2x3", "call": "solve([[1, 2, 3], [4, 5, 6]])", "expected": "[[1, 4], [2, 5], [3, 6]]", "compare": "exact", "hidden": false },
+    { "name": "Ma trận vuông 2x2", "call": "solve([[1, 2], [3, 4]])", "expected": "[[1, 3], [2, 4]]", "compare": "exact", "hidden": true },
+    { "name": "Ma trận rỗng", "call": "solve([])", "expected": "[]", "compare": "exact", "hidden": true },
+    { "name": "Ma trận một hàng", "call": "solve([[1, 2, 3]])", "expected": "[[1], [2], [3]]", "compare": "exact", "hidden": true },
+    { "name": "Ma trận một cột", "call": "solve([[1], [2], [3]])", "expected": "[[1, 2, 3]]", "compare": "exact", "hidden": true },
+    { "name": "Ma trận 1x1", "call": "solve([[1]])", "expected": "[[1]]", "compare": "exact", "hidden": true }
+  ],
+  "solution": "def solve(matrix):\n    return [list(row) for row in zip(*matrix)]",
+  "hint": "Dùng `zip(*matrix)` để gom các cột thành tuple, rồi `list(row)` từng tuple."
+}

@@ -1,0 +1,18 @@
+{
+  "id": "numpy-mean-array",
+  "title": "Trung bình cộng",
+  "difficulty": "easy",
+  "category": "numpy",
+  "tags": ["statistics", "mean"],
+  "description": "## Đề bài\n\nViết hàm `solve(arr)` nhận một numpy array 1D và trả về **trung bình cộng** (mean) của các phần tử dưới dạng `float`.\n\n## Ví dụ\n```python\nsolve(np.array([1, 2, 3, 4, 5]))  # → 3.0\n```\n\n## Gợi ý\n- Dùng `arr.mean()` hoặc `np.mean(arr)`.\n- Ép kết quả về `float` để chắc chắn trả kiểu Python float.",
+  "starterCode": "import numpy as np\n\ndef solve(arr):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(np.array([1,2,3,4,5]))", "expected": "3.0", "compare": "approx", "hidden": false },
+    { "name": "Mảng 3 phần tử", "call": "solve(np.array([10,20,30]))", "expected": "20.0", "compare": "approx", "hidden": true },
+    { "name": "Đối xứng 0", "call": "solve(np.array([-1,0,1]))", "expected": "0.0", "compare": "approx", "hidden": true },
+    { "name": "Số thập phân", "call": "solve(np.array([2.5,3.5]))", "expected": "3.0", "compare": "approx", "hidden": true },
+    { "name": "Số lớn", "call": "solve(np.array([1000000,2000000,3000000]))", "expected": "2000000.0", "compare": "approx", "hidden": true }
+  ],
+  "solution": "import numpy as np\n\ndef solve(arr):\n    return float(arr.mean())",
+  "hint": "Dùng `arr.mean()` hoặc `np.mean(arr)`, rồi ép về `float()`."
+}

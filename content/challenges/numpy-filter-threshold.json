@@ -1,0 +1,18 @@
+{
+  "id": "numpy-filter-threshold",
+  "title": "Lọc phần tử theo ngưỡng",
+  "difficulty": "easy",
+  "category": "numpy",
+  "tags": ["boolean-indexing", "filtering"],
+  "description": "## Đề bài\n\nViết hàm `solve(arr, threshold)` nhận một numpy array 1D và một số `threshold`. Trả về array mới chứa **các phần tử lớn hơn hoặc bằng `threshold`**, giữ nguyên thứ tự.\n\n## Ví dụ\n```python\nsolve(np.array([1, 5, 2, 8, 3]), 3)  # → [5, 8, 3]\n```",
+  "starterCode": "import numpy as np\n\ndef solve(arr, threshold):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(np.array([1,5,2,8,3]), 3)", "expected": "np.array([5,8,3])", "compare": "np_array", "hidden": false },
+    { "name": "Ngưỡng 15", "call": "solve(np.array([10,20,30]), 15)", "expected": "np.array([20,30])", "compare": "np_array", "hidden": true },
+    { "name": "Không khớp", "call": "solve(np.array([1,2,3]), 5)", "expected": "np.array([], dtype=int)", "compare": "np_array", "hidden": true },
+    { "name": "Số âm", "call": "solve(np.array([-5,0,5,-3,7]), 0)", "expected": "np.array([0,5,7])", "compare": "np_array", "hidden": true },
+    { "name": "Bằng ngưỡng", "call": "solve(np.array([100,200,150,50]), 100)", "expected": "np.array([100,200,150])", "compare": "np_array", "hidden": true }
+  ],
+  "solution": "import numpy as np\n\ndef solve(arr, threshold):\n    return arr[arr >= threshold]",
+  "hint": "Dùng boolean indexing: `arr[arr >= threshold]`."
+}

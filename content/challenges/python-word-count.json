@@ -1,0 +1,18 @@
+{
+  "id": "python-word-count",
+  "title": "Đếm từ",
+  "difficulty": "medium",
+  "category": "python",
+  "tags": ["dict", "string", "counting"],
+  "description": "## Đề bài\n\nViết hàm `solve(text)` nhận một chuỗi `text` gồm các từ cách nhau bởi khoảng trắng. Trả về dict đếm số lần xuất hiện của mỗi từ.\n\n## Ví dụ\n\n```python\nsolve('the quick brown fox the')  # → {'the': 2, 'quick': 1, 'brown': 1, 'fox': 1}\nsolve('a a a')                    # → {'a': 3}\n```",
+  "starterCode": "def solve(text):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ cơ bản", "call": "solve('the quick brown fox the')", "expected": "{'the': 2, 'quick': 1, 'brown': 1, 'fox': 1}", "compare": "exact", "hidden": false },
+    { "name": "Chuỗi rỗng", "call": "solve('')", "expected": "{}", "compare": "exact", "hidden": true },
+    { "name": "Một từ", "call": "solve('hello')", "expected": "{'hello': 1}", "compare": "exact", "hidden": true },
+    { "name": "Cùng từ lặp lại", "call": "solve('a a a')", "expected": "{'a': 3}", "compare": "exact", "hidden": true },
+    { "name": "Nhiều từ khác tần suất", "call": "solve('one two one two two')", "expected": "{'one': 2, 'two': 3}", "compare": "exact", "hidden": true }
+  ],
+  "solution": "def solve(text):\n    counts = {}\n    for word in text.split():\n        counts[word] = counts.get(word, 0) + 1\n    return counts",
+  "hint": "Duyệt `text.split()`, dùng dict và `.get(word, 0)` để đếm (hoặc `collections.Counter`)."
+}

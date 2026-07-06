@@ -1,0 +1,18 @@
+{
+  "id": "numpy-topk-indices",
+  "title": "Top-k chỉ số lớn nhất",
+  "difficulty": "medium",
+  "category": "numpy",
+  "tags": ["argsort", "sorting", "indexing"],
+  "description": "## Đề bài\n\nViết hàm `solve(arr, k)` nhận một numpy array 1D và số nguyên `k`. Trả về array chứa **chỉ số của `k` phần tử lớn nhất**, sắp xếp **giảm dần theo giá trị**.\n\nGiả định `k ≤ len(arr)` và các phần tử đôi một khác nhau (không cần lo tie-breaking).\n\n## Ví dụ\n```python\narr = np.array([3, 1, 4, 1, 5, 9, 2, 6])\nsolve(arr, 3)  # → [5, 7, 4]   (giá trị 9, 6, 5)\n```",
+  "starterCode": "import numpy as np\n\ndef solve(arr, k):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(np.array([3,1,4,1,5,9,2,6]), 3)", "expected": "np.array([5,7,4])", "compare": "np_array", "hidden": false },
+    { "name": "Top-2", "call": "solve(np.array([10,20,30,40]), 2)", "expected": "np.array([3,2])", "compare": "np_array", "hidden": true },
+    { "name": "Toàn bộ", "call": "solve(np.array([5,3,8,1]), 4)", "expected": "np.array([2,0,1,3])", "compare": "np_array", "hidden": true },
+    { "name": "Số âm", "call": "solve(np.array([-5,-1,-3,-2,-4]), 2)", "expected": "np.array([1,3])", "compare": "np_array", "hidden": true },
+    { "name": "k=1", "call": "solve(np.array([7,2,9,4]), 1)", "expected": "np.array([2])", "compare": "np_array", "hidden": true }
+  ],
+  "solution": "import numpy as np\n\ndef solve(arr, k):\n    return np.argsort(arr)[::-1][:k]",
+  "hint": "Dùng `np.argsort(arr)` (tăng dần), rồi đảo ngược `[::-1]` và lấy `[:k]` phần tử đầu."
+}

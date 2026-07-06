@@ -1,0 +1,17 @@
+{
+  "id": "pandas-sort-values",
+  "title": "Sắp xếp theo cột",
+  "difficulty": "easy",
+  "category": "pandas",
+  "tags": ["sorting"],
+  "description": "## Đề bài\n\nViết hàm `solve(df)` nhận DataFrame có cột `score`. Trả về DataFrame được sắp xếp giảm dần theo `score`, với chỉ số được đặt lại thành 0, 1, 2, ...\n\n## Ví dụ\n```python\ndf = pd.DataFrame({'name': ['A', 'B', 'C'], 'score': [3, 1, 2]})\nsolve(df)\n# → DataFrame: A(3), C(2), B(1)\n```",
+  "starterCode": "import pandas as pd\n\ndef solve(df):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(pd.DataFrame({'name':['A','B','C'],'score':[3,1,2]}))", "expected": "pd.DataFrame({'name':['A','C','B'],'score':[3,2,1]}, index=[0,1,2])", "compare": "pd_frame", "hidden": false },
+    { "name": "Hai dòng", "call": "solve(pd.DataFrame({'name':['X','Y'],'score':[10,50]}))", "expected": "pd.DataFrame({'name':['Y','X'],'score':[50,10]}, index=[0,1])", "compare": "pd_frame", "hidden": true },
+    { "name": "Một dòng", "call": "solve(pd.DataFrame({'name':['P'],'score':[7]}))", "expected": "pd.DataFrame({'name':['P'],'score':[7]}, index=[0])", "compare": "pd_frame", "hidden": true },
+    { "name": "Có giá trị bằng nhau", "call": "solve(pd.DataFrame({'name':['A','B','C','D'],'score':[5,5,2,8]}))", "expected": "pd.DataFrame({'name':['D','A','B','C'],'score':[8,5,5,2]}, index=[0,1,2,3])", "compare": "pd_frame", "hidden": true }
+  ],
+  "solution": "import pandas as pd\n\ndef solve(df):\n    return df.sort_values('score', ascending=False).reset_index(drop=True)",
+  "hint": "Dùng `df.sort_values('score', ascending=False)` rồi `.reset_index(drop=True)`."
+}

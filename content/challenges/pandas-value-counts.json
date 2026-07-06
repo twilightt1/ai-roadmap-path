@@ -1,0 +1,17 @@
+{
+  "id": "pandas-value-counts",
+  "title": "Đếm giá trị unique",
+  "difficulty": "medium",
+  "category": "pandas",
+  "tags": ["value-counts", "categorical"],
+  "description": "## Đề bài\n\nViết hàm `solve(df)` nhận DataFrame có cột `color`. Trả về một Series đếm số lần xuất hiện của mỗi giá trị trong cột `color`, sắp xếp giảm dần theo số lần (theo mặc định của `value_counts`).\n\n## Ví dụ\n```python\ndf = pd.DataFrame({'color': ['red', 'blue', 'red', 'red', 'blue']})\nsolve(df)\n# → Series: red 3, blue 2\n```",
+  "starterCode": "import pandas as pd\n\ndef solve(df):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(pd.DataFrame({'color':['red','blue','red','red','blue']}))", "expected": "pd.Series([3,2], index=pd.Index(['red','blue'], name='color'), name='count')", "compare": "pd_series", "hidden": false },
+    { "name": "Ba giá trị", "call": "solve(pd.DataFrame({'color':['a','b','a','c','b','a']}))", "expected": "pd.Series([3,2,1], index=pd.Index(['a','b','c'], name='color'), name='count')", "compare": "pd_series", "hidden": true },
+    { "name": "Một giá trị", "call": "solve(pd.DataFrame({'color':['x','x','x']}))", "expected": "pd.Series([3], index=pd.Index(['x'], name='color'), name='count')", "compare": "pd_series", "hidden": true },
+    { "name": "Thứ tự khác", "call": "solve(pd.DataFrame({'color':['red','green','red','green','green']}))", "expected": "pd.Series([3,2], index=pd.Index(['green','red'], name='color'), name='count')", "compare": "pd_series", "hidden": true }
+  ],
+  "solution": "import pandas as pd\n\ndef solve(df):\n    return df['color'].value_counts().rename('count')",
+  "hint": "Dùng `df['color'].value_counts()` — trả về Series sắp xếp giảm dần theo số đếm."
+}

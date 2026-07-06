@@ -1,0 +1,16 @@
+{
+  "id": "ml-train-test-split",
+  "title": "Chia train/test",
+  "difficulty": "easy",
+  "category": "ml",
+  "tags": ["preprocessing", "train-test-split"],
+  "description": "## Đề bài\n\nViết hàm `solve(X, y, test_size)` nhận ma trận đặc trưng `X` (numpy array 2D), nhãn `y` (numpy array 1D) và tỷ lệ `test_size` (float). Trả về tuple `(X_train, X_test, y_train, y_test)` bằng hàm `train_test_split` với `random_state=42`.\n\n## Ví dụ\n```python\nX = np.array([[1],[2],[3],[4]])\ny = np.array([0,1,0,1])\nsolve(X, y, 0.5)  # -> 4 mảng (X_train, X_test, y_train, y_test)\n```",
+  "starterCode": "import numpy as np\nfrom sklearn.model_selection import train_test_split\n\ndef solve(X, y, test_size):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "len(solve(np.array([[1],[2],[3],[4]]), np.array([0,1,0,1]), 0.5))", "expected": "4", "compare": "exact", "hidden": false },
+    { "name": "Kích thước X_test", "call": "solve(np.array([[1],[2],[3],[4],[5],[6]]), np.array([0,1,0,1,0,1]), 0.5)[1].shape[0]", "expected": "3", "compare": "exact", "hidden": true },
+    { "name": "Kích thước X_train", "call": "solve(np.array([[1],[2],[3],[4],[5],[6]]), np.array([0,1,0,1,0,1]), 0.5)[0].shape[0]", "expected": "3", "compare": "exact", "hidden": true }
+  ],
+  "solution": "import numpy as np\nfrom sklearn.model_selection import train_test_split\n\ndef solve(X, y, test_size):\n    return train_test_split(X, y, test_size=test_size, random_state=42)",
+  "hint": "Dùng `train_test_split(X, y, test_size=..., random_state=42)` và trả về trực tiếp kết quả."
+}

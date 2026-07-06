@@ -1,0 +1,17 @@
+{
+  "id": "pandas-merge",
+  "title": "Gộp hai DataFrame",
+  "difficulty": "medium",
+  "category": "pandas",
+  "tags": ["merge", "join"],
+  "description": "## Đề bài\n\nViết hàm `solve(df1, df2)` nhận hai DataFrame đều có cột `id`. Gộp chúng theo cột `id` (inner join) và trả về DataFrame kết quả.\n\n## Ví dụ\n```python\ndf1 = pd.DataFrame({'id': [1, 2], 'name': ['A', 'B']})\ndf2 = pd.DataFrame({'id': [1, 2], 'score': [90, 80]})\nsolve(df1, df2)\n# → DataFrame 2 dòng: id, name, score\n```",
+  "starterCode": "import pandas as pd\n\ndef solve(df1, df2):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(pd.DataFrame({'id':[1,2],'name':['A','B']}), pd.DataFrame({'id':[1,2],'score':[90,80]}))", "expected": "pd.DataFrame({'id':[1,2],'name':['A','B'],'score':[90,80]}, index=[0,1])", "compare": "pd_frame", "hidden": false },
+    { "name": "Một id không khớp", "call": "solve(pd.DataFrame({'id':[1,2],'name':['A','B']}), pd.DataFrame({'id':[1,3],'score':[90,80]}))", "expected": "pd.DataFrame({'id':[1],'name':['A'],'score':[90]}, index=[0])", "compare": "pd_frame", "hidden": true },
+    { "name": "Ba dòng khớp đầy đủ", "call": "solve(pd.DataFrame({'id':[1,2,3],'name':['A','B','C']}), pd.DataFrame({'id':[1,2,3],'score':[10,20,30]}))", "expected": "pd.DataFrame({'id':[1,2,3],'name':['A','B','C'],'score':[10,20,30]}, index=[0,1,2])", "compare": "pd_frame", "hidden": true },
+    { "name": "Một dòng", "call": "solve(pd.DataFrame({'id':[5],'name':['Z']}), pd.DataFrame({'id':[5],'score':[100]}))", "expected": "pd.DataFrame({'id':[5],'name':['Z'],'score':[100]}, index=[0])", "compare": "pd_frame", "hidden": true }
+  ],
+  "solution": "import pandas as pd\n\ndef solve(df1, df2):\n    return pd.merge(df1, df2, on='id')",
+  "hint": "Dùng `pd.merge(df1, df2, on='id')`. Mặc định là inner join."
+}

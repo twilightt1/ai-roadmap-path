@@ -1,0 +1,52 @@
+{
+  "id": "numpy-linear-solve",
+  "title": "Giải hệ phương trình",
+  "difficulty": "hard",
+  "category": "numpy",
+  "tags": [
+    "linear-algebra",
+    "linalg",
+    "solve"
+  ],
+  "description": "## Đề bài\n\nViết hàm `solve(A, b)` giải hệ phương trình tuyến tính `Ax = b`, với `A` là numpy array 2D (ma trận vuông khả nghịch) và `b` là array 1D. Trả về vector nghiệm `x`.\n\nGiả định `A` luôn khả nghịch (không cần xử lý ma trận suy biến).\n\n## Ví dụ\n```python\nA = np.array([[1.0, 1.0],\n              [1.0, -1.0]])\nb = np.array([5.0, 1.0])\nsolve(A, b)  # → [3.0, 2.0]   (x + y = 5, x - y = 1)\n```",
+  "starterCode": "import numpy as np\n\ndef solve(A, b):\n    # code here\n    pass",
+  "testCases": [
+    {
+      "name": "Ví dụ",
+      "call": "solve(np.array([[1.0,1.0],[1.0,-1.0]]), np.array([5.0,1.0]))",
+      "expected": "np.array([3.0,2.0])",
+      "compare": "np_array",
+      "hidden": false
+    },
+    {
+      "name": "Chéo",
+      "call": "solve(np.array([[2.0,0.0],[0.0,3.0]]), np.array([4.0,9.0]))",
+      "expected": "np.array([2.0,3.0])",
+      "compare": "np_array",
+      "hidden": true
+    },
+    {
+      "name": "Đơn vị 3x3",
+      "call": "solve(np.array([[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]]), np.array([7.0,8.0,9.0]))",
+      "expected": "np.array([7.0,8.0,9.0])",
+      "compare": "np_array",
+      "hidden": true
+    },
+    {
+      "name": "Hệ 2x2",
+      "call": "solve(np.array([[2.0,1.0],[1.0,1.0]]), np.array([3.0,2.0]))",
+      "expected": "np.array([1.0,1.0])",
+      "compare": "np_array",
+      "hidden": true
+    },
+    {
+      "name": "Tam giác trên",
+      "call": "solve(np.array([[1.0,0.0,0.0],[0.0,1.0,1.0],[0.0,0.0,1.0]]), np.array([2.0,5.0,3.0]))",
+      "expected": "np.array([2.0,2.0,3.0])",
+      "compare": "np_array",
+      "hidden": true
+    }
+  ],
+  "solution": "import numpy as np\n\ndef solve(A, b):\n    return np.linalg.solve(A, b)",
+  "hint": "Dùng `np.linalg.solve(A, b)` — giải trực tiếp hệ $Ax = b$."
+}

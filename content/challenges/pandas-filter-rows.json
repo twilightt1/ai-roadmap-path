@@ -1,0 +1,17 @@
+{
+  "id": "pandas-filter-rows",
+  "title": "Lọc dòng theo điều kiện",
+  "difficulty": "easy",
+  "category": "pandas",
+  "tags": ["filtering", "boolean-indexing"],
+  "description": "## Đề bài\n\nViết hàm `solve(df)` nhận một DataFrame có cột `age`. Trả về DataFrame chỉ chứa các dòng có `age > 18`.\n\n## Ví dụ\n```python\ndf = pd.DataFrame({'name': ['Alice', 'Bob'], 'age': [20, 15]})\nsolve(df)\n# → DataFrame 1 dòng: Alice, 20\n```",
+  "starterCode": "import pandas as pd\n\ndef solve(df):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ", "call": "solve(pd.DataFrame({'name':['Alice','Bob'],'age':[20,15]}))", "expected": "pd.DataFrame({'name':['Alice'],'age':[20]}, index=[0])", "compare": "pd_frame", "hidden": false },
+    { "name": "Tất cả hợp lệ", "call": "solve(pd.DataFrame({'name':['A','B'],'age':[25,30]}))", "expected": "pd.DataFrame({'name':['A','B'],'age':[25,30]}, index=[0,1])", "compare": "pd_frame", "hidden": true },
+    { "name": "Bỏ qua biên giới 18", "call": "solve(pd.DataFrame({'name':['X','Y','Z'],'age':[19,18,20]}))", "expected": "pd.DataFrame({'name':['X','Z'],'age':[19,20]}, index=[0,1])", "compare": "pd_frame", "hidden": true },
+    { "name": "Một dòng vượt qua", "call": "solve(pd.DataFrame({'name':['P','Q'],'age':[18,21]}))", "expected": "pd.DataFrame({'name':['Q'],'age':[21]}, index=[0])", "compare": "pd_frame", "hidden": true }
+  ],
+  "solution": "import pandas as pd\n\ndef solve(df):\n    return df[df['age'] > 18].reset_index(drop=True)",
+  "hint": "Dùng boolean indexing `df[df['col'] > value]` rồi `.reset_index(drop=True)` để đặt lại chỉ số."
+}

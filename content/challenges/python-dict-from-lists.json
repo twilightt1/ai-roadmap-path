@@ -1,0 +1,18 @@
+{
+  "id": "python-dict-from-lists",
+  "title": "Dict từ hai list",
+  "difficulty": "easy",
+  "category": "python",
+  "tags": ["dict", "zip"],
+  "description": "## Đề bài\n\nViết hàm `solve(keys, values)` nhận hai list `keys` và `values` có **cùng độ dài**. Trả về dict ánh xạ mỗi `keys[i]` tới `values[i]`.\n\n## Ví dụ\n\n```python\nsolve(['a', 'b'], [1, 2])            # → {'a': 1, 'b': 2}\nsolve(['name', 'age'], ['An', 20])   # → {'name': 'An', 'age': 20}\n```",
+  "starterCode": "def solve(keys, values):\n    # code here\n    pass",
+  "testCases": [
+    { "name": "Ví dụ cơ bản", "call": "solve(['a', 'b'], [1, 2])", "expected": "{'a': 1, 'b': 2}", "compare": "exact", "hidden": false },
+    { "name": "Hai list rỗng", "call": "solve([], [])", "expected": "{}", "compare": "exact", "hidden": true },
+    { "name": "Một cặp", "call": "solve(['x'], [10])", "expected": "{'x': 10}", "compare": "exact", "hidden": true },
+    { "name": "Giá trị hỗn hợp", "call": "solve(['name', 'age'], ['An', 20])", "expected": "{'name': 'An', 'age': 20}", "compare": "exact", "hidden": true },
+    { "name": "Ba cặp", "call": "solve(['p', 'q', 'r'], [1, 2, 3])", "expected": "{'p': 1, 'q': 2, 'r': 3}", "compare": "exact", "hidden": true }
+  ],
+  "solution": "def solve(keys, values):\n    return dict(zip(keys, values))",
+  "hint": "Dùng `dict(zip(keys, values))` để ghép từng cặp key–value."
+}
