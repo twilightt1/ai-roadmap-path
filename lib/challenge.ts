@@ -6,7 +6,6 @@ import type {
   ChallengeCategory,
   ChallengeDifficulty,
   CompareMode,
-  TestCase,
 } from "./challenge-types";
 
 // Re-export types để code khác import từ "./challenge".
@@ -69,8 +68,28 @@ export async function getChallenge(
     if (!includeSolution) {
       // Strip solution trước khi trả về client — tránh lộ đáp án.
       const c = parsed as Challenge;
-      const { solution: _omit, ...rest } = c;
-      return rest as Challenge;
+      const {
+        id,
+        title,
+        difficulty,
+        category,
+        tags,
+        description,
+        starterCode,
+        testCases,
+        hint,
+      } = c;
+      return {
+        id,
+        title,
+        difficulty,
+        category,
+        tags,
+        description,
+        starterCode,
+        testCases,
+        hint,
+      } as Challenge;
     }
     return parsed as Challenge;
   } catch {

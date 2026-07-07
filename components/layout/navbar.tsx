@@ -8,6 +8,7 @@ import { BrainCircuit, Menu, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SearchTrigger } from "@/components/shared/search-trigger";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
+import { AuthButton } from "@/components/auth/auth-button";
 
 const navItems = [
   { href: "/roadmap", label: "Lộ trình" },
@@ -74,6 +75,7 @@ export function Navbar() {
         <div className="flex items-center gap-2">
           <SearchTrigger className="hidden sm:inline-flex" />
           <ThemeToggle />
+          <AuthButton />
           <Link
             href="/roadmap"
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-transform hover:scale-[1.02] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
@@ -139,6 +141,20 @@ export function Navbar() {
                   </motion.div>
                 );
               })}
+              <motion.div
+                variants={{
+                  hidden: { opacity: 0, x: -8 },
+                  visible: { opacity: 1, x: 0 },
+                }}
+              >
+                <Link
+                  href="/login"
+                  onClick={() => setMobileOpen(false)}
+                  className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                >
+                  Đăng nhập / tài khoản
+                </Link>
+              </motion.div>
             </motion.div>
           </motion.nav>
         )}

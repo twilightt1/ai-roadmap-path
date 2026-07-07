@@ -1,151 +1,179 @@
 "use client";
 
+import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { useCallback, useSyncExternalStore } from "react";
 import { phases, allProjects } from "./roadmap-data";
 import { QUIZ_PASS_THRESHOLD } from "./quiz-types";
 import type { ChallengeResult } from "./challenge-types";
+import type {
+  ChallengeAttemptDetails,
+  ProgressStats,
+  QuizAttemptDetails,
+  QuizResult,
+  StoreState,
+} from "./progress-types";
+import { createEmptyProgressState, featureKey, topicKey } from "./progress-types";
+import {
+  clearLocalProgressState,
+  loadLocalProgressState,
+  persistLocalProgressState,
+} from "./progress-local-storage";
+import { mergeProgressStates } from "./progress-sync";
+import {
+  loadRemoteProgressState,
+  recordRemoteChallengeAttempt,
+  recordRemoteQuizAttempt,
+  resetRemoteProgress,
+  saveRemoteProgressSnapshot,
+} from "./progress-remote";
+import { getSupabaseBrowserClient } from "./supabase/client";
+
+export type { ProgressStats, QuizResult } from "./progress-types";
+export { featureKey, topicKey } from "./progress-types";
 
 /**
- * Progress tracking store — localStorage-based, không cần auth.
+ * Progress tracking store.
  *
- * Singleton store with `useSyncExternalStore` so all components share state.
- * Track: set of completed topic IDs (slug form: `${phaseSlug}/${topicId}`).
+ * Public API stays synchronous for components. Anonymous users and unconfigured
+ * Supabase use localStorage only. Authenticated users hydrate from Supabase,
+ * merge with local progress, then write optimistic local changes to Supabase in
+ * a serialized background queue.
  */
 
-const STORAGE_KEY = "ai-roadmap:progress:v1";
-const COMPLETED_KEY = "ai-roadmap:completed:v1";
-const STARTED_KEY = "ai-roadmap:started:v1";
-const PROJECT_FEATURES_KEY = "ai-roadmap:project-features:v1";
-const QUIZ_RESULTS_KEY = "ai-roadmap:quiz-results:v1";
-const CHALLENGE_RESULTS_KEY = "ai-roadmap:challenge-results:v1";
+const emptyState = createEmptyProgressState();
 
-export type ProgressStats = {
-  /** 0..100 */
-  overall: number;
-  completedTopics: number;
-  totalTopics: number;
-  completedPhases: number;
-  totalPhases: number;
-  phaseProgress: Array<{
-    phase: number;
-    slug: string;
-    title: string;
-    completed: number;
-    total: number;
-    percent: number;
-    done: boolean;
-  }>;
-  completedProjects: number;
-  totalProjects: number;
-  projectProgress: Array<{
-    phase: number;
-    slug: string;
-    title: string;
-    completed: number;
-    total: number;
-    percent: number;
-  }>;
-  startedAt: string | null;
-  lastVisit: string | null;
-  /** Days since first activity — computed once when store loads */
-  daysSinceStart: number;
-};
-
-/** Kết quả làm quiz của một topic — key bằng topicKey(phaseSlug, topicId). */
-export type QuizResult = {
-  /** Số câu đúng. */
-  score: number;
-  /** Tổng số câu. */
-  total: number;
-  /** ISO timestamp khi vượt qua ngưỡng pass lần đầu, hoặc null nếu chưa pass. */
-  passedAt: string | null;
-  /** Số lần đã nộp bài. */
-  attempts: number;
-};
-
-type StoreState = {
-  completed: Set<string>;
-  projectFeatures: Set<string>;
-  quizResults: Map<string, QuizResult>;
-  challengeResults: Map<string, ChallengeResult>;
-  startedAt: string | null;
-  lastVisit: string | null;
-};
-
-const emptyState: StoreState = {
-  completed: new Set(),
-  projectFeatures: new Set(),
-  quizResults: new Map(),
-  challengeResults: new Map(),
-  startedAt: null,
-  lastVisit: null,
-};
-
-let state: StoreState = emptyState;
+let state: StoreState = createEmptyProgressState();
 let hydrated = false;
+let hydrateStarted = false;
+let remoteClient: SupabaseClient | null = null;
+let remoteUserId: string | null = null;
+let remoteWriteQueue: Promise<void> = Promise.resolve();
+let authGeneration = 0;
+let authSubscription: { unsubscribe: () => void } | null = null;
 const listeners = new Set<() => void>();
 
-function loadState(): StoreState {
-  if (typeof window === "undefined") return emptyState;
-  try {
-    const raw = localStorage.getItem(COMPLETED_KEY);
-    const completed = raw ? new Set<string>(JSON.parse(raw) as string[]) : new Set<string>();
-    const featuresRaw = localStorage.getItem(PROJECT_FEATURES_KEY);
-    const projectFeatures = featuresRaw
-      ? new Set<string>(JSON.parse(featuresRaw) as string[])
-      : new Set<string>();
-    const quizRaw = localStorage.getItem(QUIZ_RESULTS_KEY);
-    const quizResults = quizRaw
-      ? new Map<string, QuizResult>(Object.entries(JSON.parse(quizRaw) as Record<string, QuizResult>))
-      : new Map<string, QuizResult>();
-    const challengeRaw = localStorage.getItem(CHALLENGE_RESULTS_KEY);
-    const challengeResults = challengeRaw
-      ? new Map<string, ChallengeResult>(
-          Object.entries(JSON.parse(challengeRaw) as Record<string, ChallengeResult>)
-        )
-      : new Map<string, ChallengeResult>();
-    const lastVisit = localStorage.getItem(STORAGE_KEY);
-    const startedAt = localStorage.getItem(STARTED_KEY);
-    return { completed, projectFeatures, quizResults, challengeResults, lastVisit, startedAt };
-  } catch {
-    return emptyState;
+function notify() {
+  listeners.forEach((listener) => listener());
+}
+
+function enqueueRemoteWrite(write: (client: SupabaseClient, userId: string) => Promise<void>) {
+  if (!remoteClient || !remoteUserId) return;
+
+  const client = remoteClient;
+  const userId = remoteUserId;
+  const generation = authGeneration;
+
+  remoteWriteQueue = remoteWriteQueue
+    .then(async () => {
+      if (generation !== authGeneration || client !== remoteClient || userId !== remoteUserId) return;
+      await write(client, userId);
+    })
+    .catch((error) => {
+      console.error("[progress] Supabase sync failed", error);
+    });
+}
+
+function persistCurrentLocalState(next: StoreState) {
+  persistLocalProgressState(next, remoteUserId);
+}
+
+function isCurrentAuthContext(client: SupabaseClient, userId: string | null, generation: number) {
+  return generation === authGeneration && client === remoteClient && userId === remoteUserId;
+}
+
+function withActivityMetadata(next: StoreState): StoreState {
+  const now = next.lastVisit ?? new Date().toISOString();
+  return {
+    ...next,
+    startedAt: next.startedAt ?? state.startedAt ?? now,
+    lastVisit: now,
+  };
+}
+
+function setState(next: StoreState, options: { persistRemote?: boolean } = {}) {
+  state = options.persistRemote === false ? next : withActivityMetadata(next);
+  persistCurrentLocalState(state);
+  notify();
+
+  if (options.persistRemote !== false) {
+    const snapshot = state;
+    enqueueRemoteWrite((client, userId) => saveRemoteProgressSnapshot(client, userId, snapshot));
   }
 }
 
-function persistState(s: StoreState) {
-  if (typeof window === "undefined") return;
+async function applySession(session: Session | null) {
+  const client = remoteClient;
+  authGeneration += 1;
+  const generation = authGeneration;
+
+  if (!session || !client) {
+    remoteUserId = null;
+    state = loadLocalProgressState();
+    hydrated = true;
+    notify();
+    return;
+  }
+
+  const userId = session.user.id;
+  remoteUserId = userId;
+  const userLocalState = loadLocalProgressState(userId);
+  const anonymousLocalState = loadLocalProgressState();
+
   try {
-    localStorage.setItem(COMPLETED_KEY, JSON.stringify([...s.completed]));
-    localStorage.setItem(PROJECT_FEATURES_KEY, JSON.stringify([...s.projectFeatures]));
-    localStorage.setItem(QUIZ_RESULTS_KEY, JSON.stringify(Object.fromEntries(s.quizResults)));
-    localStorage.setItem(
-      CHALLENGE_RESULTS_KEY,
-      JSON.stringify(Object.fromEntries(s.challengeResults))
+    const remoteState = await loadRemoteProgressState(client, userId);
+    if (!isCurrentAuthContext(client, userId, generation)) return;
+
+    const currentUserLocalState = loadLocalProgressState(userId);
+    const localWithInFlightMutations = mergeProgressStates(currentUserLocalState, state);
+    const merged = mergeProgressStates(
+      mergeProgressStates(anonymousLocalState, userLocalState),
+      mergeProgressStates(remoteState, localWithInFlightMutations)
     );
-    const now = new Date().toISOString();
-    localStorage.setItem(STORAGE_KEY, now);
-    if (!s.startedAt) localStorage.setItem(STARTED_KEY, now);
-  } catch {
-    // ignore quota errors
-  }
-}
 
-function setState(next: StoreState) {
-  state = next;
-  persistState(state);
-  listeners.forEach((l) => l());
+    if (!isCurrentAuthContext(client, userId, generation)) return;
+    state = merged;
+    hydrated = true;
+    persistLocalProgressState(merged, userId);
+    notify();
+    enqueueRemoteWrite((currentClient, currentUserId) =>
+      saveRemoteProgressSnapshot(currentClient, currentUserId, merged)
+    );
+  } catch (error) {
+    if (!isCurrentAuthContext(client, userId, generation)) return;
+    console.error("[progress] Failed to load Supabase progress; using local progress", error);
+    state = mergeProgressStates(userLocalState, state);
+    hydrated = true;
+    persistLocalProgressState(state, userId);
+    notify();
+  }
 }
 
 function hydrate() {
-  if (hydrated) return;
-  hydrated = true;
-  state = loadState();
-  listeners.forEach((l) => l());
+  if (hydrateStarted) return;
+  hydrateStarted = true;
+
+  remoteClient = getSupabaseBrowserClient();
+
+  if (!remoteClient) {
+    state = loadLocalProgressState();
+    hydrated = true;
+    notify();
+    return;
+  }
+
+  void remoteClient.auth.getSession().then(({ data }) => applySession(data.session));
+
+  if (!authSubscription) {
+    const { data } = remoteClient.auth.onAuthStateChange((_event, session) => {
+      void applySession(session);
+    });
+    authSubscription = data.subscription;
+  }
 }
 
 function subscribe(listener: () => void) {
-  hydrate();
   listeners.add(listener);
+  hydrate();
   return () => listeners.delete(listener);
 }
 
@@ -157,21 +185,17 @@ function getServerSnapshot(): StoreState {
   return emptyState;
 }
 
-/** Build a topic key: `${phaseSlug}/${topicId}` */
-export function topicKey(phaseSlug: string, topicId: string): string {
-  return `${phaseSlug}/${topicId}`;
-}
-
-/** Build a feature key: `${projectId}/${featureIndex}` */
-export function featureKey(projectId: string, featureIndex: number): string {
-  return `${projectId}/${featureIndex}`;
-}
-
 /** True if all features of a project are checked. */
 export function isProjectDone(projectId: string): boolean {
   const project = allProjects.find((p) => p.id === projectId);
   if (!project || project.features.length === 0) return false;
   return project.features.every((_, i) => state.projectFeatures.has(featureKey(projectId, i)));
+}
+
+function isProjectDoneFromState(projectId: string, s: StoreState): boolean {
+  const project = allProjects.find((p) => p.id === projectId);
+  if (!project || project.features.length === 0) return false;
+  return project.features.every((_, i) => s.projectFeatures.has(featureKey(projectId, i)));
 }
 
 /** Compute stats from a set of completed topic keys. */
@@ -206,7 +230,7 @@ export function computeStats(completed: Set<string>, s: StoreState): ProgressSta
 
   const projectProgress = phases.map((phase) => {
     const total = phase.projects.length;
-    const completed = phase.projects.filter((p) => isProjectDone(p.id)).length;
+    const completed = phase.projects.filter((p) => isProjectDoneFromState(p.id, s)).length;
     const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
     return {
       phase: phase.number,
@@ -219,7 +243,7 @@ export function computeStats(completed: Set<string>, s: StoreState): ProgressSta
   });
 
   const totalProjects = allProjects.length;
-  const completedProjects = allProjects.filter((p) => isProjectDone(p.id)).length;
+  const completedProjects = allProjects.filter((p) => isProjectDoneFromState(p.id, s)).length;
 
   return {
     overall: totalTopics === 0 ? 0 : Math.round((completedTopics / totalTopics) * 100),
@@ -281,30 +305,34 @@ export function useProgress() {
   }, []);
 
   const isFeatureDone = useCallback(
-    (projectId: string, featureIndex: number) => state.projectFeatures.has(featureKey(projectId, featureIndex)),
-    [state.projectFeatures]
+    (projectId: string, featureIndex: number) =>
+      store.projectFeatures.has(featureKey(projectId, featureIndex)),
+    [store.projectFeatures]
   );
 
   const isProjectDoneCb = useCallback(
-    (projectId: string) => {
-      const project = allProjects.find((p) => p.id === projectId);
-      if (!project || project.features.length === 0) return false;
-      return project.features.every((_, i) => state.projectFeatures.has(featureKey(projectId, i)));
-    },
-    [state.projectFeatures]
+    (projectId: string) => isProjectDoneFromState(projectId, store),
+    [store]
   );
 
   const setQuizResult = useCallback(
-    (phaseSlug: string, topicId: string, score: number, total: number) => {
+    (
+      phaseSlug: string,
+      topicId: string,
+      score: number,
+      total: number,
+      details?: QuizAttemptDetails
+    ) => {
       const key = topicKey(phaseSlug, topicId);
       const prev = state.quizResults.get(key);
       const passed = total > 0 && score / total >= QUIZ_PASS_THRESHOLD;
+      const now = new Date().toISOString();
       const nextResults = new Map(state.quizResults);
       nextResults.set(key, {
         score,
         total,
         // Giữ passedAt cũ nếu đã pass rồi; đặt mới nếu pass lần đầu.
-        passedAt: passed ? prev?.passedAt ?? new Date().toISOString() : prev?.passedAt ?? null,
+        passedAt: passed ? prev?.passedAt ?? now : prev?.passedAt ?? null,
         attempts: (prev?.attempts ?? 0) + 1,
       });
       const nextCompleted = new Set(state.completed);
@@ -313,8 +341,18 @@ export function useProgress() {
         ...state,
         completed: nextCompleted,
         quizResults: nextResults,
-        lastVisit: new Date().toISOString(),
+        lastVisit: now,
       });
+      if (total > 0 && score >= 0 && score <= total) {
+        enqueueRemoteWrite((client, userId) =>
+          recordRemoteQuizAttempt(client, userId, {
+            quizSlug: key,
+            score,
+            total,
+            details,
+          })
+        );
+      }
     },
     []
   );
@@ -325,41 +363,63 @@ export function useProgress() {
     [store.quizResults]
   );
 
-  const setChallengeResult = useCallback((challengeId: string, passed: boolean) => {
-    const prev = state.challengeResults.get(challengeId);
-    const nextResults = new Map(state.challengeResults);
-    nextResults.set(challengeId, {
-      // Giữ solvedAt cũ nếu đã giải rồi; đặt mới nếu pass lần đầu.
-      solvedAt: passed ? prev?.solvedAt ?? new Date().toISOString() : prev?.solvedAt ?? null,
-      attempts: (prev?.attempts ?? 0) + 1,
-      lastPassed: passed,
-    });
-    setState({
-      ...state,
-      challengeResults: nextResults,
-      lastVisit: new Date().toISOString(),
-    });
-  }, []);
+  const setChallengeResult = useCallback(
+    (challengeId: string, passed: boolean, details?: ChallengeAttemptDetails) => {
+      const prev = state.challengeResults.get(challengeId);
+      const now = new Date().toISOString();
+      const nextResults = new Map(state.challengeResults);
+      nextResults.set(challengeId, {
+        // Giữ solvedAt cũ nếu đã giải rồi; đặt mới nếu pass lần đầu.
+        solvedAt: passed ? prev?.solvedAt ?? now : prev?.solvedAt ?? null,
+        attempts: (prev?.attempts ?? 0) + 1,
+        lastPassed: passed,
+      });
+      setState({
+        ...state,
+        challengeResults: nextResults,
+        lastVisit: now,
+      });
+      enqueueRemoteWrite((client, userId) =>
+        recordRemoteChallengeAttempt(client, userId, {
+          challengeSlug: challengeId,
+          passed,
+          details,
+        })
+      );
+    },
+    []
+  );
 
   const getChallengeResult = useCallback(
-    (challengeId: string): ChallengeResult | undefined =>
-      store.challengeResults.get(challengeId),
+    (challengeId: string): ChallengeResult | undefined => store.challengeResults.get(challengeId),
     [store.challengeResults]
   );
 
   const isChallengeSolved = useCallback(
-    (challengeId: string) => state.challengeResults.get(challengeId)?.solvedAt != null,
-    [state.challengeResults]
+    (challengeId: string) => store.challengeResults.get(challengeId)?.solvedAt != null,
+    [store.challengeResults]
   );
 
   const reset = useCallback(() => {
-    setState({ ...emptyState, lastVisit: new Date().toISOString() });
-    if (typeof window !== "undefined") {
-      localStorage.removeItem(COMPLETED_KEY);
-      localStorage.removeItem(PROJECT_FEATURES_KEY);
-      localStorage.removeItem(QUIZ_RESULTS_KEY);
-      localStorage.removeItem(CHALLENGE_RESULTS_KEY);
-      localStorage.removeItem(STARTED_KEY);
+    const client = remoteClient;
+    const userId = remoteUserId;
+    authGeneration += 1;
+    const generation = authGeneration;
+
+    state = { ...createEmptyProgressState(), lastVisit: new Date().toISOString() };
+    clearLocalProgressState(userId);
+    persistLocalProgressState(state, userId);
+    notify();
+
+    if (client && userId) {
+      remoteWriteQueue = remoteWriteQueue
+        .then(async () => {
+          if (generation !== authGeneration || client !== remoteClient || userId !== remoteUserId) return;
+          await resetRemoteProgress(client, userId);
+        })
+        .catch((error) => {
+          console.error("[progress] Supabase reset failed", error);
+        });
     }
   }, []);
 

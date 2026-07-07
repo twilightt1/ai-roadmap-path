@@ -1,8 +1,8 @@
-// Prisma schema dự phòng cho v2 — CHƯA được sử dụng trong v1 (showcase tĩnh).
-// Khi triển khai auth + lưu tiến độ, cài: pnpm add prisma @prisma/client next-auth
-// và chạy: npx prisma generate && npx prisma migrate dev
+// Prisma schema legacy/future/reference only — KHÔNG phải hướng triển khai Phase 1 production.
+// Phase 1 production auth/user-data path: Supabase Auth + Supabase PostgreSQL.
+// Không cài Prisma/NextAuth hoặc chạy Prisma migrate cho Phase 1 từ file này.
 //
-// Generator cho PostgreSQL. Cấu trúc bám sát lib/types.ts để dễ map dữ liệu.
+// Generator cho PostgreSQL. Cấu trúc tham khảo bám sát lib/types.ts để dễ map dữ liệu nếu cần về sau.
 
 generator client {
   provider = "prisma-client-js"

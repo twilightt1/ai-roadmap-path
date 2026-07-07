@@ -72,7 +72,10 @@ export function QuizCard({
       (acc, q, i) => acc + (answers[i] === q.answerIndex ? 1 : 0),
       0
     );
-    setQuizResult(phaseSlug, topicId, finalScore, total);
+    setQuizResult(phaseSlug, topicId, finalScore, total, {
+      answers,
+      completedAt: new Date().toISOString(),
+    });
   };
 
   const retry = () => {

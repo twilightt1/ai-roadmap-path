@@ -27,17 +27,15 @@ const CodeEditor = dynamic(
  * - "Submit": chạy tất cả (visible + hidden), ghi progress nếu pass
  */
 export function ChallengeEditor({
-  challengeId,
   starterCode,
   testCases,
-  onSolved,
+  onSubmit,
   persistKey,
 }: {
-  challengeId: string;
   starterCode: string;
   testCases: TestCase[];
-  /** Callback khi submit pass — ghi progress. */
-  onSolved?: () => void;
+  /** Callback for every submit result — ghi progress/attempts. */
+  onSubmit?: (payload: { code: string; result: ChallengeRunResult; passed: boolean }) => void;
   /** localStorage key cho code. */
   persistKey?: string;
 }) {
@@ -98,20 +96,22 @@ export function ChallengeEditor({
     try {
       const r = await submitChallenge(code, testCases);
       setSubmitResult(r);
-      if (r.allPassed && onSolved) onSolved();
+      onSubmit?.({ code, result: r, passed: r.allPassed });
     } catch (e) {
-      setSubmitResult({
+      const result = {
         results: [],
         allPassed: false,
         stdout: "",
         stderr: "",
         error: (e as Error).message || String(e),
-      });
+      } satisfies ChallengeRunResult;
+      setSubmitResult(result);
+      onSubmit?.({ code, result, passed: result.allPassed });
     } finally {
       setRunning(false);
       setLoadingRuntime(false);
     }
-  }, [code, testCases, onSolved]);
+  }, [code, testCases, onSubmit]);
 
   const reset = useCallback(() => {
     setCode(starterCode);

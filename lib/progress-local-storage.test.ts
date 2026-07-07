@@ -1,0 +1,168 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearLocalProgressState,
+  loadLocalProgressState,
+  persistLocalProgressState,
+} from "./progress-local-storage";
+import { createEmptyProgressState } from "./progress-types";
+
+const STORAGE_KEY = "ai-roadmap:progress:v1";
+const COMPLETED_KEY = "ai-roadmap:completed:v1";
+const STARTED_KEY = "ai-roadmap:started:v1";
+const PROJECT_FEATURES_KEY = "ai-roadmap:project-features:v1";
+const QUIZ_RESULTS_KEY = "ai-roadmap:quiz-results:v1";
+const CHALLENGE_RESULTS_KEY = "ai-roadmap:challenge-results:v1";
+
+function createLocalStorageMock() {
+  const values = new Map<string, string>();
+
+  return {
+    getItem: vi.fn((key: string) => values.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => {
+      values.set(key, value);
+    }),
+    removeItem: vi.fn((key: string) => {
+      values.delete(key);
+    }),
+    seed(key: string, value: string) {
+      values.set(key, value);
+    },
+    value(key: string) {
+      return values.get(key) ?? null;
+    },
+  };
+}
+
+describe("progress local storage", () => {
+  let storage: ReturnType<typeof createLocalStorageMock>;
+
+  beforeEach(() => {
+    storage = createLocalStorageMock();
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("localStorage", storage);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("loads state from the existing compatible storage keys", () => {
+    storage.seed(COMPLETED_KEY, JSON.stringify(["phase-1/a"]));
+    storage.seed(PROJECT_FEATURES_KEY, JSON.stringify(["project-1/0"]));
+    storage.seed(
+      QUIZ_RESULTS_KEY,
+      JSON.stringify({
+        "phase-1/a": {
+          score: 10,
+          total: 10,
+          passedAt: "2026-01-01T00:00:00.000Z",
+          attempts: 2,
+        },
+      })
+    );
+    storage.seed(
+      CHALLENGE_RESULTS_KEY,
+      JSON.stringify({
+        "numpy-1": {
+          solvedAt: "2026-01-02T00:00:00.000Z",
+          attempts: 3,
+          lastPassed: true,
+        },
+      })
+    );
+    storage.seed(STORAGE_KEY, "2026-01-03T00:00:00.000Z");
+    storage.seed(STARTED_KEY, "2026-01-01T00:00:00.000Z");
+
+    const state = loadLocalProgressState();
+
+    expect([...state.completed]).toEqual(["phase-1/a"]);
+    expect([...state.projectFeatures]).toEqual(["project-1/0"]);
+    expect(state.quizResults.get("phase-1/a")).toEqual({
+      score: 10,
+      total: 10,
+      passedAt: "2026-01-01T00:00:00.000Z",
+      attempts: 2,
+    });
+    expect(state.challengeResults.get("numpy-1")).toEqual({
+      solvedAt: "2026-01-02T00:00:00.000Z",
+      attempts: 3,
+      lastPassed: true,
+    });
+    expect(state.lastVisit).toBe("2026-01-03T00:00:00.000Z");
+    expect(state.startedAt).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("falls back to an empty state when stored JSON is corrupt", () => {
+    storage.seed(COMPLETED_KEY, "not-json");
+
+    expect(loadLocalProgressState()).toEqual(createEmptyProgressState());
+  });
+
+  it("persists writes to prior storage keys", () => {
+    persistLocalProgressState({
+      completed: new Set(["phase-1/a"]),
+      projectFeatures: new Set(["project-1/0"]),
+      quizResults: new Map([
+        [
+          "phase-1/a",
+          { score: 9, total: 10, passedAt: "2026-01-01T00:00:00.000Z", attempts: 2 },
+        ],
+      ]),
+      challengeResults: new Map([
+        ["numpy-1", { solvedAt: "2026-01-02T00:00:00.000Z", attempts: 3, lastPassed: true }],
+      ]),
+      lastVisit: "2026-01-03T00:00:00.000Z",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    expect(storage.value(COMPLETED_KEY)).toBe(JSON.stringify(["phase-1/a"]));
+    expect(storage.value(PROJECT_FEATURES_KEY)).toBe(JSON.stringify(["project-1/0"]));
+    expect(storage.value(QUIZ_RESULTS_KEY)).toBe(
+      JSON.stringify({
+        "phase-1/a": {
+          score: 9,
+          total: 10,
+          passedAt: "2026-01-01T00:00:00.000Z",
+          attempts: 2,
+        },
+      })
+    );
+    expect(storage.value(CHALLENGE_RESULTS_KEY)).toBe(
+      JSON.stringify({
+        "numpy-1": { solvedAt: "2026-01-02T00:00:00.000Z", attempts: 3, lastPassed: true },
+      })
+    );
+    expect(storage.value(STORAGE_KEY)).toBe("2026-01-03T00:00:00.000Z");
+    expect(storage.value(STARTED_KEY)).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("clears prior reset keys including startedAt", () => {
+    clearLocalProgressState();
+
+    expect(storage.removeItem).toHaveBeenCalledWith(COMPLETED_KEY);
+    expect(storage.removeItem).toHaveBeenCalledWith(PROJECT_FEATURES_KEY);
+    expect(storage.removeItem).toHaveBeenCalledWith(QUIZ_RESULTS_KEY);
+    expect(storage.removeItem).toHaveBeenCalledWith(CHALLENGE_RESULTS_KEY);
+    expect(storage.removeItem).toHaveBeenCalledWith(STARTED_KEY);
+  });
+
+  it("separates anonymous and authenticated storage namespaces", () => {
+    persistLocalProgressState({
+      ...createEmptyProgressState(),
+      completed: new Set(["anonymous/topic"]),
+      lastVisit: "2026-01-01T00:00:00.000Z",
+    });
+    persistLocalProgressState(
+      {
+        ...createEmptyProgressState(),
+        completed: new Set(["user/topic"]),
+        lastVisit: "2026-01-02T00:00:00.000Z",
+      },
+      "user-a"
+    );
+
+    expect([...loadLocalProgressState().completed]).toEqual(["anonymous/topic"]);
+    expect([...loadLocalProgressState("user-a").completed]).toEqual(["user/topic"]);
+    expect(loadLocalProgressState("user-b")).toEqual(createEmptyProgressState());
+  });
+});

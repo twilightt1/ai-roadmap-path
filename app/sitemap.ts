@@ -1,7 +1,6 @@
 import type { MetadataRoute } from "next";
 import { phases } from "@/lib/roadmap-data";
-
-const siteUrl = "https://ai-roadmap.local";
+import { absoluteUrl } from "@/lib/site-url";
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const staticRoutes = [
@@ -21,7 +20,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
 
   return [...staticRoutes, ...phaseRoutes].map((r) => ({
     ...r,
-    url: `${siteUrl}${r.url}`,
+    url: absoluteUrl(r.url),
     lastModified: new Date(),
   }));
 }

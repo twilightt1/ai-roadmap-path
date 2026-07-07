@@ -6,6 +6,7 @@ import { Footer } from "@/components/layout/footer";
 import { SearchCommand } from "@/components/shared/search-command";
 import { ScrollProgress } from "@/components/shared/scroll-progress";
 import { ThemeProvider } from "@/components/layout/theme-provider";
+import { siteUrl } from "@/lib/site-url";
 
 const geistSans = Geist({
   variable: "--font-sans",
@@ -16,8 +17,6 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
-
-const siteUrl = "https://ai-roadmap.local";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),

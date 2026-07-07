@@ -1,8 +1,9 @@
 /**
  * Kiểu dữ liệu cho AI Engineer Roadmap.
  *
- * Cấu trúc này bám sát schema Prisma dự kiến cho v2 (xem prisma/schema.prisma),
- * để khi thêm auth + database chỉ cần map trực tiếp dữ liệu này vào seed.
+ * Phase 1 production auth/user-data path: Supabase Auth + Supabase PostgreSQL.
+ * Các type runtime bên dưới vẫn là source-of-truth cho UI/content hiện tại.
+ * prisma/schema.prisma chỉ là schema legacy/future/reference, không phải hướng triển khai Phase 1.
  */
 
 export type Difficulty = "easy" | "medium" | "hard";

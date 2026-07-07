@@ -19,7 +19,7 @@ Let learners track their progress on the 51 projects, by checking off individual
 
 ### Out of scope
 
-- Auth, DB, Prisma — deferred to v2 (localStorage only)
+- Auth + production DB — deferred for this 2026-07-04 project-tracking slice (localStorage only). **Superseded for current Phase 1 direction by `docs/superpowers/specs/2026-07-06-production-db-hybrid-design.md`: production auth/user-data now uses Supabase Auth + Supabase PostgreSQL; Prisma is legacy/future/reference only.**
 - Repo/demo link storage — deferred to v2 (you picked "done status only" + "feature checklist")
 - Self-rating, notes — deferred to v2
 - Project content (MDX content for projects) — deferred to v2
@@ -220,9 +220,11 @@ The project does not currently have a test runner (no `vitest`, `jest`, or `__te
 
 ## 8. Migration Path (v2)
 
-When v2 (auth + DB) comes, the data model maps 1:1 to the Prisma schema:
+**Superseded production DB note (2026-07-06):** The original version of this historical project-tracking spec described a future v2 auth/DB path in Prisma-first terms. That direction is now superseded by `docs/superpowers/specs/2026-07-06-production-db-hybrid-design.md`. Current Phase 1 production auth/user-data uses **Supabase Auth + Supabase PostgreSQL**. Prisma references in this project-tracking spec should be treated as legacy/future/reference context only, not the active Phase 1 implementation direction.
 
-- `ai-roadmap:project-features:v1` → `UserProject` (with `completedAt` when all features checked)
-- The `featureKey` index-based keys can be migrated to a `UserProjectFeature` table if needed (but the Prisma schema currently only has `link` + `completedAt`, not per-feature tracking)
+For this 2026-07-04 localStorage-first slice, the forward-compatible migration intent remains:
 
-This is a forward-compatible design — when v2 comes, the migration is a simple localStorage → DB sync.
+- `ai-roadmap:project-features:v1` → a Supabase PostgreSQL-backed user-project completion record (for example, a `UserProject`-equivalent row with `completedAt` when all features are checked)
+- The `featureKey` index-based keys can be migrated to a per-feature user-project table if needed (the earlier Prisma schema comparison is legacy/reference only and should not drive Phase 1 production design)
+
+This remains a forward-compatible design: when production sync is added, migration should be a localStorage → Supabase user-data sync aligned with the 2026-07-06 production DB hybrid design.

@@ -9,7 +9,6 @@ import {
   Circle,
   ChevronDown,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { ChallengeEditor } from "./challenge-editor";
 import {
   CHALLENGE_CATEGORIES,
@@ -141,11 +140,21 @@ export function ChallengeView({ challenge }: { challenge: Challenge }) {
         <div className="lg:sticky lg:top-20 lg:self-start">
           <div className="rounded-xl border border-border/60 bg-card/30 p-4">
             <ChallengeEditor
-              challengeId={challenge.id}
               starterCode={challenge.starterCode}
               testCases={challenge.testCases}
               persistKey={`ai-roadmap:challenge-code:${challenge.id}`}
-              onSolved={() => setChallengeResult(challenge.id, true)}
+              onSubmit={({ code, result, passed }) =>
+                setChallengeResult(challenge.id, passed, {
+                  code,
+                  language: "python",
+                  testResults: result,
+                  submittedAt: new Date().toISOString(),
+                  durationSeconds:
+                    typeof result.durationMs === "number"
+                      ? result.durationMs / 1000
+                      : undefined,
+                })
+              }
             />
           </div>
         </div>

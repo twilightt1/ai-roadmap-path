@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, X, Loader2, ChevronDown } from "lucide-react";
+import { Check, X, Loader2 } from "lucide-react";
 import type { ChallengeRunResult, TestCaseResult } from "@/lib/challenge-types";
 
 /**
