@@ -13,6 +13,7 @@ import { AuthButton } from "@/components/auth/auth-button";
 const navItems = [
   { href: "/roadmap", label: "Lộ trình" },
   { href: "/practice", label: "Luyện tập" },
+  { href: "/library", label: "Thư viện" },
   { href: "/projects", label: "Dự án" },
   { href: "/skills", label: "Kỹ năng" },
   { href: "/paths", label: "Con đường" },
@@ -130,7 +131,7 @@ export function Navbar() {
                       onClick={() => setMobileOpen(false)}
                       aria-current={isActive ? "page" : undefined}
                       className={cn(
-                        "rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                        "block w-full rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                         isActive
                           ? "bg-secondary text-foreground"
                           : "text-muted-foreground hover:bg-secondary hover:text-foreground"
@@ -150,7 +151,7 @@ export function Navbar() {
                 <Link
                   href="/login"
                   onClick={() => setMobileOpen(false)}
-                  className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                  className="block w-full rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
                 >
                   Đăng nhập / tài khoản
                 </Link>

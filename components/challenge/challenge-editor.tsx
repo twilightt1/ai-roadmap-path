@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { Play, Send, RotateCcw } from "lucide-react";
+import { SaveSnippetButton } from "@/components/library/save-snippet-button";
 import { Button } from "@/components/ui/button";
 import { runExample, submitChallenge } from "@/lib/challenge-runner";
 import type { TestCase, ChallengeRunResult } from "@/lib/challenge-types";
@@ -31,6 +32,8 @@ export function ChallengeEditor({
   testCases,
   onSubmit,
   persistKey,
+  challengeId,
+  challengeTitle,
 }: {
   starterCode: string;
   testCases: TestCase[];
@@ -38,6 +41,9 @@ export function ChallengeEditor({
   onSubmit?: (payload: { code: string; result: ChallengeRunResult; passed: boolean }) => void;
   /** localStorage key cho code. */
   persistKey?: string;
+  /** Challenge context for saved snippets. */
+  challengeId?: string;
+  challengeTitle?: string;
 }) {
   const [code, setCode] = useState(() => {
     if (!persistKey) return starterCode;
@@ -124,7 +130,7 @@ export function ChallengeEditor({
   return (
     <div className="space-y-3">
       {/* Toolbar */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
         <Button
           onClick={handleRun}
           disabled={running}
@@ -144,15 +150,23 @@ export function ChallengeEditor({
           <Send className="h-3.5 w-3.5" />
           Submit
         </Button>
-        <Button
-          onClick={reset}
-          variant="ghost"
-          size="sm"
-          className="ml-auto gap-1.5"
-          title="Đưa code về ban đầu"
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-        </Button>
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+          <SaveSnippetButton
+            language="python"
+            code={code}
+            challengeSlug={challengeId ?? null}
+            defaultTitle={challengeTitle ? `${challengeTitle} solution draft` : "Python challenge snippet"}
+          />
+          <Button
+            onClick={reset}
+            variant="ghost"
+            size="sm"
+            className="gap-1.5"
+            title="Đưa code về ban đầu"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       </div>
 
       {/* Editor */}

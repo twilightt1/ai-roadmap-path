@@ -7,6 +7,7 @@ import { difficultyMap, accentMap } from "@/lib/theme";
 import { Badge } from "@/components/ui/badge";
 import { Reveal } from "@/components/shared/reveal";
 import { FeatureChecklist } from "@/components/roadmap/feature-checklist";
+import { BookmarkButton } from "@/components/library/bookmark-button";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -51,17 +52,25 @@ export default async function ProjectDetailPage({ params }: Props) {
             className={`absolute -right-8 -top-8 h-24 w-24 rounded-full ${a ? a.bgSoft : "bg-foreground/5"} blur-3xl opacity-40`}
           />
           <div className="relative space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <Badge
-                variant="secondary"
-                className={`${d.bg} ${d.text} border ${d.border} gap-1.5 px-2 py-0 text-[10px]`}
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-current" />
-                {d.label}
-              </Badge>
-              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70">
-                {phaseLabel}
-              </span>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge
+                  variant="secondary"
+                  className={`${d.bg} ${d.text} border ${d.border} gap-1.5 px-2 py-0 text-[10px]`}
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                  {d.label}
+                </Badge>
+                <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70">
+                  {phaseLabel}
+                </span>
+              </div>
+              <BookmarkButton
+                targetType="project"
+                targetSlug={project.id}
+                label="Lưu dự án"
+                savedLabel="Đã lưu dự án"
+              />
             </div>
 
             <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">

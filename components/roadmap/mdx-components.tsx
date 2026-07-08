@@ -1,4 +1,4 @@
-import type { ReactNode, ComponentPropsWithoutRef } from "react";
+import type { ReactNode, ComponentProps, ComponentPropsWithoutRef } from "react";
 import { Info, Lightbulb, TriangleAlert, Flame } from "lucide-react";
 import { CodeBlock } from "./code-block";
 import { Playground } from "@/components/playground/playground";
@@ -61,17 +61,48 @@ export function Callout({
   );
 }
 
-/** Map component cho MDXRemote. */
-export const mdxComponents = {
-  pre: (props: ComponentPropsWithoutRef<"pre">) => <CodeBlock {...props} />,
-  code: (props: ComponentPropsWithoutRef<"code">) => <code {...props} />,
-  a: (props: ComponentPropsWithoutRef<"a">) => (
-    <a
-      target={props.href?.startsWith("http") ? "_blank" : undefined}
-      rel={props.href?.startsWith("http") ? "noreferrer" : undefined}
-      {...props}
-    />
-  ),
-  Callout,
-  Playground,
+type MdxComponentsOptions = {
+  lessonSlug?: string;
+  lessonTitle?: string;
 };
+
+type PlaygroundProps = ComponentProps<typeof Playground>;
+type MdxPlaygroundProps = Omit<PlaygroundProps, "initialCode"> & {
+  initialCode?: string;
+  code?: string;
+};
+
+/** Map component cho MDXRemote. */
+export function createMdxComponents({ lessonSlug, lessonTitle }: MdxComponentsOptions = {}) {
+  const MdxPlayground = ({ code, initialCode, snippetContext, ...props }: MdxPlaygroundProps) => (
+    <Playground
+      {...props}
+      initialCode={initialCode ?? code ?? ""}
+      snippetContext={
+        lessonSlug !== undefined || lessonTitle !== undefined
+          ? {
+              ...snippetContext,
+              lessonSlug: lessonSlug ?? null,
+              defaultTitle: lessonTitle ? `${lessonTitle} snippet` : snippetContext?.defaultTitle,
+            }
+          : snippetContext
+      }
+    />
+  );
+
+  return {
+    pre: (props: ComponentPropsWithoutRef<"pre">) => <CodeBlock {...props} />,
+    code: (props: ComponentPropsWithoutRef<"code">) => <code {...props} />,
+    a: (props: ComponentPropsWithoutRef<"a">) => (
+      <a
+        target={props.href?.startsWith("http") ? "_blank" : undefined}
+        rel={props.href?.startsWith("http") ? "noreferrer" : undefined}
+        {...props}
+      />
+    ),
+    Callout,
+    Playground: MdxPlayground,
+  };
+}
+
+export const mdxComponents = createMdxComponents();

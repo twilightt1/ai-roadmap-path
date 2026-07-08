@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Play, RotateCcw, ExternalLink, Terminal } from "lucide-react";
+import { SaveSnippetButton } from "@/components/library/save-snippet-button";
 import { Button } from "@/components/ui/button";
 import { runCode, LANG_LABELS, type Lang, type RunResult } from "@/lib/runner";
 import { OutputPanel } from "./output-panel";
@@ -38,6 +39,7 @@ export function Playground({
   title,
   persistKey,
   showOpenInPlayground = false,
+  snippetContext,
 }: {
   lang: Lang;
   initialCode: string;
@@ -46,6 +48,12 @@ export function Playground({
   persistKey?: string;
   /** Inline = true → hiện nút "Mở trong playground". */
   showOpenInPlayground?: boolean;
+  /** Optional context when playground appears inside a lesson/challenge. */
+  snippetContext?: {
+    lessonSlug?: string | null;
+    challengeSlug?: string | null;
+    defaultTitle?: string;
+  };
 }) {
   const router = useRouter();
   // Khôi phục code từ localStorage (lazy init — tránh setState trong effect).
@@ -104,7 +112,7 @@ export function Playground({
   return (
     <div className="my-6 overflow-hidden rounded-xl border border-border/60 bg-card/30">
       {/* Header */}
-      <div className="flex items-center gap-2 border-b border-border/60 bg-foreground/[0.02] px-4 py-2.5">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border/60 bg-foreground/[0.02] px-4 py-2.5">
         <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10">
           <Terminal className="h-3.5 w-3.5 text-primary" />
         </span>
@@ -114,7 +122,7 @@ export function Playground({
         <span className="rounded border border-border/60 px-1.5 py-0.5 text-[10px] font-mono font-bold uppercase text-muted-foreground">
           {LANG_LABELS[lang]}
         </span>
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
           <Button
             onClick={run}
             disabled={running}
@@ -124,6 +132,13 @@ export function Playground({
             <Play className="h-3.5 w-3.5" />
             Run
           </Button>
+          <SaveSnippetButton
+            language={lang}
+            code={code}
+            lessonSlug={snippetContext?.lessonSlug ?? null}
+            challengeSlug={snippetContext?.challengeSlug ?? null}
+            defaultTitle={snippetContext?.defaultTitle ?? `${LANG_LABELS[lang]} snippet`}
+          />
           <Button
             onClick={reset}
             variant="outline"

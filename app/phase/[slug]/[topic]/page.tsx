@@ -17,6 +17,8 @@ import { Reveal } from "@/components/shared/reveal";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2 } from "lucide-react";
 import { ProgressToggle } from "@/components/shared/progress-toggle";
+import { BookmarkButton } from "@/components/library/bookmark-button";
+import { LessonNotesPanel } from "@/components/library/lesson-notes-panel";
 
 type Props = {
   params: Promise<{ slug: string; topic: string }>;
@@ -103,8 +105,14 @@ export default async function TopicPage({ params }: Props) {
                   {t.description}
                 </p>
               )}
-              <div className="mt-4">
+              <div className="mt-4 flex flex-wrap items-center gap-2">
                 <ProgressToggle phaseSlug={phase.slug} topicId={t.id} />
+                <BookmarkButton
+                  targetType="lesson"
+                  targetSlug={`${phase.slug}/${t.id}`}
+                  label="Lưu bài"
+                  savedLabel="Đã lưu bài"
+                />
               </div>
             </div>
           </div>
@@ -138,7 +146,11 @@ export default async function TopicPage({ params }: Props) {
 
           {/* Content */}
           <article className="min-w-0 max-w-[65ch] leading-relaxed">
-            <MdxContent source={source} />
+            <MdxContent
+              source={source}
+              lessonSlug={`${phase.slug}/${t.id}`}
+              lessonTitle={t.title}
+            />
           </article>
         </div>
       ) : (
@@ -166,6 +178,12 @@ export default async function TopicPage({ params }: Props) {
               <ArrowLeft className="h-4 w-4" /> Quay lại phase
             </Link>
           </div>
+        </div>
+      )}
+
+      {hasContent && (
+        <div className="mt-12 max-w-[65ch]">
+          <LessonNotesPanel lessonSlug={`${phase.slug}/${t.id}`} lessonTitle={t.title} />
         </div>
       )}
 

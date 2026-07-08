@@ -15,6 +15,7 @@ Nguồn nội dung: [`AI_ENGINEER_ROADMAP.md`](./AI_ENGINEER_ROADMAP.md).
 - **Command palette** (Ctrl/⌘ + K): tìm nhanh phase / dự án / trang.
 - **Scroll progress bar**, dark modern theme, responsive mobile, SEO (sitemap, robots, OG metadata).
 - **Phase 1 user data**: Supabase Auth + Supabase PostgreSQL lưu tiến độ người dùng, trong khi nội dung học vẫn là static content trong repo.
+- **Personal Learning Workspace** (`/library`): authenticated bookmarks, lesson notes, and saved code snippets backed by Supabase RLS.
 
 ## 🛠 Tech Stack
 
@@ -101,11 +102,11 @@ Supabase là source of truth cho dữ liệu đăng nhập trong Phase 1:
 - `project_feature_progress`: tiến độ từng feature trong project.
 - `quiz_attempts`: lịch sử lượt làm quiz, điểm số, tổng câu, answers JSONB và thời gian hoàn thành. Authenticated quiz submissions có thể insert remote attempt rows; anonymous full attempt history hiện chưa được replay thành lịch sử attempt rows khi login.
 - `challenge_attempts`: lịch sử lượt làm challenge, status, language/code, test results JSONB và thời gian submit. Authenticated challenge submissions có thể insert remote attempt rows; anonymous full attempt history hiện chưa được replay thành lịch sử attempt rows khi login.
-- `bookmarks`: schema/RLS-ready cho nội dung đã lưu theo `target_type` + `target_slug` ở UI layer tiếp theo; runtime/UI hiện tại chưa đọc/ghi/merge bookmarks.
-- `notes`: schema/RLS-ready cho ghi chú cá nhân theo lesson ở UI layer tiếp theo; runtime/UI hiện tại chưa đọc/ghi/merge notes.
-- `saved_snippets`: schema/RLS-ready cho code snippets cá nhân ở UI layer tiếp theo; runtime/UI hiện tại chưa đọc/ghi/merge snippets.
+- `bookmarks`: dữ liệu Personal Learning Workspace cho authenticated users; lưu lessons/projects/challenges đã bookmark và hiển thị trong `/library`.
+- `notes`: dữ liệu Personal Learning Workspace cho authenticated users; ghi chú lesson được hiển thị/quản lý trên lesson pages và `/library`.
+- `saved_snippets`: dữ liệu Personal Learning Workspace cho authenticated users; code snippets lưu từ playground/challenges và hiển thị trong `/library`.
 
-Các bảng user-owned đều phải bật RLS để user chỉ truy cập records của chính mình. Riêng bookmarks/notes/saved snippets mới sẵn sàng ở tầng schema + RLS trong Phase 1, chưa phải tính năng runtime hoàn chỉnh.
+Các bảng user-owned đều phải bật RLS để user chỉ truy cập records của chính mình. Bookmarks/notes/saved snippets là dữ liệu Personal Learning Workspace chỉ dành cho user đã đăng nhập và không có anonymous localStorage merge trong Phase 1.
 
 ## 🧭 Anonymous localStorage và login merge
 
@@ -119,7 +120,7 @@ Khi user đăng nhập:
 4. Upsert snapshot đã merge lên Supabase (`user_progress_state` và các bảng progress liên quan).
 5. Giữ local data như fallback/cache thay vì xoá ngay lập tức.
 
-Phạm vi merge hiện tại bao phủ progress, project features, quiz summaries và challenge summaries. Với user đã authenticated, quiz/challenge submissions có thể tạo remote attempt rows mới. Tuy nhiên, anonymous full attempt history không được replay thành lịch sử attempt rows trên Supabase khi login; bookmarks/notes/snippets cũng chưa tham gia runtime merge vì mới schema/RLS-ready.
+Phạm vi merge hiện tại bao phủ progress, project features, quiz summaries và challenge summaries. Với user đã authenticated, quiz/challenge submissions có thể tạo remote attempt rows mới. Tuy nhiên, anonymous full attempt history không được replay thành lịch sử attempt rows trên Supabase khi login; bookmarks/notes/snippets là dữ liệu login-only trong phase workspace này và không merge từ anonymous localStorage vì app chủ ý không hỗ trợ anonymous personal-library writes.
 
 Mục tiêu là anonymous mode không mất snapshot tiến độ chính, còn authenticated mode sync được các progress state hiện có cross-device.
 
@@ -146,6 +147,7 @@ app/                         # App Router pages
 ├── layout.tsx               # Root layout: navbar, footer, search, scroll progress, SEO
 ├── page.tsx                 # Landing (hero + overview + paths + CTA)
 ├── login/page.tsx           # Login/auth UI
+├── library/page.tsx         # Personal library: bookmarks, notes, saved snippets
 ├── search/page.tsx          # Search page
 ├── dashboard/page.tsx       # Progress dashboard
 ├── practice/page.tsx        # Practice hub
@@ -164,6 +166,7 @@ components/
 ├── auth/                    # auth button + login form
 ├── challenge/               # challenge list/editor/view/test results
 ├── layout/                  # navbar, footer, theme provider/toggle
+├── library/                 # bookmarks, lesson notes, saved snippets, library page UI
 ├── quiz/                    # quiz cards/runtime UI
 ├── roadmap/                 # timeline, phase-node, topic-list, project-card, MDX helpers
 ├── search/                  # search page client

@@ -17,6 +17,7 @@ import {
 import { useProgress } from "@/lib/progress";
 import { MdxContent } from "@/components/roadmap/mdx-content";
 import { cn } from "@/lib/utils";
+import { BookmarkButton } from "@/components/library/bookmark-button";
 
 const DIFFICULTY_STYLES: Record<string, string> = {
   easy: "border-emerald-500/30 text-emerald-400 bg-emerald-500/5",
@@ -56,30 +57,38 @@ export function ChallengeView({ challenge }: { challenge: Challenge }) {
 
       {/* Header */}
       <div className="mb-8">
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <span
-            className={cn(
-              "rounded-md border px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider",
-              cat.color,
-              "border-current/20"
-            )}
-          >
-            {cat.label}
-          </span>
-          <span
-            className={cn(
-              "rounded-md border px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider",
-              DIFFICULTY_STYLES[challenge.difficulty]
-            )}
-          >
-            {DIFFICULTY_LABELS[challenge.difficulty]}
-          </span>
-          {solved && (
-            <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-400">
-              <CheckCircle2 className="h-3 w-3" />
-              Đã giải
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={cn(
+                "rounded-md border px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider",
+                cat.color,
+                "border-current/20"
+              )}
+            >
+              {cat.label}
             </span>
-          )}
+            <span
+              className={cn(
+                "rounded-md border px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider",
+                DIFFICULTY_STYLES[challenge.difficulty]
+              )}
+            >
+              {DIFFICULTY_LABELS[challenge.difficulty]}
+            </span>
+            {solved && (
+              <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-400">
+                <CheckCircle2 className="h-3 w-3" />
+                Đã giải
+              </span>
+            )}
+          </div>
+          <BookmarkButton
+            targetType="challenge"
+            targetSlug={challenge.id}
+            label="Lưu challenge"
+            savedLabel="Đã lưu challenge"
+          />
         </div>
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
           {challenge.title}
@@ -143,6 +152,8 @@ export function ChallengeView({ challenge }: { challenge: Challenge }) {
               starterCode={challenge.starterCode}
               testCases={challenge.testCases}
               persistKey={`ai-roadmap:challenge-code:${challenge.id}`}
+              challengeId={challenge.id}
+              challengeTitle={challenge.title}
               onSubmit={({ code, result, passed }) =>
                 setChallengeResult(challenge.id, passed, {
                   code,

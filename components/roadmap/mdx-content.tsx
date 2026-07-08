@@ -3,7 +3,7 @@ import remarkGfm from "remark-gfm";
 import rehypeSlug from "rehype-slug";
 import rehypePrettyCode, { type Options as PrettyCodeOptions } from "rehype-pretty-code";
 import { remarkPlayable } from "@/lib/remark-playable";
-import { mdxComponents } from "./mdx-components";
+import { createMdxComponents } from "./mdx-components";
 
 const prettyCodeOptions: PrettyCodeOptions = {
   theme: "github-dark-default",
@@ -17,16 +17,22 @@ const prettyCodeOptions: PrettyCodeOptions = {
   },
 };
 
+type MdxContentProps = {
+  source: string;
+  lessonSlug?: string;
+  lessonTitle?: string;
+};
+
 /**
  * Render nội dung MDX của một topic.
  * Server component — nhận source string đã đọc từ filesystem.
  */
-export function MdxContent({ source }: { source: string }) {
+export function MdxContent({ source, lessonSlug, lessonTitle }: MdxContentProps) {
   return (
     <div className="prose-ai">
       <MDXRemote
         source={source}
-        components={mdxComponents}
+        components={createMdxComponents({ lessonSlug, lessonTitle })}
         options={{
           mdxOptions: {
             remarkPlugins: [remarkGfm, remarkPlayable],
