@@ -48,3 +48,6 @@ next-env.d.ts
 
 # pagefind search index (built by postbuild, do not commit)
 public/pagefind/
+
+# Supabase CLI link/runtime metadata is local to each environment.
+supabase/.temp/

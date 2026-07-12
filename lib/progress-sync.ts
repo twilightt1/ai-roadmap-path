@@ -1,4 +1,5 @@
 import type { ChallengeResult } from "./challenge-types";
+import { deriveProgressSets, mergeProgressItemStates } from "./progress-item-state";
 import type { QuizResult, StoreState } from "./progress-types";
 
 function earliestIso(a: string | null, b: string | null): string | null {
@@ -67,9 +68,22 @@ export function mergeProgressStates(local: StoreState, remote: StoreState): Stor
     );
   }
 
+  const itemStates = mergeProgressItemStates(local.itemStates, remote.itemStates);
+  const { completed, projectFeatures } = deriveProgressSets(itemStates);
+
   return {
-    completed: new Set([...remote.completed, ...local.completed]),
-    projectFeatures: new Set([...remote.projectFeatures, ...local.projectFeatures]),
+    completed,
+    projectFeatures,
+    itemStates,
+    pendingItemMutations: [
+      ...remote.pendingItemMutations,
+      ...local.pendingItemMutations,
+    ],
+    pendingPracticeEvents: [
+      ...remote.pendingPracticeEvents,
+      ...local.pendingPracticeEvents,
+    ],
+    syncEpoch: local.syncEpoch ?? remote.syncEpoch,
     quizResults,
     challengeResults,
     startedAt: earliestIso(local.startedAt, remote.startedAt),

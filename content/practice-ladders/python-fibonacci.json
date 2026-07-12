@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "contentVersion": "1.0.0",
+  "challengeId": "python-fibonacci",
+  "linkedTopicIds": ["python-fundamentals", "functions"],
+  "prerequisiteTopicIds": ["python-fundamentals"],
+  "recall": {
+    "prompt": "Sau mỗi vòng lặp Fibonacci, hai biến cần lưu thông tin nào?",
+    "options": [
+      "Hai số Fibonacci liên tiếp",
+      "Toàn bộ dãy Fibonacci đã tạo",
+      "Chỉ số n và tổng hiện tại",
+      "Hai số ngẫu nhiên"
+    ],
+    "correctOption": 0,
+    "explanation": "Chỉ cần giữ hai số liên tiếp a và b; cập nhật cặp này đủ để tính giá trị tiếp theo."
+  },
+  "workedExample": {
+    "prompt": "Nếu bắt đầu a = 0, b = 1 và cập nhật (a, b) thành (b, a + b) hai lần, a sẽ là bao nhiêu?",
+    "code": "a, b = 0, 1\nfor _ in range(2):\n    a, b = b, a + b\nprint(a)",
+    "predictionOptions": ["0", "1", "2", "3"],
+    "correctOption": 1,
+    "explanation": "Sau lần đầu: (1, 1). Sau lần hai: (1, 2). Vì vậy a = F(2) = 1."
+  },
+  "scaffold": {
+    "instructions": "Hoàn thiện hàm bằng cách cập nhật cặp a, b trong vòng lặp.",
+    "starterCode": "def solve(n):\n    a, b = 0, 1\n    for _ in range(n):\n        # cập nhật a và b ở đây\n        pass\n    return a",
+    "testCases": [
+      { "name": "F(0)", "call": "solve(0)", "expected": "0", "compare": "exact" },
+      { "name": "F(5)", "call": "solve(5)", "expected": "5", "compare": "exact" }
+    ],
+    "feedback": "Nếu F(0) sai, hãy kiểm tra giá trị khởi tạo. Nếu các giá trị lớn sai, hãy kiểm tra thứ tự cập nhật a và b."
+  },
+  "hints": [
+    { "level": 1, "title": "Nhắc khái niệm", "content": "Fibonacci tiếp theo là tổng của hai giá trị ngay trước nó." },
+    { "level": 2, "title": "Chiến lược", "content": "Dùng hai biến a, b. Mỗi vòng, a trở thành b và b trở thành tổng cũ của a với b." },
+    { "level": 3, "title": "Pseudocode", "content": "Khởi tạo a=0, b=1. Lặp n lần: new_b = a+b, a=b, b=new_b. Trả về a." }
+  ],
+  "walkthrough": {
+    "approach": "Giữ hai số Fibonacci gần nhất thay vì gọi đệ quy. Điều này tránh lặp lại công việc và chỉ cần bộ nhớ hằng số.",
+    "steps": [
+      "Khởi tạo a = 0 và b = 1 tương ứng F(0), F(1).",
+      "Lặp đúng n lần và cập nhật đồng thời (a, b) thành (b, a + b).",
+      "Sau n lần cập nhật, a là F(n)."
+    ],
+    "commonMistakes": [
+      "Trả về b thay vì a, làm lệch chỉ số một đơn vị.",
+      "Cập nhật a trước rồi dùng a mới để tính b.",
+      "Dùng đệ quy không memoization cho n lớn."
+    ],
+    "edgeCases": ["n = 0 trả về 0.", "n = 1 trả về 1."],
+    "complexity": "Time O(n), space O(1).",
+    "referenceSolution": "def solve(n):\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a"
+  },
+  "transfer": {
+    "instructions": "Viết solve(n) trả về list gồm n số Fibonacci đầu tiên, bắt đầu từ 0.",
+    "starterCode": "def solve(n):\n    # return the first n Fibonacci values\n    pass",
+    "testCases": [
+      { "name": "Ba số đầu", "call": "solve(3)", "expected": "[0, 1, 1]", "compare": "exact" },
+      { "name": "Không có phần tử", "call": "solve(0)", "expected": "[]", "compare": "exact" }
+    ],
+    "feedback": "Hãy dùng cùng state a, b nhưng append a trước mỗi lần cập nhật."
+  }
+}

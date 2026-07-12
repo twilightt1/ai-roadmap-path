@@ -6,6 +6,8 @@ import type {
   QuizResult,
   StoreState,
 } from "./progress-types";
+import type { PracticeEvent } from "./practice-events";
+import { deriveProgressSets, itemStateKey } from "./progress-item-state";
 import { mergeProgressStates } from "./progress-sync";
 import { createEmptyProgressState, featureKey } from "./progress-types";
 
@@ -16,6 +18,23 @@ type ProgressStateRow = {
   challenge_results: unknown;
   started_at: string | null;
   last_visit: string | null;
+};
+
+type ProgressSyncRow = {
+  sync_epoch: number;
+};
+
+type ProgressItemRow = {
+  scope: unknown;
+  item_key: unknown;
+  completed: unknown;
+  client_updated_at: unknown;
+  mutation_id: unknown;
+};
+
+export type RemoteProgressSnapshot = {
+  epoch: number;
+  state: StoreState;
 };
 
 function stringArray(value: unknown): string[] {
@@ -86,14 +105,183 @@ function parseResultMap<T>(value: unknown, parser: (entry: unknown) => T | null)
 function rowToState(row: ProgressStateRow | null): StoreState {
   if (!row) return createEmptyProgressState();
 
+  const completed = new Set(stringArray(row.completed));
+  const projectFeatures = new Set(stringArray(row.project_features));
+  const timestamp = validDateString(row.last_visit) ?? "1970-01-01T00:00:00.000Z";
+  const itemStates = new Map();
+
+  for (const itemKey of completed) {
+    itemStates.set(itemStateKey("lesson", itemKey), {
+      scope: "lesson",
+      itemKey,
+      completed: true,
+      clientUpdatedAt: timestamp,
+      mutationId: `legacy:lesson:${itemKey}`,
+    });
+  }
+
+  for (const itemKey of projectFeatures) {
+    itemStates.set(itemStateKey("project_feature", itemKey), {
+      scope: "project_feature",
+      itemKey,
+      completed: true,
+      clientUpdatedAt: timestamp,
+      mutationId: `legacy:project_feature:${itemKey}`,
+    });
+  }
+
   return {
-    completed: new Set(stringArray(row.completed)),
-    projectFeatures: new Set(stringArray(row.project_features)),
+    completed,
+    projectFeatures,
+    itemStates,
+    pendingItemMutations: [],
+    pendingPracticeEvents: [],
+    syncEpoch: null,
     quizResults: parseResultMap(row.quiz_results, parseQuizResult),
     challengeResults: parseResultMap(row.challenge_results, parseChallengeResult),
     startedAt: validDateString(row.started_at),
     lastVisit: validDateString(row.last_visit),
   };
+}
+
+function parseProgressItemRows(rows: ProgressItemRow[] | null): Map<string, import("./progress-types").ProgressItemState> {
+  const itemStates = new Map<string, import("./progress-types").ProgressItemState>();
+  for (const row of rows ?? []) {
+    if (
+      (row.scope !== "lesson" && row.scope !== "project_feature") ||
+      typeof row.item_key !== "string" ||
+      typeof row.completed !== "boolean" ||
+      typeof row.client_updated_at !== "string" ||
+      typeof row.mutation_id !== "string"
+    ) {
+      continue;
+    }
+
+    const item = {
+      scope: row.scope,
+      itemKey: row.item_key,
+      completed: row.completed,
+      clientUpdatedAt: row.client_updated_at,
+      mutationId: row.mutation_id,
+    } as import("./progress-types").ProgressItemState;
+    itemStates.set(itemStateKey(item.scope, item.itemKey), item);
+  }
+  return itemStates;
+}
+
+export async function loadAuthoritativeProgressState(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<RemoteProgressSnapshot> {
+  const [syncResponse, itemsResponse] = await Promise.all([
+    supabase
+      .from("user_progress_sync")
+      .select("sync_epoch")
+      .eq("user_id", userId)
+      .maybeSingle(),
+    supabase
+      .from("user_progress_items")
+      .select("scope, item_key, completed, client_updated_at, mutation_id")
+      .eq("user_id", userId),
+  ]);
+
+  if (syncResponse.error) throw syncResponse.error;
+  if (itemsResponse.error) throw itemsResponse.error;
+
+  const itemStates = parseProgressItemRows(itemsResponse.data as ProgressItemRow[] | null);
+  const { completed, projectFeatures } = deriveProgressSets(itemStates);
+  const sync = syncResponse.data as ProgressSyncRow | null;
+  return {
+    epoch: sync?.sync_epoch ?? 0,
+    state: {
+      ...createEmptyProgressState(),
+      completed,
+      projectFeatures,
+      itemStates,
+      syncEpoch: sync?.sync_epoch ?? 0,
+    },
+  };
+}
+
+export async function applyRemoteProgressItemMutations(
+  supabase: SupabaseClient,
+  expectedEpoch: number,
+  mutations: import("./progress-types").ProgressItemState[]
+): Promise<{ epoch: number; acknowledgedMutationIds: string[] }> {
+  if (mutations.length === 0) return { epoch: expectedEpoch, acknowledgedMutationIds: [] };
+
+  const { data, error } = await supabase.rpc("apply_progress_item_mutations", {
+    expected_epoch: expectedEpoch,
+    mutations: mutations.map((mutation) => ({
+      scope: mutation.scope,
+      item_key: mutation.itemKey,
+      completed: mutation.completed,
+      client_updated_at: mutation.clientUpdatedAt,
+      mutation_id: mutation.mutationId,
+    })),
+  });
+
+  if (error) throw error;
+  const result = data as { epoch?: unknown; acknowledgedMutationIds?: unknown } | null;
+  if (
+    !result ||
+    typeof result.epoch !== "number" ||
+    !Array.isArray(result.acknowledgedMutationIds) ||
+    !result.acknowledgedMutationIds.every((id): id is string => typeof id === "string")
+  ) {
+    throw new Error("Invalid progress mutation RPC response");
+  }
+
+  return { epoch: result.epoch, acknowledgedMutationIds: result.acknowledgedMutationIds };
+}
+
+export async function appendRemotePracticeEvents(
+  supabase: SupabaseClient,
+  expectedEpoch: number,
+  events: PracticeEvent[]
+): Promise<{ epoch: number; acknowledgedEventIds: string[] }> {
+  if (events.length === 0) return { epoch: expectedEpoch, acknowledgedEventIds: [] };
+  const { data, error } = await supabase.rpc("append_practice_events", {
+    expected_epoch: expectedEpoch,
+    events: events.map((event) => ({
+      event_id: event.eventId,
+      challenge_id: event.challengeId,
+      content_version: event.contentVersion,
+      origin: event.origin,
+      event_type: event.eventType,
+      step: event.step,
+      hint_level: event.hintLevel,
+      passed: event.passed,
+      occurred_at: event.occurredAt,
+    })),
+  });
+  if (error) throw error;
+  const result = data as { epoch?: unknown; acknowledgedEventIds?: unknown } | null;
+  if (
+    !result ||
+    typeof result.epoch !== "number" ||
+    !Array.isArray(result.acknowledgedEventIds) ||
+    !result.acknowledgedEventIds.every((id): id is string => typeof id === "string")
+  ) {
+    throw new Error("Invalid practice event RPC response");
+  }
+  return { epoch: result.epoch, acknowledgedEventIds: result.acknowledgedEventIds };
+}
+
+export async function resetAuthoritativeProgress(
+  supabase: SupabaseClient,
+  expectedEpoch: number
+): Promise<number> {
+  const { data, error } = await supabase.rpc("reset_learning_progress", {
+    expected_epoch: expectedEpoch,
+  });
+  if (error) throw error;
+
+  const result = data as { epoch?: unknown } | null;
+  if (!result || typeof result.epoch !== "number") {
+    throw new Error("Invalid progress reset RPC response");
+  }
+  return result.epoch;
 }
 
 function stateToSnapshot(userId: string, state: StoreState) {

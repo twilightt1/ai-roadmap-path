@@ -31,6 +31,7 @@ export function ChallengeEditor({
   starterCode,
   testCases,
   onSubmit,
+  onRun,
   persistKey,
   challengeId,
   challengeTitle,
@@ -39,6 +40,8 @@ export function ChallengeEditor({
   testCases: TestCase[];
   /** Callback for every submit result — ghi progress/attempts. */
   onSubmit?: (payload: { code: string; result: ChallengeRunResult; passed: boolean }) => void;
+  /** Callback after a visible-test run completes. */
+  onRun?: (payload: { code: string; result: ChallengeRunResult }) => void;
   /** localStorage key cho code. */
   persistKey?: string;
   /** Challenge context for saved snippets. */
@@ -80,6 +83,7 @@ export function ChallengeEditor({
     try {
       const r = await runExample(code, testCases);
       setRunResult(r);
+      onRun?.({ code, result: r });
     } catch (e) {
       setRunResult({
         results: [],
@@ -92,7 +96,7 @@ export function ChallengeEditor({
       setRunning(false);
       setLoadingRuntime(false);
     }
-  }, [code, testCases]);
+  }, [code, testCases, onRun]);
 
   const handleSubmit = useCallback(async () => {
     setRunning(true);

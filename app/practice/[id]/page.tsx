@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getChallenge, allChallengeParams } from "@/lib/challenge";
+import { getLearnerSafePracticeLadder } from "@/lib/practice-ladder";
 import { ChallengeView } from "@/components/challenge/challenge-view";
 
 type Params = Promise<{ id: string }>;
@@ -30,7 +31,10 @@ export default async function ChallengeDetailPage({
 }) {
   const { id } = await params;
   // includeSolution=false mặc định — không lộ đáp án về client.
-  const challenge = await getChallenge(id);
+  const [challenge, ladder] = await Promise.all([
+    getChallenge(id),
+    getLearnerSafePracticeLadder(id),
+  ]);
   if (!challenge) notFound();
-  return <ChallengeView challenge={challenge} />;
+  return <ChallengeView challenge={challenge} ladder={ladder} />;
 }

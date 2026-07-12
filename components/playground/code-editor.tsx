@@ -8,6 +8,7 @@ import { sql } from "@codemirror/lang-sql";
 import { javascript } from "@codemirror/lang-javascript";
 import { cobalt } from "thememirror";
 import type { Lang } from "@/lib/runner";
+import { syncExternalEditorValue } from "./code-editor-state";
 
 /**
  * CodeMirror editor cho playground. Client-only — mount vào ref qua useEffect
@@ -75,10 +76,13 @@ export function CodeEditor({
       view.destroy();
       viewRef.current = null;
     };
-    // Chỉ re-create khi đổi ngôn ngữ. `value` chỉ dùng init — không sync ngược
-    // từ parent để tránh caret jump khi user đang gõ.
+    // Chỉ re-create khi đổi ngôn ngữ. Parent changes are synchronized separately.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lang]);
+
+  useEffect(() => {
+    if (viewRef.current) syncExternalEditorValue(viewRef.current, value);
+  }, [value]);
 
   return (
     <div

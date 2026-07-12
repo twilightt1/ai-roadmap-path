@@ -10,20 +10,50 @@ function stateWith(overrides: Partial<ReturnType<typeof createEmptyProgressState
 }
 
 describe("mergeProgressStates", () => {
-  it("unions completed lessons and project features", () => {
+  it("uses explicit item states so a newer uncheck cannot be resurrected", () => {
     const local = stateWith({
-      completed: new Set(["phase-1/a"]),
-      projectFeatures: new Set(["p1/0"]),
+      itemStates: new Map([
+        [
+          "lesson\u0000phase-1/a",
+          {
+            scope: "lesson",
+            itemKey: "phase-1/a",
+            completed: false,
+            clientUpdatedAt: "2026-07-10T11:00:00.000Z",
+            mutationId: "00000000-0000-4000-8000-000000000002",
+          },
+        ],
+      ]),
     });
     const remote = stateWith({
-      completed: new Set(["phase-2/b"]),
-      projectFeatures: new Set(["p1/1"]),
+      itemStates: new Map([
+        [
+          "lesson\u0000phase-1/a",
+          {
+            scope: "lesson",
+            itemKey: "phase-1/a",
+            completed: true,
+            clientUpdatedAt: "2026-07-10T10:00:00.000Z",
+            mutationId: "00000000-0000-4000-8000-000000000001",
+          },
+        ],
+        [
+          "project_feature\u0000p1/1",
+          {
+            scope: "project_feature",
+            itemKey: "p1/1",
+            completed: true,
+            clientUpdatedAt: "2026-07-10T10:00:00.000Z",
+            mutationId: "00000000-0000-4000-8000-000000000003",
+          },
+        ],
+      ]),
     });
 
     const merged = mergeProgressStates(local, remote);
 
-    expect([...merged.completed].sort()).toEqual(["phase-1/a", "phase-2/b"]);
-    expect([...merged.projectFeatures].sort()).toEqual(["p1/0", "p1/1"]);
+    expect([...merged.completed]).toEqual([]);
+    expect([...merged.projectFeatures]).toEqual(["p1/1"]);
   });
 
   it("keeps earliest quiz pass time and highest attempts", () => {

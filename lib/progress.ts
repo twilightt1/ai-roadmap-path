@@ -18,14 +18,27 @@ import {
   loadLocalProgressState,
   persistLocalProgressState,
 } from "./progress-local-storage";
+import {
+  createProgressItemMutation,
+  deriveProgressSets,
+  mergeProgressItemStates,
+} from "./progress-item-state";
+import { createProgressChannel } from "./progress-channel";
+import {
+  acknowledgeProgressMutations,
+  enqueueProgressMutation,
+  mergePendingProgressMutations,
+} from "./progress-outbox";
 import { mergeProgressStates } from "./progress-sync";
 import {
-  loadRemoteProgressState,
+  appendRemotePracticeEvents,
+  applyRemoteProgressItemMutations,
+  loadAuthoritativeProgressState,
   recordRemoteChallengeAttempt,
   recordRemoteQuizAttempt,
-  resetRemoteProgress,
-  saveRemoteProgressSnapshot,
+  resetAuthoritativeProgress,
 } from "./progress-remote";
+import { createPracticeEvent, type PracticeEvent, type PracticeEventType } from "./practice-events";
 import { getSupabaseBrowserClient } from "./supabase/client";
 
 export type { ProgressStats, QuizResult } from "./progress-types";
@@ -48,12 +61,107 @@ let hydrateStarted = false;
 let remoteClient: SupabaseClient | null = null;
 let remoteUserId: string | null = null;
 let remoteWriteQueue: Promise<void> = Promise.resolve();
+let syncStatus: import("./progress-types").ProgressSyncStatus = "local-only";
 let authGeneration = 0;
 let authSubscription: { unsubscribe: () => void } | null = null;
+const progressChannel = createProgressChannel();
 const listeners = new Set<() => void>();
 
 function notify() {
   listeners.forEach((listener) => listener());
+}
+
+function setSyncStatus(next: import("./progress-types").ProgressSyncStatus) {
+  if (syncStatus === next) return;
+  syncStatus = next;
+  notify();
+}
+
+function flushPendingProgressMutations() {
+  if (!remoteClient || !remoteUserId || state.pendingItemMutations.length === 0) {
+    if (!remoteClient || !remoteUserId) setSyncStatus("local-only");
+    return;
+  }
+
+  const client = remoteClient;
+  const userId = remoteUserId;
+  const generation = authGeneration;
+  const pending = [...state.pendingItemMutations];
+  const expectedEpoch = state.syncEpoch ?? 0;
+  setSyncStatus("syncing");
+
+  remoteWriteQueue = remoteWriteQueue
+    .then(async () => {
+      if (generation !== authGeneration || client !== remoteClient || userId !== remoteUserId) return;
+      const result = await applyRemoteProgressItemMutations(client, expectedEpoch, pending);
+      if (generation !== authGeneration || client !== remoteClient || userId !== remoteUserId) return;
+
+      state = {
+        ...state,
+        syncEpoch: result.epoch,
+        pendingItemMutations: acknowledgeProgressMutations(
+          state.pendingItemMutations,
+          result.acknowledgedMutationIds
+        ),
+      };
+      persistCurrentLocalState(state);
+      setSyncStatus(state.pendingItemMutations.length === 0 ? "synced" : "syncing");
+    })
+    .catch((error) => {
+      console.error("[progress] Supabase progress mutation sync failed", error);
+      if (generation === authGeneration && client === remoteClient && userId === remoteUserId) {
+        setSyncStatus("failed");
+      }
+    });
+}
+
+function flushPendingPracticeEvents() {
+  if (!remoteClient || !remoteUserId || state.pendingPracticeEvents.length === 0) return;
+  const client = remoteClient;
+  const userId = remoteUserId;
+  const generation = authGeneration;
+  const pending = [...state.pendingPracticeEvents];
+  const expectedEpoch = state.syncEpoch ?? 0;
+
+  remoteWriteQueue = remoteWriteQueue
+    .then(async () => {
+      if (generation !== authGeneration || client !== remoteClient || userId !== remoteUserId) return;
+      const result = await appendRemotePracticeEvents(client, expectedEpoch, pending);
+      if (generation !== authGeneration || client !== remoteClient || userId !== remoteUserId) return;
+      const acknowledged = new Set(result.acknowledgedEventIds);
+      state = {
+        ...state,
+        syncEpoch: result.epoch,
+        pendingPracticeEvents: state.pendingPracticeEvents.filter((event) => !acknowledged.has(event.eventId)),
+      };
+      persistCurrentLocalState(state);
+      notify();
+    })
+    .catch((error) => {
+      console.error("[progress] Practice event sync failed", error);
+      if (generation === authGeneration && client === remoteClient && userId === remoteUserId) {
+        setSyncStatus("failed");
+      }
+    });
+}
+
+function recordPracticeEvent(input: {
+  challengeId: string;
+  contentVersion?: string | null;
+  eventType: PracticeEventType;
+  step?: PracticeEvent["step"];
+  hintLevel?: PracticeEvent["hintLevel"];
+  passed?: boolean | null;
+}) {
+  const event = createPracticeEvent({
+    ...input,
+    origin: remoteUserId ? "authenticated" : "anonymous",
+  });
+  setState({
+    ...state,
+    pendingPracticeEvents: [...state.pendingPracticeEvents, event],
+  });
+  flushPendingPracticeEvents();
 }
 
 function enqueueRemoteWrite(write: (client: SupabaseClient, userId: string) => Promise<void>) {
@@ -96,9 +204,43 @@ function setState(next: StoreState, options: { persistRemote?: boolean } = {}) {
   notify();
 
   if (options.persistRemote !== false) {
-    const snapshot = state;
-    enqueueRemoteWrite((client, userId) => saveRemoteProgressSnapshot(client, userId, snapshot));
+    flushPendingProgressMutations();
+    flushPendingPracticeEvents();
   }
+}
+
+function applyExternalProgressMutation(mutation: import("./progress-types").ProgressItemState) {
+  const itemStates = mergeProgressItemStates(
+    new Map([[`${mutation.scope}\u0000${mutation.itemKey}`, mutation]]),
+    state.itemStates
+  );
+  const sets = deriveProgressSets(itemStates);
+  state = {
+    ...state,
+    ...sets,
+    itemStates,
+    pendingItemMutations: enqueueProgressMutation(state.pendingItemMutations, mutation),
+  };
+  persistCurrentLocalState(state);
+  notify();
+  flushPendingProgressMutations();
+}
+
+function applyProgressItem(scope: "lesson" | "project_feature", itemKey: string, completed: boolean) {
+  const mutation = createProgressItemMutation(scope, itemKey, completed);
+  const itemStates = mergeProgressItemStates(
+    new Map([[`${mutation.scope}\u0000${mutation.itemKey}`, mutation]]),
+    state.itemStates
+  );
+  const sets = deriveProgressSets(itemStates);
+  setState({
+    ...state,
+    ...sets,
+    itemStates,
+    pendingItemMutations: enqueueProgressMutation(state.pendingItemMutations, mutation),
+    lastVisit: new Date().toISOString(),
+  });
+  progressChannel.publish({ type: "mutation", mutation });
 }
 
 async function applySession(session: Session | null) {
@@ -108,6 +250,7 @@ async function applySession(session: Session | null) {
 
   if (!session || !client) {
     remoteUserId = null;
+    syncStatus = "local-only";
     state = loadLocalProgressState();
     hydrated = true;
     notify();
@@ -120,30 +263,36 @@ async function applySession(session: Session | null) {
   const anonymousLocalState = loadLocalProgressState();
 
   try {
-    const remoteState = await loadRemoteProgressState(client, userId);
+    const remoteSnapshot = await loadAuthoritativeProgressState(client, userId);
     if (!isCurrentAuthContext(client, userId, generation)) return;
 
     const currentUserLocalState = loadLocalProgressState(userId);
     const localWithInFlightMutations = mergeProgressStates(currentUserLocalState, state);
     const merged = mergeProgressStates(
       mergeProgressStates(anonymousLocalState, userLocalState),
-      mergeProgressStates(remoteState, localWithInFlightMutations)
+      mergeProgressStates(remoteSnapshot.state, localWithInFlightMutations)
     );
 
     if (!isCurrentAuthContext(client, userId, generation)) return;
-    state = merged;
+    state = {
+      ...merged,
+      syncEpoch: remoteSnapshot.epoch,
+      pendingItemMutations: mergePendingProgressMutations(
+        merged.pendingItemMutations,
+        currentUserLocalState.pendingItemMutations
+      ),
+    };
     hydrated = true;
-    persistLocalProgressState(merged, userId);
+    persistLocalProgressState(state, userId);
     notify();
-    enqueueRemoteWrite((currentClient, currentUserId) =>
-      saveRemoteProgressSnapshot(currentClient, currentUserId, merged)
-    );
+    flushPendingProgressMutations();
   } catch (error) {
     if (!isCurrentAuthContext(client, userId, generation)) return;
     console.error("[progress] Failed to load Supabase progress; using local progress", error);
     state = mergeProgressStates(userLocalState, state);
     hydrated = true;
     persistLocalProgressState(state, userId);
+    syncStatus = "failed";
     notify();
   }
 }
@@ -151,6 +300,10 @@ async function applySession(session: Session | null) {
 function hydrate() {
   if (hydrateStarted) return;
   hydrateStarted = true;
+
+  progressChannel.subscribe((message) => {
+    if (message.type === "mutation") applyExternalProgressMutation(message.mutation);
+  });
 
   remoteClient = getSupabaseBrowserClient();
 
@@ -269,18 +422,11 @@ export function useProgress() {
 
   const toggle = useCallback((phaseSlug: string, topicId: string) => {
     const key = topicKey(phaseSlug, topicId);
-    const next = new Set(state.completed);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    setState({ ...state, completed: next, lastVisit: new Date().toISOString() });
+    applyProgressItem("lesson", key, !state.completed.has(key));
   }, []);
 
   const setCompleted = useCallback((phaseSlug: string, topicId: string, value: boolean) => {
-    const key = topicKey(phaseSlug, topicId);
-    const next = new Set(state.completed);
-    if (value) next.add(key);
-    else next.delete(key);
-    setState({ ...state, completed: next, lastVisit: new Date().toISOString() });
+    applyProgressItem("lesson", topicKey(phaseSlug, topicId), value);
   }, []);
 
   const isCompleted = useCallback(
@@ -290,18 +436,11 @@ export function useProgress() {
 
   const toggleFeature = useCallback((projectId: string, featureIndex: number) => {
     const key = featureKey(projectId, featureIndex);
-    const next = new Set(state.projectFeatures);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    setState({ ...state, projectFeatures: next, lastVisit: new Date().toISOString() });
+    applyProgressItem("project_feature", key, !state.projectFeatures.has(key));
   }, []);
 
   const setFeature = useCallback((projectId: string, featureIndex: number, value: boolean) => {
-    const key = featureKey(projectId, featureIndex);
-    const next = new Set(state.projectFeatures);
-    if (value) next.add(key);
-    else next.delete(key);
-    setState({ ...state, projectFeatures: next, lastVisit: new Date().toISOString() });
+    applyProgressItem("project_feature", featureKey(projectId, featureIndex), value);
   }, []);
 
   const isFeatureDone = useCallback(
@@ -403,6 +542,7 @@ export function useProgress() {
   const reset = useCallback(() => {
     const client = remoteClient;
     const userId = remoteUserId;
+    const expectedEpoch = state.syncEpoch ?? 0;
     authGeneration += 1;
     const generation = authGeneration;
 
@@ -415,7 +555,15 @@ export function useProgress() {
       remoteWriteQueue = remoteWriteQueue
         .then(async () => {
           if (generation !== authGeneration || client !== remoteClient || userId !== remoteUserId) return;
-          await resetRemoteProgress(client, userId);
+          const nextEpoch = await resetAuthoritativeProgress(client, expectedEpoch);
+          state = {
+            ...createEmptyProgressState(),
+            syncEpoch: nextEpoch,
+            lastVisit: new Date().toISOString(),
+          };
+          persistLocalProgressState(state, userId);
+          syncStatus = "synced";
+          notify();
         })
         .catch((error) => {
           console.error("[progress] Supabase reset failed", error);
@@ -454,6 +602,9 @@ export function useProgress() {
     isChallengeSolved,
     challengeResults: store.challengeResults,
     projectStats,
+    recordPracticeEvent,
+    syncStatus,
+    retrySync: flushPendingProgressMutations,
     startedAt: store.startedAt,
     lastVisit: store.lastVisit,
   };
