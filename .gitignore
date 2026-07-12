@@ -43,5 +43,8 @@ next-env.d.ts
 # superpowers brainstorming
 .superpowers/
 
+# local git worktrees
+.worktrees/
+
 # pagefind search index (built by postbuild, do not commit)
 public/pagefind/
