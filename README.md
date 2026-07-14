@@ -16,6 +16,7 @@ Nguồn nội dung: [`AI_ENGINEER_ROADMAP.md`](./AI_ENGINEER_ROADMAP.md).
 - **Scroll progress bar**, dark modern theme, responsive mobile, SEO (sitemap, robots, OG metadata).
 - **Phase 1 user data**: Supabase Auth + Supabase PostgreSQL lưu tiến độ người dùng, trong khi nội dung học vẫn là static content trong repo.
 - **Personal Learning Workspace** (`/library`): authenticated bookmarks, lesson notes, and saved code snippets backed by Supabase RLS.
+- **P1 Learning Loop** (`/diagnostic`, `/dashboard`): diagnostic nền tảng, đề xuất học tiếp deterministic, weekly goals và mastery estimate có confidence riêng.
 
 ## 🛠 Tech Stack
 
@@ -90,9 +91,9 @@ SUPABASE_SERVICE_ROLE_KEY=
 
 Ghi chú bảo mật: client/browser chỉ dùng anon key và dựa vào Row Level Security (RLS). Service role key là optional, chỉ dùng ở server-side trusted code khi thật sự cần quyền admin/bypass RLS, và không bao giờ được dùng trong browser.
 
-### P0 capability flags
+### Capability flags (P0/P1)
 
-Các capability P0 được rollout và rollback độc lập bằng biến public environment. Giá trị hợp lệ là `true`/`false` hoặc `1`/`0`; giá trị không hợp lệ làm build khởi động thất bại thay vì âm thầm bật capability.
+Các capability P0/P1 được rollout và rollback độc lập bằng biến public environment. Giá trị hợp lệ là `true`/`false` hoặc `1`/`0`; giá trị không hợp lệ làm build khởi động thất bại thay vì âm thầm bật capability.
 
 ```env
 # Default: true. false disables Run/Submit with a maintenance message; execution never
@@ -105,19 +106,23 @@ NEXT_PUBLIC_P0_LWW_PROGRESS=false
 
 # Default: false. false serves challenges normally but omits the practice ladder.
 NEXT_PUBLIC_P0_PRACTICE_LADDER=false
+
+# Default: false. Requires the P1 learning_profiles migration and its RLS/RPC proof.
+NEXT_PUBLIC_P1_LEARNING_LOOP=false
 ```
 
 For rollback, deploy or restart with only the affected flag set to `false`. Do not replace LWW with legacy full-snapshot writes, and do not discard local progress/outbox data while the flag is disabled.
 
 ### Supabase migration
 
-Schema Phase 1/P0 được áp theo thứ tự:
+Schema user data/P0/P1 được áp theo thứ tự:
 
 ```txt
 supabase/migrations/202607060001_user_data.sql
 supabase/migrations/202607110001_progress_lww_practice_events.sql
 supabase/migrations/202607110002_fix_progress_rpc_security.sql
 supabase/migrations/202607120001_p0_progress_hardening.sql
+supabase/migrations/202607140001_p1_learning_profiles.sql
 ```
 
 Các migration tạo bảng user-owned, canonical LWW progress/practice events, trigger profile/bootstrap, owner-scoped RPC và RLS policies. Sau khi apply migration lên Supabase project, cần verify RLS thủ công bằng ít nhất 2 user khác nhau:
@@ -136,6 +141,7 @@ Supabase là source of truth cho dữ liệu đăng nhập trong Phase 1:
 - `user_progress_sync`: epoch đồng bộ/reset của từng user.
 - `user_progress_items`: trạng thái hoàn thành item-level theo LWW tuple `(client_updated_at, mutation_id)`.
 - `practice_events`: sự kiện practice append-only, idempotent theo `(user_id, event_id)`.
+- `learning_profiles`: weekly goal và diagnostic aggregate theo field-level LWW; owner chỉ đọc record của mình và chỉ ghi qua authenticated RPC.
 - `lesson_progress` và `topic_progress`: lesson/topic progress chuẩn hoá theo slug static content.
 - `project_feature_progress`: tiến độ từng feature trong project.
 - `quiz_attempts`: lịch sử lượt làm quiz, điểm số, tổng câu, answers JSONB và thời gian hoàn thành. Authenticated quiz submissions có thể insert remote attempt rows; anonymous full attempt history hiện chưa được replay thành lịch sử attempt rows khi login.
@@ -157,6 +163,7 @@ Khi user đăng nhập:
 3. Merge item-level theo LWW tuple `(client_updated_at, mutation_id)`; explicit uncomplete không bị biến thành “không có dữ liệu”.
 4. Chuyển mutation anonymous còn pending sang durable authenticated outbox, flush theo batch và retry/backoff; RPC chỉ lấy ownership từ `auth.uid()`.
 5. Persist user-scoped local document rồi mới xoá anonymous document đã chuyển giao; compatibility snapshot được cập nhật trong transaction RPC.
+6. P1 learning profile merge riêng từng field theo timestamp; diagnostic chỉ chứa score/topic aggregates, không chứa đáp án đã chọn.
 
 Phạm vi merge bao phủ lesson/project-feature progress cùng quiz/challenge summaries. Với user đã authenticated, quiz/challenge submissions có thể tạo remote attempt rows mới. Tuy nhiên, anonymous full attempt history không được replay thành lịch sử attempt rows trên Supabase khi login; bookmarks/notes/snippets là dữ liệu login-only và không merge từ anonymous localStorage.
 

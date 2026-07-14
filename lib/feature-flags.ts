@@ -17,4 +17,5 @@ export const featureFlags = {
   workerExecution: parseFeatureFlag(process.env.NEXT_PUBLIC_P0_WORKER_EXECUTION, true),
   lwwRemoteProgress: parseFeatureFlag(process.env.NEXT_PUBLIC_P0_LWW_PROGRESS, false),
   practiceLadder: parseFeatureFlag(process.env.NEXT_PUBLIC_P0_PRACTICE_LADDER, false),
+  learningLoop: parseFeatureFlag(process.env.NEXT_PUBLIC_P1_LEARNING_LOOP, false),
 } as const;

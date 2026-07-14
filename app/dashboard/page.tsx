@@ -3,6 +3,8 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { ProgressOverview } from "@/components/shared/progress-overview";
 import { ResetProgress } from "@/components/shared/reset-progress";
+import { LearningLoopDashboard } from "@/components/learning-loop/learning-loop-dashboard";
+import { featureFlags } from "@/lib/feature-flags";
 
 export const metadata: Metadata = {
   title: "Dashboard · Tiến độ học tập",
@@ -33,11 +35,13 @@ export default function DashboardPage() {
         <ResetProgress />
       </div>
 
+      {featureFlags.learningLoop && <LearningLoopDashboard />}
+
       {/* Progress overview */}
       <ProgressOverview />
 
       {/* CTA */}
-      <div className="mt-12 rounded-2xl border border-border bg-card/40 p-6 text-center">
+      {!featureFlags.learningLoop && <div className="mt-12 rounded-2xl border border-border bg-card/40 p-6 text-center">
         <h2 className="text-lg font-bold text-foreground">Tiếp tục học?</h2>
         <p className="mx-auto mt-2 max-w-md text-xs text-muted-foreground">
           Vào lộ trình để xem các phase, hoặc mở một bài chưa hoàn thành để tiếp tục.
@@ -50,7 +54,7 @@ export default function DashboardPage() {
             Vào lộ trình <ArrowRight className="h-3.5 w-3.5" />
           </Link>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
