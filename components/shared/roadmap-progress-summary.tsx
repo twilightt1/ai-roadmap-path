@@ -5,6 +5,7 @@ import { motion } from "motion/react";
 import { ArrowRight, CheckCircle2 } from "lucide-react";
 import { useProgress } from "@/lib/progress";
 import { ProgressRing } from "./progress-ring";
+import { featureFlags } from "@/lib/feature-flags";
 
 /**
  * Compact progress summary banner for the roadmap page.
@@ -34,6 +35,11 @@ export function RoadmapProgressSummary() {
           </span>{" "}
           để bắt đầu theo dõi tiến độ.
         </p>
+        {featureFlags.learningLoop && (
+          <Link href="/diagnostic" className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline">
+            Chưa biết bắt đầu ở đâu? Làm diagnostic 8 câu <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        )}
       </motion.div>
     );
   }

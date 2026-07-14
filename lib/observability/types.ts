@@ -7,7 +7,8 @@ export type PlatformErrorCode =
   | "SYNC_OFFLINE"
   | "SYNC_CONFLICT"
   | "SYNC_AUTH_CHANGED"
-  | "SYNC_REMOTE_FAILED";
+  | "SYNC_REMOTE_FAILED"
+  | "LEARNING_PROFILE_SYNC_FAILED";
 
 export type PlatformEventName =
   | "runner.lifecycle"
@@ -15,7 +16,8 @@ export type PlatformEventName =
   | "progress.auth_invalidated"
   | "content.validation_failed"
   | "practice.step"
-  | "practice.walkthrough";
+  | "practice.walkthrough"
+  | "learning_loop.diagnostic";
 
 /** Values permitted in platform diagnostics metadata after redaction. */
 export type ObservabilityMetadataValue = string | number | boolean | null;

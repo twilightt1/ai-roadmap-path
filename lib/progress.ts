@@ -281,6 +281,8 @@ export function useProgress() {
   return {
     completed: store.completed,
     projectFeatures: store.projectFeatures,
+    itemStates: store.itemStates,
+    quizResults: store.quizResults,
     hydrated,
     stats,
     toggle,
