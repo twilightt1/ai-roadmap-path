@@ -40,7 +40,9 @@ test.describe("practice and personal library", () => {
       const bookmark = page.getByRole("button", { name: "Lưu challenge" });
       await expect(bookmark).toBeVisible();
       await bookmark.click();
-      await expect(page.getByRole("button", { name: "Đã lưu challenge" })).toBeVisible();
+      const savedBookmark = page.getByRole("button", { name: "Đã lưu challenge" });
+      await expect(savedBookmark).toBeVisible();
+      await expect(savedBookmark).toBeEnabled();
 
       await page.goto("/library");
       await expect(page.getByRole("heading", { name: "Thư viện cá nhân" })).toBeVisible();
