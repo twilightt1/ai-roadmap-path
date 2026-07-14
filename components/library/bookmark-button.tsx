@@ -107,7 +107,6 @@ export function BookmarkButton({
     const previous = bookmarked;
     setSaving(true);
     setError(null);
-    setBookmarked(!previous);
 
     try {
       const result = await toggleBookmark(supabase, capturedContext.userId, {
