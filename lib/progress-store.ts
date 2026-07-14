@@ -75,7 +75,7 @@ export function createProgressStore(deps: ProgressStoreDependencies, initialStat
 
   async function flush(retriedConflict = false, force = false): Promise<void> {
     if (flushing) {
-      if (force) forceRetryAfterFlush = true;
+      forceRetryAfterFlush = true;
       return;
     }
     if (!client || !userId) return;
@@ -178,20 +178,24 @@ export function createProgressStore(deps: ProgressStoreDependencies, initialStat
       const local = mergeAnonymousProgress
         ? mergeProgressStates(deps.loadLocal(), userLocal)
         : userLocal;
+      // Make the local base current before awaiting the network. Mutations are
+      // allowed while a repeated same-user auth callback is hydrating, and
+      // must be merged from the latest state when the remote snapshot returns.
+      update(local);
       try {
         const remote = await deps.loadRemote(capturedClient, capturedUser);
         if (!current(capturedGeneration, capturedClient, capturedUser)) return false;
-        update({ ...mergeProgressStates(local, remote.state), syncEpoch: remote.epoch });
+        update({ ...mergeProgressStates(state, remote.state), syncEpoch: remote.epoch });
         if (mergeAnonymousProgress) deps.clearLocal?.();
         status = "synced";
         void flush();
         return true;
       } catch (error) {
         if (!current(capturedGeneration, capturedClient, capturedUser)) return false;
-        update(local);
         if (mergeAnonymousProgress) deps.clearLocal?.();
         status = "failed";
         deps.onError?.(error);
+        notify();
         return true;
       }
     },

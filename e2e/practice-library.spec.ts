@@ -34,6 +34,7 @@ test.describe("practice and personal library", () => {
     test.skip(!user, "Set PLAYWRIGHT_SMOKE_USER_EMAIL and PLAYWRIGHT_SMOKE_USER_PASSWORD for library persistence smoke.");
 
     test("allows a learner to bookmark a challenge and view it in the library", async ({ page }) => {
+      test.setTimeout(60_000);
       if (!user) throw new Error("Smoke user is required");
 
       await signIn(page, user);
@@ -43,17 +44,17 @@ test.describe("practice and personal library", () => {
       const bookmarkToggle = page.getByRole("button", {
         name: /^(Lưu challenge|Đã lưu challenge)$/,
       });
-      await expect(bookmarkToggle).toBeVisible();
+      await expect(bookmarkToggle).toBeEnabled({ timeout: 15_000 });
 
       if (await savedBookmark.isVisible()) {
         await savedBookmark.click();
         await expect(bookmark).toBeVisible();
-        await expect(bookmark).toBeEnabled();
+        await expect(bookmark).toBeEnabled({ timeout: 15_000 });
       }
 
       await bookmark.click();
-      await expect(savedBookmark).toBeVisible();
-      await expect(savedBookmark).toBeEnabled();
+      await expect(savedBookmark).toBeVisible({ timeout: 15_000 });
+      await expect(savedBookmark).toBeEnabled({ timeout: 15_000 });
 
       await page.goto("/library");
       await expect(page.getByRole("heading", { name: "Thư viện cá nhân" })).toBeVisible();

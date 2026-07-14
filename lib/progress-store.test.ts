@@ -118,6 +118,64 @@ describe("progress store", () => {
     expect(store.getState().pendingItemMutations).toHaveLength(0);
   });
 
+  it("flushes a mutation queued while another flush is in flight", async () => {
+    const firstApply = deferred<{ epoch: number; acknowledgedMutationIds: string[] }>();
+    const batches: string[][] = [];
+    const store = createProgressStore({
+      loadLocal: () => createEmptyProgressState(),
+      persistLocal: () => {},
+      loadRemote: async () => ({ epoch: 0, state: createEmptyProgressState() }),
+      applyRemote: async (_client, epoch, entries) => {
+        const mutationIds = entries.map((entry) => entry.mutation.mutationId);
+        batches.push(mutationIds);
+        if (batches.length === 1) return firstApply.promise;
+        return { epoch: epoch + 1, acknowledgedMutationIds: mutationIds };
+      },
+      now: () => now,
+      setTimer: () => 1,
+    });
+
+    await store.setAuth({} as never, "user");
+    store.mutate("lesson", "phase/topic-a", true);
+    await vi.waitFor(() => expect(batches).toHaveLength(1));
+
+    store.mutate("lesson", "phase/topic-b", true);
+    firstApply.resolve({ epoch: 1, acknowledgedMutationIds: batches[0] });
+
+    await vi.waitFor(() => expect(batches).toHaveLength(2));
+    expect(store.getState().pendingItemMutations).toHaveLength(0);
+  });
+
+  it("preserves a mutation made while same-user hydration is in flight", async () => {
+    const remote = deferred<{ epoch: number; state: StoreState }>();
+    const appliedMutationIds: string[] = [];
+    const store = createProgressStore({
+      loadLocal: () => createEmptyProgressState(),
+      persistLocal: () => {},
+      loadRemote: async () => remote.promise,
+      applyRemote: async (_client, epoch, entries) => {
+        appliedMutationIds.push(...entries.map((entry) => entry.mutation.mutationId));
+        return {
+          epoch: epoch + 1,
+          acknowledgedMutationIds: entries.map((entry) => entry.mutation.mutationId),
+        };
+      },
+      now: () => now,
+      setTimer: () => 1,
+    });
+
+    const hydration = store.setAuth({} as never, "user");
+    store.mutate("lesson", "phase/topic-a", true);
+    expect(store.getState().completed.has("phase/topic-a")).toBe(true);
+
+    remote.resolve({ epoch: 0, state: createEmptyProgressState() });
+    await expect(hydration).resolves.toBe(true);
+
+    expect(store.getState().completed.has("phase/topic-a")).toBe(true);
+    await vi.waitFor(() => expect(appliedMutationIds).toHaveLength(1));
+    await vi.waitFor(() => expect(store.getState().pendingItemMutations).toHaveLength(0));
+  });
+
   it("ignores an older same-user hydration after a newer auth generation starts", async () => {
     const firstLoad = deferred<{ epoch: number; state: StoreState }>();
     const secondLoad = deferred<{ epoch: number; state: StoreState }>();
