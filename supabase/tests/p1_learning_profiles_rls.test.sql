@@ -20,6 +20,15 @@ insert into auth.users (
   id, aud, role, email, encrypted_password, email_confirmed_at,
   raw_app_meta_data, raw_user_meta_data
 ) values (
+  '11111111-1111-4111-8111-111111111111', 'authenticated', 'authenticated',
+  'p1-rls-user-a@example.test', crypt('not-used-in-db-tests', gen_salt('bf')),
+  now(), '{"provider":"email","providers":["email"]}', '{}'
+) on conflict (id) do nothing;
+
+insert into auth.users (
+  id, aud, role, email, encrypted_password, email_confirmed_at,
+  raw_app_meta_data, raw_user_meta_data
+) values (
   '22222222-2222-4222-8222-222222222222', 'authenticated', 'authenticated',
   'p1-rls-user-b@example.test', crypt('not-used-in-db-tests', gen_salt('bf')),
   now(), '{"provider":"email","providers":["email"]}', '{}'
