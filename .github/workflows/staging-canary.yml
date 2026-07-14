@@ -1,0 +1,99 @@
+name: Staging canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Canary stage matching the currently deployed build-time flags
+        required: true
+        default: baseline
+        type: choice
+        options:
+          - baseline
+          - lww
+          - ladder
+          - p1
+          - full
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    name: Staging ${{ inputs.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: staging
+      url: ${{ vars.PLAYWRIGHT_BASE_URL }}
+    env:
+      PLAYWRIGHT_BASE_URL: ${{ vars.PLAYWRIGHT_BASE_URL }}
+      PLAYWRIGHT_SMOKE_USER_EMAIL: ${{ secrets.PLAYWRIGHT_SMOKE_USER_EMAIL }}
+      PLAYWRIGHT_SMOKE_USER_PASSWORD: ${{ secrets.PLAYWRIGHT_SMOKE_USER_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate protected staging inputs
+        run: >-
+          node -e "const required=['PLAYWRIGHT_BASE_URL','PLAYWRIGHT_SMOKE_USER_EMAIL','PLAYWRIGHT_SMOKE_USER_PASSWORD'];
+          const missing=required.filter((name)=>!process.env[name]?.trim());
+          if(missing.length){console.error('Missing staging inputs: '+missing.join(', '));process.exit(1)}"
+
+      - name: Verify staging health
+        run: curl --fail --silent --show-error --location --max-time 30 "$PLAYWRIGHT_BASE_URL" > /dev/null
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run selected canary
+        shell: bash
+        run: |
+          case "${{ inputs.suite }}" in
+            baseline)
+              PLAYWRIGHT_RUN_EXTERNAL_RUNTIME=true pnpm exec playwright test \
+                e2e/runner-isolation.spec.ts e2e/anonymous-learning.spec.ts --project=chromium
+              ;;
+            lww)
+              pnpm exec playwright test e2e/progress-sync.spec.ts --project=chromium
+              ;;
+            ladder)
+              pnpm exec playwright test \
+                e2e/anonymous-learning.spec.ts e2e/practice-library.spec.ts --project=chromium
+              ;;
+            p1)
+              pnpm exec playwright test e2e/learning-loop.spec.ts --project=chromium
+              ;;
+            full)
+              PLAYWRIGHT_RUN_EXTERNAL_RUNTIME=true pnpm test:e2e:smoke
+              ;;
+            *)
+              echo "Unsupported staging canary suite: ${{ inputs.suite }}" >&2
+              exit 2
+              ;;
+          esac
+
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-${{ inputs.suite }}-playwright-report
+          path: playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
