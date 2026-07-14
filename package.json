@@ -2,6 +2,10 @@
   "name": "ai-platform",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.5.2",
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -10,7 +14,16 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "test:unit": "vitest run --dir .",
+    "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test --project=chromium",
+    "test:e2e:local": "node scripts/run-local-e2e.mjs",
+    "test:db": "node scripts/run-supabase-tests.mjs",
+    "validate:content": "tsx scripts/validate-content.ts",
+    "audit:prod": "pnpm audit --prod --audit-level high",
+    "check:fast": "pnpm validate:content && pnpm typecheck && pnpm lint && pnpm test:unit",
+    "check": "pnpm check:fast && pnpm build"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -43,6 +56,8 @@
     "unist-util-visit": "^5.1.0"
   },
   "devDependencies": {
+    "@mdx-js/mdx": "^3.1.1",
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4",
     "@tailwindcss/typography": "^0.5.20",
     "@types/mdast": "^4.0.4",
@@ -51,8 +66,10 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
+    "jsdom": "^29.1.1",
     "pagefind": "^1.5.2",
     "tailwindcss": "^4",
+    "tsx": "^4.23.0",
     "typescript": "^5",
     "vitest": "^4.1.10"
   }

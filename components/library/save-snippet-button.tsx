@@ -14,6 +14,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { getErrorMessage } from "@/lib/error-message";
 import { createSnippet, validateSnippetInput } from "@/lib/personal-library";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "./use-current-user";
@@ -26,10 +27,6 @@ type SaveSnippetButtonProps = {
   challengeSlug?: string | null;
   className?: string;
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export function SaveSnippetButton({
   language,
@@ -166,7 +163,7 @@ export function SaveSnippetButton({
       setOpen(false);
     } catch (e: unknown) {
       if (!isCurrentRequest()) return;
-      setError(errorMessage(e));
+      setError(getErrorMessage(e));
     } finally {
       if (requestIdRef.current === requestId) {
         inFlightRef.current = false;

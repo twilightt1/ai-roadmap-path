@@ -5,185 +5,64 @@ import { useCallback, useSyncExternalStore } from "react";
 import { phases, allProjects } from "./roadmap-data";
 import { QUIZ_PASS_THRESHOLD } from "./quiz-types";
 import type { ChallengeResult } from "./challenge-types";
-import type {
-  ChallengeAttemptDetails,
-  ProgressStats,
-  QuizAttemptDetails,
-  QuizResult,
-  StoreState,
-} from "./progress-types";
+import type { ChallengeAttemptDetails, ProgressStats, QuizAttemptDetails, QuizResult, StoreState } from "./progress-types";
 import { createEmptyProgressState, featureKey, topicKey } from "./progress-types";
-import {
-  clearLocalProgressState,
-  loadLocalProgressState,
-  persistLocalProgressState,
-} from "./progress-local-storage";
-import { mergeProgressStates } from "./progress-sync";
-import {
-  loadRemoteProgressState,
-  recordRemoteChallengeAttempt,
-  recordRemoteQuizAttempt,
-  resetRemoteProgress,
-  saveRemoteProgressSnapshot,
-} from "./progress-remote";
+import { clearLocalProgressState, loadLocalProgressState, persistLocalProgressState } from "./progress-local-storage";
+import { createProgressChannel } from "./progress-channel";
+import { featureFlags } from "./feature-flags";
+import { appendRemotePracticeEvents, applyRemoteProgressItemMutations, loadAuthoritativeProgressState, recordRemoteChallengeAttempt, recordRemoteQuizAttempt, resetAuthoritativeProgress } from "./progress-remote";
+import { createPracticeEvent, type PracticeEvent, type PracticeEventType } from "./practice-events";
 import { getSupabaseBrowserClient } from "./supabase/client";
+import { createProgressStore } from "./progress-store";
 
 export type { ProgressStats, QuizResult } from "./progress-types";
 export { featureKey, topicKey } from "./progress-types";
 
-/**
- * Progress tracking store.
- *
- * Public API stays synchronous for components. Anonymous users and unconfigured
- * Supabase use localStorage only. Authenticated users hydrate from Supabase,
- * merge with local progress, then write optimistic local changes to Supabase in
- * a serialized background queue.
- */
-
 const emptyState = createEmptyProgressState();
-
 let state: StoreState = createEmptyProgressState();
 let hydrated = false;
 let hydrateStarted = false;
 let remoteClient: SupabaseClient | null = null;
 let remoteUserId: string | null = null;
-let remoteWriteQueue: Promise<void> = Promise.resolve();
-let authGeneration = 0;
+let syncStatus: import("./progress-types").ProgressSyncStatus = "local-only";
 let authSubscription: { unsubscribe: () => void } | null = null;
+const progressChannel = createProgressChannel();
 const listeners = new Set<() => void>();
-
-function notify() {
-  listeners.forEach((listener) => listener());
-}
-
-function enqueueRemoteWrite(write: (client: SupabaseClient, userId: string) => Promise<void>) {
-  if (!remoteClient || !remoteUserId) return;
-
-  const client = remoteClient;
-  const userId = remoteUserId;
-  const generation = authGeneration;
-
-  remoteWriteQueue = remoteWriteQueue
-    .then(async () => {
-      if (generation !== authGeneration || client !== remoteClient || userId !== remoteUserId) return;
-      await write(client, userId);
-    })
-    .catch((error) => {
-      console.error("[progress] Supabase sync failed", error);
-    });
-}
-
-function persistCurrentLocalState(next: StoreState) {
-  persistLocalProgressState(next, remoteUserId);
-}
-
-function isCurrentAuthContext(client: SupabaseClient, userId: string | null, generation: number) {
-  return generation === authGeneration && client === remoteClient && userId === remoteUserId;
-}
-
-function withActivityMetadata(next: StoreState): StoreState {
-  const now = next.lastVisit ?? new Date().toISOString();
-  return {
-    ...next,
-    startedAt: next.startedAt ?? state.startedAt ?? now,
-    lastVisit: now,
-  };
-}
-
-function setState(next: StoreState, options: { persistRemote?: boolean } = {}) {
-  state = options.persistRemote === false ? next : withActivityMetadata(next);
-  persistCurrentLocalState(state);
-  notify();
-
-  if (options.persistRemote !== false) {
-    const snapshot = state;
-    enqueueRemoteWrite((client, userId) => saveRemoteProgressSnapshot(client, userId, snapshot));
-  }
-}
-
+const notify = () => listeners.forEach((listener) => listener());
+const progressStore = createProgressStore({
+  loadLocal: loadLocalProgressState, persistLocal: persistLocalProgressState, clearLocal: clearLocalProgressState,
+  loadRemote: loadAuthoritativeProgressState,
+  applyRemote: (client, epoch, entries) => applyRemoteProgressItemMutations(client, epoch, entries.map((entry) => entry.mutation)),
+  resetRemote: resetAuthoritativeProgress, now: () => new Date().toISOString(),
+  setTimer: (callback, delay) => setTimeout(callback, delay), clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+  addOnlineListener: typeof window === "undefined" ? undefined : (listener) => { window.addEventListener("online", listener); return () => window.removeEventListener("online", listener); },
+  channel: progressChannel, onError: (error) => console.error("[progress] sync failed", error),
+});
+progressStore.subscribe(() => { state = progressStore.getState(); syncStatus = progressStore.getStatus(); notify(); });
+function setState(next: StoreState) { state = next; progressStore.replaceState(state); }
+function applyProgressItem(scope: "lesson" | "project_feature", itemKey: string, completed: boolean) { progressStore.mutate(scope, itemKey, completed); }
+function enqueueRemoteWrite(write: (client: SupabaseClient, userId: string) => Promise<void>) { const client = remoteClient; const userId = remoteUserId; if (featureFlags.lwwRemoteProgress && client && userId) void write(client, userId).catch((error) => console.error("[progress] Supabase sync failed", error)); }
+const recordPracticeEvent = (input: { challengeId: string; contentVersion?: string | null; eventType: PracticeEventType; step?: PracticeEvent["step"]; hintLevel?: PracticeEvent["hintLevel"]; passed?: boolean | null; }) => { const event = createPracticeEvent({ ...input, origin: remoteUserId ? "authenticated" : "anonymous" }); setState({ ...state, pendingPracticeEvents: [...state.pendingPracticeEvents, event] }); const client = remoteClient; if (featureFlags.lwwRemoteProgress && client && remoteUserId) void appendRemotePracticeEvents(client, state.syncEpoch ?? 0, [event]).then((result) => { const acknowledged = new Set(result.acknowledgedEventIds); setState({ ...state, syncEpoch: result.epoch, pendingPracticeEvents: state.pendingPracticeEvents.filter((pending) => !acknowledged.has(pending.eventId)) }); }).catch((error) => console.error("[progress] Practice event sync failed", error)); };
 async function applySession(session: Session | null) {
-  const client = remoteClient;
-  authGeneration += 1;
-  const generation = authGeneration;
-
-  if (!session || !client) {
-    remoteUserId = null;
-    state = loadLocalProgressState();
-    hydrated = true;
-    notify();
-    return;
-  }
-
-  const userId = session.user.id;
-  remoteUserId = userId;
-  const userLocalState = loadLocalProgressState(userId);
-  const anonymousLocalState = loadLocalProgressState();
-
-  try {
-    const remoteState = await loadRemoteProgressState(client, userId);
-    if (!isCurrentAuthContext(client, userId, generation)) return;
-
-    const currentUserLocalState = loadLocalProgressState(userId);
-    const localWithInFlightMutations = mergeProgressStates(currentUserLocalState, state);
-    const merged = mergeProgressStates(
-      mergeProgressStates(anonymousLocalState, userLocalState),
-      mergeProgressStates(remoteState, localWithInFlightMutations)
-    );
-
-    if (!isCurrentAuthContext(client, userId, generation)) return;
-    state = merged;
-    hydrated = true;
-    persistLocalProgressState(merged, userId);
-    notify();
-    enqueueRemoteWrite((currentClient, currentUserId) =>
-      saveRemoteProgressSnapshot(currentClient, currentUserId, merged)
-    );
-  } catch (error) {
-    if (!isCurrentAuthContext(client, userId, generation)) return;
-    console.error("[progress] Failed to load Supabase progress; using local progress", error);
-    state = mergeProgressStates(userLocalState, state);
-    hydrated = true;
-    persistLocalProgressState(state, userId);
-    notify();
-  }
+  remoteUserId = session?.user.id ?? null;
+  const applied = await progressStore.setAuth(
+    featureFlags.lwwRemoteProgress ? remoteClient : null,
+    featureFlags.lwwRemoteProgress ? remoteUserId : null
+  );
+  if (!applied) return;
+  state = { ...progressStore.getState() };
+  syncStatus = progressStore.getStatus();
+  hydrated = true;
+  notify();
 }
-
-function hydrate() {
-  if (hydrateStarted) return;
-  hydrateStarted = true;
-
-  remoteClient = getSupabaseBrowserClient();
-
-  if (!remoteClient) {
-    state = loadLocalProgressState();
-    hydrated = true;
-    notify();
-    return;
-  }
-
-  void remoteClient.auth.getSession().then(({ data }) => applySession(data.session));
-
-  if (!authSubscription) {
-    const { data } = remoteClient.auth.onAuthStateChange((_event, session) => {
-      void applySession(session);
-    });
-    authSubscription = data.subscription;
-  }
+export async function syncProgressAfterSignIn(session: Session): Promise<void> {
+  remoteClient ??= getSupabaseBrowserClient();
+  await applySession(session);
 }
-
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  hydrate();
-  return () => listeners.delete(listener);
-}
-
-function getSnapshot(): StoreState {
-  return state;
-}
-
-function getServerSnapshot(): StoreState {
-  return emptyState;
-}
+function hydrate() { if (hydrateStarted) return; hydrateStarted = true; remoteClient = getSupabaseBrowserClient(); if (!remoteClient) { hydrated = true; void progressStore.setAuth(null, null); return; } void remoteClient.auth.getSession().then(({ data }) => applySession(data.session)); if (!authSubscription) { const { data } = remoteClient.auth.onAuthStateChange((_event, session) => { void applySession(session); }); authSubscription = data.subscription; } }
+function subscribe(listener: () => void) { listeners.add(listener); hydrate(); return () => listeners.delete(listener); }
+function getSnapshot(): StoreState { return state; }
+function getServerSnapshot(): StoreState { return emptyState; }
 
 /** True if all features of a project are checked. */
 export function isProjectDone(projectId: string): boolean {
@@ -269,18 +148,11 @@ export function useProgress() {
 
   const toggle = useCallback((phaseSlug: string, topicId: string) => {
     const key = topicKey(phaseSlug, topicId);
-    const next = new Set(state.completed);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    setState({ ...state, completed: next, lastVisit: new Date().toISOString() });
+    applyProgressItem("lesson", key, !state.completed.has(key));
   }, []);
 
   const setCompleted = useCallback((phaseSlug: string, topicId: string, value: boolean) => {
-    const key = topicKey(phaseSlug, topicId);
-    const next = new Set(state.completed);
-    if (value) next.add(key);
-    else next.delete(key);
-    setState({ ...state, completed: next, lastVisit: new Date().toISOString() });
+    applyProgressItem("lesson", topicKey(phaseSlug, topicId), value);
   }, []);
 
   const isCompleted = useCallback(
@@ -290,18 +162,11 @@ export function useProgress() {
 
   const toggleFeature = useCallback((projectId: string, featureIndex: number) => {
     const key = featureKey(projectId, featureIndex);
-    const next = new Set(state.projectFeatures);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    setState({ ...state, projectFeatures: next, lastVisit: new Date().toISOString() });
+    applyProgressItem("project_feature", key, !state.projectFeatures.has(key));
   }, []);
 
   const setFeature = useCallback((projectId: string, featureIndex: number, value: boolean) => {
-    const key = featureKey(projectId, featureIndex);
-    const next = new Set(state.projectFeatures);
-    if (value) next.add(key);
-    else next.delete(key);
-    setState({ ...state, projectFeatures: next, lastVisit: new Date().toISOString() });
+    applyProgressItem("project_feature", featureKey(projectId, featureIndex), value);
   }, []);
 
   const isFeatureDone = useCallback(
@@ -400,28 +265,7 @@ export function useProgress() {
     [store.challengeResults]
   );
 
-  const reset = useCallback(() => {
-    const client = remoteClient;
-    const userId = remoteUserId;
-    authGeneration += 1;
-    const generation = authGeneration;
-
-    state = { ...createEmptyProgressState(), lastVisit: new Date().toISOString() };
-    clearLocalProgressState(userId);
-    persistLocalProgressState(state, userId);
-    notify();
-
-    if (client && userId) {
-      remoteWriteQueue = remoteWriteQueue
-        .then(async () => {
-          if (generation !== authGeneration || client !== remoteClient || userId !== remoteUserId) return;
-          await resetRemoteProgress(client, userId);
-        })
-        .catch((error) => {
-          console.error("[progress] Supabase reset failed", error);
-        });
-    }
-  }, []);
+  const reset = useCallback(() => { void progressStore.reset(); }, []);
 
   const stats = computeStats(store.completed, store);
 
@@ -454,6 +298,9 @@ export function useProgress() {
     isChallengeSolved,
     challengeResults: store.challengeResults,
     projectStats,
+    recordPracticeEvent,
+    syncStatus,
+    retrySync: progressStore.retrySync,
     startedAt: store.startedAt,
     lastVisit: store.lastVisit,
   };

@@ -1,0 +1,56 @@
+/// <reference lib="webworker" />
+
+import { RUNNER_LIMITS, truncateUtf8 } from "./runner-limits";
+import type { WorkerExecutionMessage, WorkerExecutionRequest } from "./worker-protocol";
+
+function formatArgs(args: unknown[]): string {
+  return args
+    .map((value) => {
+      if (typeof value === "string") return value;
+      if (value === null) return "null";
+      if (value === undefined) return "undefined";
+      try {
+        return JSON.stringify(value, null, 2);
+      } catch {
+        return String(value);
+      }
+    })
+    .join(" ");
+}
+
+self.addEventListener("message", (event: MessageEvent<WorkerExecutionRequest>) => {
+  const { requestId, code } = event.data;
+  const startedAt = performance.now();
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  try {
+    self.postMessage({ type: "executing", requestId } satisfies WorkerExecutionMessage);
+    const workerConsole = {
+      log: (...args: unknown[]) => stdout.push(formatArgs(args)),
+      info: (...args: unknown[]) => stdout.push(formatArgs(args)),
+      warn: (...args: unknown[]) => stderr.push(formatArgs(args)),
+      error: (...args: unknown[]) => stderr.push(formatArgs(args)),
+    };
+    const execute = new Function("console", `"use strict";\n${code}`);
+    execute(workerConsole);
+    self.postMessage({
+      type: "result",
+      requestId,
+      result: {
+        stdout: truncateUtf8(stdout.join("\n"), RUNNER_LIMITS.stdoutBytes),
+        stderr: truncateUtf8(stderr.join("\n"), RUNNER_LIMITS.stderrBytes),
+        durationMs: Math.round(performance.now() - startedAt),
+      },
+    } satisfies WorkerExecutionMessage);
+  } catch (error) {
+    self.postMessage({
+      type: "execution-error",
+      requestId,
+      message: truncateUtf8(
+        error instanceof Error ? error.message : String(error),
+        RUNNER_LIMITS.errorBytes
+      ),
+    } satisfies WorkerExecutionMessage);
+  }
+});

@@ -48,9 +48,22 @@ pnpm start
 pnpm typecheck
 pnpm lint
 pnpm test:run
+
+# Full quality gate
+pnpm check
+
+# Disposable local Supabase gates (test:db resets local DB)
+pnpm exec supabase start
+pnpm test:db
+pnpm test:e2e:local
+pnpm exec supabase stop
 ```
 
-Yêu cầu: Node 18.18+ (đã test trên Node 24), pnpm 10+.
+Yêu cầu: Node 20.9+ (đã test trên Node 24), pnpm 10+.
+
+## 🧪 Challenge execution trust boundary
+
+Challenge tests execute in the browser and are inspectable. Their results are practice-grade feedback, not a verified assessment. Worker isolation protects the application UI and session from learner code, but it is not a hostile multi-tenant server sandbox.
 
 ## 🔐 Cấu hình production user data
 
@@ -77,15 +90,37 @@ SUPABASE_SERVICE_ROLE_KEY=
 
 Ghi chú bảo mật: client/browser chỉ dùng anon key và dựa vào Row Level Security (RLS). Service role key là optional, chỉ dùng ở server-side trusted code khi thật sự cần quyền admin/bypass RLS, và không bao giờ được dùng trong browser.
 
+### P0 capability flags
+
+Các capability P0 được rollout và rollback độc lập bằng biến public environment. Giá trị hợp lệ là `true`/`false` hoặc `1`/`0`; giá trị không hợp lệ làm build khởi động thất bại thay vì âm thầm bật capability.
+
+```env
+# Default: true. false disables Run/Submit with a maintenance message; execution never
+# falls back to the browser's main window.
+NEXT_PUBLIC_P0_WORKER_EXECUTION=true
+
+# Default: false. false keeps all learner progress local and avoids remote progress
+# mutation RPCs (including practice events and attempt writes).
+NEXT_PUBLIC_P0_LWW_PROGRESS=false
+
+# Default: false. false serves challenges normally but omits the practice ladder.
+NEXT_PUBLIC_P0_PRACTICE_LADDER=false
+```
+
+For rollback, deploy or restart with only the affected flag set to `false`. Do not replace LWW with legacy full-snapshot writes, and do not discard local progress/outbox data while the flag is disabled.
+
 ### Supabase migration
 
-Schema Phase 1 nằm tại:
+Schema Phase 1/P0 được áp theo thứ tự:
 
 ```txt
 supabase/migrations/202607060001_user_data.sql
+supabase/migrations/202607110001_progress_lww_practice_events.sql
+supabase/migrations/202607110002_fix_progress_rpc_security.sql
+supabase/migrations/202607120001_p0_progress_hardening.sql
 ```
 
-Migration này tạo các bảng user-owned, trigger cập nhật timestamp/profile bootstrap và RLS policies. Sau khi apply migration lên Supabase project, cần verify RLS thủ công bằng ít nhất 2 user khác nhau:
+Các migration tạo bảng user-owned, canonical LWW progress/practice events, trigger profile/bootstrap, owner-scoped RPC và RLS policies. Sau khi apply migration lên Supabase project, cần verify RLS thủ công bằng ít nhất 2 user khác nhau:
 
 - User A chỉ đọc/ghi được profile và progress/attempt/library records của User A.
 - User B không đọc/sửa/xoá được records của User A bằng browser Supabase client.
@@ -98,6 +133,9 @@ Supabase là source of truth cho dữ liệu đăng nhập trong Phase 1:
 
 - `profiles`: hồ sơ app gắn với Supabase Auth user (`display_name`, `avatar_url`, role tối thiểu learner/admin).
 - `user_progress_state`: snapshot tổng hợp để giữ tương thích với progress UI hiện tại (`completed`, `project_features`, `quiz_results`, `challenge_results`, `started_at`, `last_visit`).
+- `user_progress_sync`: epoch đồng bộ/reset của từng user.
+- `user_progress_items`: trạng thái hoàn thành item-level theo LWW tuple `(client_updated_at, mutation_id)`.
+- `practice_events`: sự kiện practice append-only, idempotent theo `(user_id, event_id)`.
 - `lesson_progress` và `topic_progress`: lesson/topic progress chuẩn hoá theo slug static content.
 - `project_feature_progress`: tiến độ từng feature trong project.
 - `quiz_attempts`: lịch sử lượt làm quiz, điểm số, tổng câu, answers JSONB và thời gian hoàn thành. Authenticated quiz submissions có thể insert remote attempt rows; anonymous full attempt history hiện chưa được replay thành lịch sử attempt rows khi login.
@@ -114,13 +152,13 @@ Người dùng chưa đăng nhập vẫn dùng được app ở chế độ loca
 
 Khi user đăng nhập:
 
-1. App đọc dữ liệu local anonymous hiện có.
-2. App đọc snapshot remote hiện có từ Supabase.
-3. Merge các phần runtime hiện tại theo rule deterministic: completion/higher progress wins, project feature completion được union, quiz/challenge summaries giữ kết quả phù hợp nhất theo key hiện tại.
-4. Upsert snapshot đã merge lên Supabase (`user_progress_state` và các bảng progress liên quan).
-5. Giữ local data như fallback/cache thay vì xoá ngay lập tức.
+1. App đọc anonymous document và user-scoped local document hiện có.
+2. App đọc canonical item state + sync epoch từ Supabase.
+3. Merge item-level theo LWW tuple `(client_updated_at, mutation_id)`; explicit uncomplete không bị biến thành “không có dữ liệu”.
+4. Chuyển mutation anonymous còn pending sang durable authenticated outbox, flush theo batch và retry/backoff; RPC chỉ lấy ownership từ `auth.uid()`.
+5. Persist user-scoped local document rồi mới xoá anonymous document đã chuyển giao; compatibility snapshot được cập nhật trong transaction RPC.
 
-Phạm vi merge hiện tại bao phủ progress, project features, quiz summaries và challenge summaries. Với user đã authenticated, quiz/challenge submissions có thể tạo remote attempt rows mới. Tuy nhiên, anonymous full attempt history không được replay thành lịch sử attempt rows trên Supabase khi login; bookmarks/notes/snippets là dữ liệu login-only trong phase workspace này và không merge từ anonymous localStorage vì app chủ ý không hỗ trợ anonymous personal-library writes.
+Phạm vi merge bao phủ lesson/project-feature progress cùng quiz/challenge summaries. Với user đã authenticated, quiz/challenge submissions có thể tạo remote attempt rows mới. Tuy nhiên, anonymous full attempt history không được replay thành lịch sử attempt rows trên Supabase khi login; bookmarks/notes/snippets là dữ liệu login-only và không merge từ anonymous localStorage.
 
 Mục tiêu là anonymous mode không mất snapshot tiến độ chính, còn authenticated mode sync được các progress state hiện có cross-device.
 

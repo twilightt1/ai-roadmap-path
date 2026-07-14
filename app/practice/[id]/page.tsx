@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getChallenge, allChallengeParams } from "@/lib/challenge";
+import { getLearnerSafePracticeLadder } from "@/lib/practice-ladder";
 import { ChallengeView } from "@/components/challenge/challenge-view";
+import { MdxContent } from "@/components/roadmap/mdx-content";
+import { featureFlags } from "@/lib/feature-flags";
 
 type Params = Promise<{ id: string }>;
 
@@ -30,7 +33,16 @@ export default async function ChallengeDetailPage({
 }) {
   const { id } = await params;
   // includeSolution=false mặc định — không lộ đáp án về client.
-  const challenge = await getChallenge(id);
+  const [challenge, ladder] = await Promise.all([
+    getChallenge(id),
+    featureFlags.practiceLadder ? getLearnerSafePracticeLadder(id) : Promise.resolve(null),
+  ]);
   if (!challenge) notFound();
-  return <ChallengeView challenge={challenge} />;
+  return (
+    <ChallengeView
+      challenge={challenge}
+      ladder={ladder}
+      description={<MdxContent source={challenge.description} />}
+    />
+  );
 }

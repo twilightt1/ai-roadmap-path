@@ -2,6 +2,10 @@
 
 import { Check, X, Loader2 } from "lucide-react";
 import type { ChallengeRunResult, TestCaseResult } from "@/lib/challenge-types";
+import {
+  getAdditionalClientSideTestFailure,
+  getTestCaseDisplayName,
+} from "./test-result-display";
 
 /**
  * Panel kết quả test — hiện per-test-case pass/fail + summary bar.
@@ -100,6 +104,8 @@ export function TestResults({
 }
 
 function TestCaseRow({ tc, index }: { tc: TestCaseResult; index: number }) {
+  const additionalTestFailure = getAdditionalClientSideTestFailure(tc);
+
   return (
     <div
       className={`rounded-lg border px-3 py-2 ${
@@ -115,34 +121,44 @@ function TestCaseRow({ tc, index }: { tc: TestCaseResult; index: number }) {
           <X className="h-4 w-4 shrink-0 text-destructive" />
         )}
         <span className="text-xs font-medium text-foreground">
-          {tc.hidden && !tc.passed ? `Test ẩn ${index + 1}` : tc.name}
+          {getTestCaseDisplayName(tc, index)}
         </span>
         {tc.hidden && (
           <span className="rounded border border-border/60 px-1 py-0.5 text-[9px] font-mono uppercase text-muted-foreground/60">
-            hidden
+            additional
           </span>
         )}
       </div>
-      {!tc.passed && !tc.error && (
-        <div className="mt-1.5 grid gap-1 pl-6 text-[11px] font-mono">
-          {tc.actual !== undefined && (
-            <div className="text-muted-foreground">
-              <span className="text-muted-foreground/60">actual: </span>
-              <span className="text-foreground/80">{tc.actual}</span>
+      {additionalTestFailure ? (
+        <p className="mt-1.5 pl-6 text-[11px] text-muted-foreground">
+          {additionalTestFailure.errorClass
+            ? `Error class: ${additionalTestFailure.errorClass}`
+            : "This additional client-side test did not pass."}
+        </p>
+      ) : (
+        <>
+          {!tc.passed && !tc.error && (
+            <div className="mt-1.5 grid gap-1 pl-6 text-[11px] font-mono">
+              {tc.actual !== undefined && (
+                <div className="text-muted-foreground">
+                  <span className="text-muted-foreground/60">actual: </span>
+                  <span className="text-foreground/80">{tc.actual}</span>
+                </div>
+              )}
+              {tc.expected !== undefined && (
+                <div className="text-muted-foreground">
+                  <span className="text-muted-foreground/60">expected: </span>
+                  <span className="text-emerald-400/80">{tc.expected}</span>
+                </div>
+              )}
             </div>
           )}
-          {tc.expected !== undefined && (
-            <div className="text-muted-foreground">
-              <span className="text-muted-foreground/60">expected: </span>
-              <span className="text-emerald-400/80">{tc.expected}</span>
-            </div>
+          {!tc.passed && tc.error && (
+            <pre className="mt-1.5 whitespace-pre-wrap break-words pl-6 font-mono text-[11px] leading-relaxed text-destructive/90">
+              {tc.error}
+            </pre>
           )}
-        </div>
-      )}
-      {!tc.passed && tc.error && (
-        <pre className="mt-1.5 whitespace-pre-wrap break-words pl-6 font-mono text-[11px] leading-relaxed text-destructive/90">
-          {tc.error}
-        </pre>
+        </>
       )}
     </div>
   );

@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Play, Send, RotateCcw } from "lucide-react";
+import { Play, Send, RotateCcw, Square } from "lucide-react";
 import { SaveSnippetButton } from "@/components/library/save-snippet-button";
 import { Button } from "@/components/ui/button";
+import { featureFlags } from "@/lib/feature-flags";
 import { runExample, submitChallenge } from "@/lib/challenge-runner";
+import { WORKER_EXECUTION_DISABLED_MESSAGE } from "@/lib/runner";
 import type { TestCase, ChallengeRunResult } from "@/lib/challenge-types";
 import { TestResults } from "./test-results";
 
@@ -31,6 +33,7 @@ export function ChallengeEditor({
   starterCode,
   testCases,
   onSubmit,
+  onRun,
   persistKey,
   challengeId,
   challengeTitle,
@@ -39,6 +42,8 @@ export function ChallengeEditor({
   testCases: TestCase[];
   /** Callback for every submit result — ghi progress/attempts. */
   onSubmit?: (payload: { code: string; result: ChallengeRunResult; passed: boolean }) => void;
+  /** Callback after a visible-test run completes. */
+  onRun?: (payload: { code: string; result: ChallengeRunResult }) => void;
   /** localStorage key cho code. */
   persistKey?: string;
   /** Challenge context for saved snippets. */
@@ -61,6 +66,9 @@ export function ChallengeEditor({
   const [running, setRunning] = useState(false);
   const [loadingRuntime, setLoadingRuntime] = useState(false);
   const [mode, setMode] = useState<"run" | "submit">("run");
+  const controllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => controllerRef.current?.abort(), []);
 
   // Lưu code vào localStorage.
   useEffect(() => {
@@ -73,51 +81,74 @@ export function ChallengeEditor({
   }, [persistKey, code]);
 
   const handleRun = useCallback(async () => {
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
     setRunning(true);
     setLoadingRuntime(true);
     setMode("run");
     setRunResult(null);
     try {
-      const r = await runExample(code, testCases);
-      setRunResult(r);
+      const r = await runExample(code, testCases, { signal: controller.signal });
+      if (!controller.signal.aborted) {
+        setRunResult(r);
+        onRun?.({ code, result: r });
+      }
     } catch (e) {
-      setRunResult({
-        results: [],
-        allPassed: false,
-        stdout: "",
-        stderr: "",
-        error: (e as Error).message || String(e),
-      });
+      if (!controller.signal.aborted) {
+        setRunResult({
+          results: [],
+          allPassed: false,
+          stdout: "",
+          stderr: "",
+          error: (e as Error).message || String(e),
+        });
+      }
     } finally {
-      setRunning(false);
-      setLoadingRuntime(false);
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        setRunning(false);
+        setLoadingRuntime(false);
+      }
     }
-  }, [code, testCases]);
+  }, [code, testCases, onRun]);
 
   const handleSubmit = useCallback(async () => {
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
     setRunning(true);
     setLoadingRuntime(true);
     setMode("submit");
     setSubmitResult(null);
     try {
-      const r = await submitChallenge(code, testCases);
-      setSubmitResult(r);
-      onSubmit?.({ code, result: r, passed: r.allPassed });
+      const r = await submitChallenge(code, testCases, { signal: controller.signal });
+      if (!controller.signal.aborted) {
+        setSubmitResult(r);
+        onSubmit?.({ code, result: r, passed: r.allPassed });
+      }
     } catch (e) {
-      const result = {
-        results: [],
-        allPassed: false,
-        stdout: "",
-        stderr: "",
-        error: (e as Error).message || String(e),
-      } satisfies ChallengeRunResult;
-      setSubmitResult(result);
-      onSubmit?.({ code, result, passed: result.allPassed });
+      if (!controller.signal.aborted) {
+        const result = {
+          results: [],
+          allPassed: false,
+          stdout: "",
+          stderr: "",
+          error: (e as Error).message || String(e),
+        } satisfies ChallengeRunResult;
+        setSubmitResult(result);
+        onSubmit?.({ code, result, passed: result.allPassed });
+      }
     } finally {
-      setRunning(false);
-      setLoadingRuntime(false);
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        setRunning(false);
+        setLoadingRuntime(false);
+      }
     }
   }, [code, testCases, onSubmit]);
+
+  const cancel = useCallback(() => controllerRef.current?.abort(), []);
 
   const reset = useCallback(() => {
     setCode(starterCode);
@@ -133,7 +164,8 @@ export function ChallengeEditor({
       <div className="flex flex-wrap items-center gap-1.5">
         <Button
           onClick={handleRun}
-          disabled={running}
+          disabled={running || !featureFlags.workerExecution}
+          title={!featureFlags.workerExecution ? WORKER_EXECUTION_DISABLED_MESSAGE : undefined}
           variant="outline"
           size="sm"
           className="gap-1.5"
@@ -143,13 +175,25 @@ export function ChallengeEditor({
         </Button>
         <Button
           onClick={handleSubmit}
-          disabled={running}
+          disabled={running || !featureFlags.workerExecution}
           size="sm"
           className="gap-1.5"
+          title={!featureFlags.workerExecution ? WORKER_EXECUTION_DISABLED_MESSAGE : undefined}
         >
           <Send className="h-3.5 w-3.5" />
           Submit
         </Button>
+        {running && (
+          <Button onClick={cancel} variant="outline" size="sm" className="gap-1.5">
+            <Square className="h-3.5 w-3.5" />
+            Cancel
+          </Button>
+        )}
+        {!featureFlags.workerExecution && (
+          <p className="max-w-72 text-xs text-amber-500" role="status">
+            {WORKER_EXECUTION_DISABLED_MESSAGE}
+          </p>
+        )}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
           <SaveSnippetButton
             language="python"

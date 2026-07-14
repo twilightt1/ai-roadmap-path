@@ -37,9 +37,36 @@ export type QuizResult = {
   attempts: number;
 };
 
+export type ProgressItemScope = "lesson" | "project_feature";
+
+/**
+ * Authoritative state for a completion checkbox. An explicit `completed: false`
+ * is retained so an uncheck can win over an older remote completion.
+ */
+export type ProgressItemState = {
+  scope: ProgressItemScope;
+  itemKey: string;
+  completed: boolean;
+  clientUpdatedAt: string;
+  mutationId: string;
+};
+
+export type ProgressOutboxEntry = {
+  mutation: ProgressItemState;
+  attemptCount: number;
+  nextAttemptAt: string;
+  lastErrorCode: string | null;
+};
+
+export type ProgressSyncStatus = "local-only" | "syncing" | "synced" | "failed";
+
 export type StoreState = {
   completed: Set<string>;
   projectFeatures: Set<string>;
+  itemStates: Map<string, ProgressItemState>;
+  pendingItemMutations: ProgressOutboxEntry[];
+  pendingPracticeEvents: import("./practice-events").PracticeEvent[];
+  syncEpoch: number | null;
   quizResults: Map<string, QuizResult>;
   challengeResults: Map<string, ChallengeResult>;
   startedAt: string | null;
@@ -72,6 +99,10 @@ export function createEmptyProgressState(): StoreState {
   return {
     completed: new Set(),
     projectFeatures: new Set(),
+    itemStates: new Map(),
+    pendingItemMutations: [],
+    pendingPracticeEvents: [],
+    syncEpoch: null,
     quizResults: new Map(),
     challengeResults: new Map(),
     startedAt: null,
@@ -83,6 +114,10 @@ export function cloneProgressState(state: StoreState): StoreState {
   return {
     completed: new Set(state.completed),
     projectFeatures: new Set(state.projectFeatures),
+    itemStates: new Map(state.itemStates),
+    pendingItemMutations: [...state.pendingItemMutations],
+    pendingPracticeEvents: [...state.pendingPracticeEvents],
+    syncEpoch: state.syncEpoch,
     quizResults: new Map(state.quizResults),
     challengeResults: new Map(state.challengeResults),
     startedAt: state.startedAt,

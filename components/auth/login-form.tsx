@@ -1,12 +1,16 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { getErrorMessage } from "@/lib/error-message";
+import { syncProgressAfterSignIn } from "@/lib/progress";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 export function LoginForm() {
+  const router = useRouter();
   const supabase = getSupabaseBrowserClient();
   const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
   const [email, setEmail] = useState("");
@@ -30,12 +34,16 @@ export function LoginForm() {
 
     try {
       if (mode === "sign-in") {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
+        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
         if (signInError) throw signInError;
+        if (!signInData.session) throw new Error("Đăng nhập không trả về phiên hợp lệ.");
+        await syncProgressAfterSignIn(signInData.session);
         setMessage("Đã đăng nhập. Tiến độ local sẽ được đồng bộ nếu có.");
+        router.replace("/dashboard");
+        router.refresh();
       } else {
         const { error: signUpError } = await supabase.auth.signUp({
           email,
@@ -50,7 +58,7 @@ export function LoginForm() {
         setMessage("Tài khoản đã được tạo. Nếu Supabase bật email confirmation, hãy kiểm tra email.");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getErrorMessage(err, "Không thể xác thực. Vui lòng thử lại."));
     } finally {
       setLoading(false);
     }

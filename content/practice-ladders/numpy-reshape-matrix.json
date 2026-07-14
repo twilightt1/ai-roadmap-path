@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "contentVersion": "1.0.0",
+  "challengeId": "numpy-reshape-matrix",
+  "linkedTopicIds": ["numpy"],
+  "prerequisiteTopicIds": ["python-fundamentals", "functions"],
+  "recall": {
+    "prompt": "Điều kiện nào phải đúng để reshape một array mà không mất phần tử?",
+    "options": [
+      "Tổng số phần tử trước và sau phải bằng nhau",
+      "Số hàng luôn phải bằng số cột",
+      "Array phải chứa số nguyên",
+      "Array phải là 2D"
+    ],
+    "correctOption": 0,
+    "explanation": "reshape chỉ thay đổi cách nhìn shape; số phần tử phải được bảo toàn."
+  },
+  "workedExample": {
+    "prompt": "Array có 6 phần tử. Shape nào tạo được ma trận 2D hợp lệ?",
+    "code": "import numpy as np\na = np.arange(6)\nprint(a.reshape(2, 3))",
+    "predictionOptions": ["(2, 2)", "(2, 3)", "(4, 2)", "(3, 3)"],
+    "correctOption": 1,
+    "explanation": "2 × 3 = 6, khớp tổng số phần tử trong array ban đầu."
+  },
+  "scaffold": {
+    "instructions": "Hoàn thiện hàm để trả về array với shape được yêu cầu, không thay đổi dữ liệu.",
+    "starterCode": "import numpy as np\n\ndef solve(arr, shape):\n    # trả về arr với shape mới\n    pass",
+    "testCases": [
+      { "name": "2x2", "call": "solve(np.array([1,2,3,4]), (2,2))", "expected": "np.array([[1,2],[3,4]])", "compare": "np_array" },
+      { "name": "3x2", "call": "solve(np.arange(6), (3,2))", "expected": "np.array([[0,1],[2,3],[4,5]])", "compare": "np_array" }
+    ],
+    "feedback": "Hãy gọi method reshape trên array gốc và truyền tuple shape vào method đó."
+  },
+  "hints": [
+    { "level": 1, "title": "Nhắc khái niệm", "content": "NumPy array có method để đổi shape mà không phải tự tạo vòng lặp." },
+    { "level": 2, "title": "Chiến lược", "content": "Dùng object arr làm điểm bắt đầu; shape đã được truyền vào dưới dạng tuple." },
+    { "level": 3, "title": "Pseudocode", "content": "Trong solve, gọi method đổi shape của arr với đối số shape rồi return kết quả." }
+  ],
+  "walkthrough": {
+    "approach": "NumPy đã cung cấp reshape để sắp xếp lại cùng dữ liệu trong shape mới. Vì đề bài bảo đảm kích thước hợp lệ, không cần xử lý lỗi.",
+    "steps": [
+      "Nhận arr một chiều và tuple shape.",
+      "Gọi arr.reshape(shape).",
+      "Trả về array mới có cùng phần tử theo thứ tự ban đầu."
+    ],
+    "commonMistakes": [
+      "Tự viết nested loop dù NumPy đã có API phù hợp.",
+      "Dùng shape có tổng phần tử không khớp.",
+      "Quên return kết quả reshape."
+    ],
+    "edgeCases": ["Shape có thể gồm một chiều bằng 1.", "Tổng số phần tử phải luôn giữ nguyên."],
+    "complexity": "Time O(1) metadata operation in typical NumPy reshape cases; no element-wise Python loop.",
+    "referenceSolution": "import numpy as np\n\ndef solve(arr, shape):\n    return arr.reshape(shape)"
+  },
+  "transfer": {
+    "instructions": "Viết solve(arr, width) để chia vector 1D thành các hàng có width phần tử; dùng -1 để NumPy tự suy ra số hàng.",
+    "starterCode": "import numpy as np\n\ndef solve(arr, width):\n    # reshape arr into rows of width\n    pass",
+    "testCases": [
+      { "name": "Hai hàng", "call": "solve(np.arange(6), 3)", "expected": "np.array([[0,1,2],[3,4,5]])", "compare": "np_array" },
+      { "name": "Ba hàng", "call": "solve(np.arange(6), 2)", "expected": "np.array([[0,1],[2,3],[4,5]])", "compare": "np_array" }
+    ],
+    "feedback": "Một shape dimension có thể là -1 để NumPy suy ra từ tổng số phần tử và width."
+  }
+}

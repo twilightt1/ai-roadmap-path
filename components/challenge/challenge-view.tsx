@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -15,9 +15,11 @@ import {
   type Challenge,
 } from "@/lib/challenge-types";
 import { useProgress } from "@/lib/progress";
-import { MdxContent } from "@/components/roadmap/mdx-content";
 import { cn } from "@/lib/utils";
 import { BookmarkButton } from "@/components/library/bookmark-button";
+import { SolutionWalkthroughPanel } from "./solution-walkthrough-panel";
+import { PracticeLadderPanel } from "@/components/practice-ladder/practice-ladder-panel";
+import type { LearnerSafePracticeLadder } from "@/lib/practice-ladder-types";
 
 const DIFFICULTY_STYLES: Record<string, string> = {
   easy: "border-emerald-500/30 text-emerald-400 bg-emerald-500/5",
@@ -35,11 +37,20 @@ const DIFFICULTY_LABELS: Record<string, string> = {
  * Trang detail challenge — layout 2-col lg+ (trái: description + hint,
  * phải: editor + test results). Stacked mobile.
  */
-export function ChallengeView({ challenge }: { challenge: Challenge }) {
-  const { isChallengeSolved, setChallengeResult, hydrated } = useProgress();
+export function ChallengeView({
+  challenge,
+  ladder,
+  description,
+}: {
+  challenge: Challenge;
+  ladder: LearnerSafePracticeLadder | null;
+  description: ReactNode;
+}) {
+  const { isChallengeSolved, getChallengeResult, recordPracticeEvent, setChallengeResult, hydrated } = useProgress();
   const [showHint, setShowHint] = useState(false);
 
   const solved = hydrated && isChallengeSolved(challenge.id);
+  const attempts = getChallengeResult(challenge.id)?.attempts ?? 0;
   const cat = CHALLENGE_CATEGORIES[challenge.category];
 
   return (
@@ -101,12 +112,14 @@ export function ChallengeView({ challenge }: { challenge: Challenge }) {
         <div className="space-y-4">
           <div className="rounded-xl border border-border/60 bg-card/30 p-5">
             <article className="prose prose-sm prose-invert max-w-none prose-headings:scroll-mt-20 prose-headings:font-semibold prose-headings:tracking-tight prose-h2:mt-6 prose-h2:text-base prose-h3:text-sm prose-p:text-sm prose-p:leading-relaxed prose-li:text-sm prose-code:rounded prose-code:bg-foreground/10 prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-pre:bg-foreground/[0.03] prose-pre:text-xs">
-              <MdxContent source={challenge.description} />
+              {description}
             </article>
           </div>
 
+          {ladder && <PracticeLadderPanel ladder={ladder} />}
+
           {/* Hint (collapsible) */}
-          {challenge.hint && (
+          {!ladder && challenge.hint && (
             <div className="rounded-xl border border-border/60 bg-card/30 p-4">
               <button
                 onClick={() => setShowHint(!showHint)}
@@ -128,6 +141,12 @@ export function ChallengeView({ challenge }: { challenge: Challenge }) {
               )}
             </div>
           )}
+
+          <SolutionWalkthroughPanel
+            challengeId={challenge.id}
+            solved={solved}
+            submitCount={attempts}
+          />
 
           {/* Status */}
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -154,7 +173,15 @@ export function ChallengeView({ challenge }: { challenge: Challenge }) {
               persistKey={`ai-roadmap:challenge-code:${challenge.id}`}
               challengeId={challenge.id}
               challengeTitle={challenge.title}
-              onSubmit={({ code, result, passed }) =>
+              onRun={() =>
+                recordPracticeEvent({
+                  challengeId: challenge.id,
+                  contentVersion: ladder?.contentVersion ?? null,
+                  eventType: "run",
+                  step: "independent_challenge",
+                })
+              }
+              onSubmit={({ code, result, passed }) => {
                 setChallengeResult(challenge.id, passed, {
                   code,
                   language: "python",
@@ -164,8 +191,24 @@ export function ChallengeView({ challenge }: { challenge: Challenge }) {
                     typeof result.durationMs === "number"
                       ? result.durationMs / 1000
                       : undefined,
-                })
-              }
+                });
+                recordPracticeEvent({
+                  challengeId: challenge.id,
+                  contentVersion: ladder?.contentVersion ?? null,
+                  eventType: "submit",
+                  step: "independent_challenge",
+                  passed,
+                });
+                if (passed) {
+                  recordPracticeEvent({
+                    challengeId: challenge.id,
+                    contentVersion: ladder?.contentVersion ?? null,
+                    eventType: "challenge_passed",
+                    step: "independent_challenge",
+                    passed: true,
+                  });
+                }
+              }}
             />
           </div>
         </div>
