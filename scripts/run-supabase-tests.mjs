@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Runs P0/P1 database assertions against an already-running *local* Supabase stack.
+ * Runs P0/P1/P2 database assertions against an already-running *local* Supabase stack.
  * The script deliberately resets the local database because the test stages a
  * legacy snapshot between migrations to verify the real backfill path.
  */
@@ -11,6 +11,7 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const sqlTest = resolve(root, "supabase/tests/p0_progress_rls.test.sql");
 const p1SqlTest = resolve(root, "supabase/tests/p1_learning_profiles_rls.test.sql");
+const p2SqlTest = resolve(root, "supabase/tests/p2_project_evidence_rls.test.sql");
 const legacyMigration = "202607060001";
 
 function fail(message) {
@@ -89,6 +90,7 @@ function parseEnv(output) {
 
 if (!existsSync(sqlTest)) fail(`SQL test file is missing: ${sqlTest}`);
 if (!existsSync(p1SqlTest)) fail(`SQL test file is missing: ${p1SqlTest}`);
+if (!existsSync(p2SqlTest)) fail(`SQL test file is missing: ${p2SqlTest}`);
 requireCommand("supabase");
 requireCommand("psql");
 
@@ -114,9 +116,11 @@ try {
   command("psql", [status.DB_URL, "-v", "ON_ERROR_STOP=1", "-f", sqlTest], { stdio: "inherit" });
   console.log("Running P1 learning profile RLS assertions...");
   command("psql", [status.DB_URL, "-v", "ON_ERROR_STOP=1", "-f", p1SqlTest], { stdio: "inherit" });
+  console.log("Running P2 project evidence RLS assertions...");
+  command("psql", [status.DB_URL, "-v", "ON_ERROR_STOP=1", "-f", p2SqlTest], { stdio: "inherit" });
 } catch (error) {
   console.error(`\nDB TEST FAILED\n${error.message}`);
   process.exit(1);
 }
 
-console.log("DB TEST PASSED: P0 progress and P1 learning profile RLS/migration assertions.");
+console.log("DB TEST PASSED: P0 progress, P1 learning profile, and P2 project evidence RLS/migration assertions.");

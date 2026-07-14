@@ -31,6 +31,7 @@ export default defineConfig({
           NEXT_PUBLIC_P0_LWW_PROGRESS: "true",
           NEXT_PUBLIC_P0_PRACTICE_LADDER: "true",
           NEXT_PUBLIC_P1_LEARNING_LOOP: "true",
+          NEXT_PUBLIC_P2_PROJECT_EVIDENCE: "true",
         },
       },
 });

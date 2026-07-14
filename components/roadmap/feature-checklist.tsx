@@ -22,7 +22,7 @@ export function FeatureChecklist({
   const percent = total === 0 ? 0 : Math.round((doneCount / total) * 100);
 
   return (
-    <div className="space-y-4">
+    <div data-testid="feature-checklist" className="space-y-4">
       {/* Progress header */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">

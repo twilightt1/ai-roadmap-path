@@ -8,7 +8,8 @@ export type PlatformErrorCode =
   | "SYNC_CONFLICT"
   | "SYNC_AUTH_CHANGED"
   | "SYNC_REMOTE_FAILED"
-  | "LEARNING_PROFILE_SYNC_FAILED";
+  | "LEARNING_PROFILE_SYNC_FAILED"
+  | "PROJECT_EVIDENCE_SYNC_FAILED";
 
 export type PlatformEventName =
   | "runner.lifecycle"
