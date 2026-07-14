@@ -218,40 +218,46 @@ export async function isBookmarked(
   return Boolean(data);
 }
 
-export async function toggleBookmark(
+export async function setBookmark(
   supabase: SupabaseClient,
   userId: string,
-  target: BookmarkTarget
+  target: BookmarkTarget,
+  bookmarked: boolean
 ): Promise<{ bookmarked: boolean; bookmark: BookmarkRecord | null }> {
   const normalized = normalizeBookmarkTarget(target.targetType, target.targetSlug);
-  const { data: existing, error: lookupError } = await supabase
-    .from("bookmarks")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("target_type", normalized.targetType)
-    .eq("target_slug", normalized.targetSlug)
-    .maybeSingle();
-
-  if (lookupError) throw lookupError;
-
-  if (existing && typeof (existing as Row).id === "string") {
+  if (!bookmarked) {
     const { error: deleteError } = await supabase
       .from("bookmarks")
       .delete()
       .eq("user_id", userId)
-      .eq("id", (existing as Row).id);
+      .eq("target_type", normalized.targetType)
+      .eq("target_slug", normalized.targetSlug);
     if (deleteError) throw deleteError;
     return { bookmarked: false, bookmark: null };
   }
 
+  const { error: insertError } = await supabase
+    .from("bookmarks")
+    .upsert(
+      {
+        user_id: userId,
+        target_type: normalized.targetType,
+        target_slug: normalized.targetSlug,
+      },
+      {
+        onConflict: "user_id,target_type,target_slug",
+        ignoreDuplicates: true,
+      }
+    );
+
+  if (insertError) throw insertError;
+
   const { data, error } = await supabase
     .from("bookmarks")
-    .insert({
-      user_id: userId,
-      target_type: normalized.targetType,
-      target_slug: normalized.targetSlug,
-    })
     .select(BOOKMARK_SELECT)
+    .eq("user_id", userId)
+    .eq("target_type", normalized.targetType)
+    .eq("target_slug", normalized.targetSlug)
     .single();
 
   if (error) throw error;

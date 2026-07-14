@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { AlertCircle, Bookmark, BookmarkCheck, LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getErrorMessage } from "@/lib/error-message";
-import { isBookmarked, toggleBookmark, type BookmarkTargetType } from "@/lib/personal-library";
+import { isBookmarked, setBookmark, type BookmarkTargetType } from "@/lib/personal-library";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "./use-current-user";
 
@@ -31,6 +31,8 @@ export function BookmarkButton({
   const [error, setError] = useState<string | null>(null);
 
   const userId = user?.id ?? null;
+  const bookmarkContextKey = userId ? `${userId}:${targetType}:${targetSlug}` : null;
+  const [resolvedContextKey, setResolvedContextKey] = useState<string | null>(null);
   const mountedRef = useRef(false);
   const latestContextRef = useRef({ userId, targetType, targetSlug });
   const toggleRequestIdRef = useRef(0);
@@ -59,6 +61,7 @@ export function BookmarkButton({
         setChecking(false);
         setBookmarked(false);
         setError(null);
+        setResolvedContextKey(null);
       });
       return;
     }
@@ -78,13 +81,16 @@ export function BookmarkButton({
         if (mounted) setError(getErrorMessage(e));
       })
       .finally(() => {
-        if (mounted) setChecking(false);
+        if (mounted) {
+          setChecking(false);
+          setResolvedContextKey(bookmarkContextKey);
+        }
       });
 
     return () => {
       mounted = false;
     };
-  }, [supabase, userId, targetType, targetSlug]);
+  }, [bookmarkContextKey, supabase, userId, targetType, targetSlug]);
 
   const handleToggle = useCallback(async () => {
     if (!supabase || !userId || saving) return;
@@ -105,14 +111,20 @@ export function BookmarkButton({
     };
 
     const previous = bookmarked;
+    const desired = !previous;
     setSaving(true);
     setError(null);
 
     try {
-      const result = await toggleBookmark(supabase, capturedContext.userId, {
-        targetType: capturedContext.targetType,
-        targetSlug: capturedContext.targetSlug,
-      });
+      const result = await setBookmark(
+        supabase,
+        capturedContext.userId,
+        {
+          targetType: capturedContext.targetType,
+          targetSlug: capturedContext.targetSlug,
+        },
+        desired
+      );
       if (!isCurrentRequest()) return;
       setBookmarked(result.bookmarked);
     } catch (e: unknown) {
@@ -124,7 +136,11 @@ export function BookmarkButton({
     }
   }, [bookmarked, saving, supabase, targetSlug, targetType, userId]);
 
-  if (loading || checking) {
+  const resolvingBookmark = Boolean(
+    bookmarkContextKey && resolvedContextKey !== bookmarkContextKey
+  );
+
+  if (loading || checking || resolvingBookmark) {
     return <span className={cn("inline-flex h-7 w-20 animate-pulse rounded-lg bg-foreground/10", className)} />;
   }
 
