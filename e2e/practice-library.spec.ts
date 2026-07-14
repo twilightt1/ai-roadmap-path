@@ -37,10 +37,20 @@ test.describe("practice and personal library", () => {
 
       await signIn(page, user);
       await page.goto(challengePath);
-      const bookmark = page.getByRole("button", { name: "Lưu challenge" });
-      await expect(bookmark).toBeVisible();
+      const bookmark = page.getByRole("button", { name: "Lưu challenge", exact: true });
+      const savedBookmark = page.getByRole("button", { name: "Đã lưu challenge", exact: true });
+      const bookmarkToggle = page.getByRole("button", {
+        name: /^(Lưu challenge|Đã lưu challenge)$/,
+      });
+      await expect(bookmarkToggle).toBeVisible();
+
+      if (await savedBookmark.isVisible()) {
+        await savedBookmark.click();
+        await expect(bookmark).toBeVisible();
+        await expect(bookmark).toBeEnabled();
+      }
+
       await bookmark.click();
-      const savedBookmark = page.getByRole("button", { name: "Đã lưu challenge" });
       await expect(savedBookmark).toBeVisible();
       await expect(savedBookmark).toBeEnabled();
 
