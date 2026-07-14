@@ -83,6 +83,10 @@ jobs:
             full)
               PLAYWRIGHT_RUN_EXTERNAL_RUNTIME=true pnpm test:e2e:smoke
               ;;
+            *)
+              echo "Unsupported staging canary suite: ${{ inputs.suite }}" >&2
+              exit 2
+              ;;
           esac
 
       - name: Upload Playwright failure artifacts

@@ -1,5 +1,7 @@
 -- Staging-safe P0/P1 ownership and RLS proof.
 -- All fixture writes are enclosed in this transaction and rolled back.
+-- Execute with: pnpm exec supabase db query --linked --file supabase/tests/staging_security_proof.sql
+-- This file intentionally contains server SQL only; the Supabase CLI exits non-zero on query errors.
 
 begin;
 
