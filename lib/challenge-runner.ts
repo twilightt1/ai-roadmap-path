@@ -1,4 +1,4 @@
-import { runCode } from "./runner";
+import { runCode, type RunOptions } from "./runner";
 import { generateHarness, parseHarnessOutput } from "./challenge-harness";
 import type {
   TestCase,
@@ -18,14 +18,15 @@ import type {
 /** Chạy một subset test cases (dùng cho "Run tests" — chỉ visible). */
 export async function runTests(
   userCode: string,
-  testCases: TestCase[]
+  testCases: TestCase[],
+  options?: RunOptions
 ): Promise<ChallengeRunResult> {
   const start = performance.now();
   const harness = generateHarness(userCode, testCases);
 
   let runResult;
   try {
-    runResult = await runCode("python", harness);
+    runResult = await runCode("python", harness, options);
   } catch (e) {
     return {
       results: [],
@@ -73,9 +74,10 @@ export async function runTests(
  */
 export async function submitChallenge(
   userCode: string,
-  testCases: TestCase[]
+  testCases: TestCase[],
+  options?: RunOptions
 ): Promise<ChallengeRunResult> {
-  return runTests(userCode, testCases);
+  return runTests(userCode, testCases, options);
 }
 
 /**
@@ -84,7 +86,8 @@ export async function submitChallenge(
  */
 export async function runExample(
   userCode: string,
-  testCases: TestCase[]
+  testCases: TestCase[],
+  options?: RunOptions
 ): Promise<ChallengeRunResult> {
   const visibleTests = testCases.filter((t) => !t.hidden);
   if (visibleTests.length === 0) {
@@ -96,5 +99,5 @@ export async function runExample(
       error: "Không có test case visible để chạy",
     };
   }
-  return runTests(userCode, visibleTests);
+  return runTests(userCode, visibleTests, options);
 }

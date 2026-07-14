@@ -1,8 +1,10 @@
 import type { ChallengeResult } from "./challenge-types";
-import { deriveProgressSets, itemStateKey } from "./progress-item-state";
+import { parseProgressDocument, serializeProgressDocument } from "./progress-document";
+import { itemStateKey } from "./progress-item-state";
 import type { ProgressItemState, QuizResult, StoreState } from "./progress-types";
 import { createEmptyProgressState } from "./progress-types";
 
+const V3_STORAGE_KEY = "ai-roadmap:progress:v3";
 const V2_STORAGE_KEY = "ai-roadmap:progress:v2";
 const STORAGE_KEY = "ai-roadmap:progress:v1";
 const COMPLETED_KEY = "ai-roadmap:completed:v1";
@@ -21,87 +23,35 @@ const LEGACY_BASE_KEYS = [
 ] as const;
 
 type LegacyBaseKey = (typeof LEGACY_BASE_KEYS)[number];
+type ProgressBaseKey = LegacyBaseKey | typeof V2_STORAGE_KEY | typeof V3_STORAGE_KEY;
 
-type LocalProgressDocumentV2 = {
-  schemaVersion: 2;
-  syncEpoch: number | null;
-  pendingItemMutations: ProgressItemState[];
-  pendingPracticeEvents: import("./practice-events").PracticeEvent[];
-  itemStates: ProgressItemState[];
-  quizResults: Record<string, QuizResult>;
-  challengeResults: Record<string, ChallengeResult>;
-  startedAt: string | null;
-  lastVisit: string | null;
-};
-
-function keyFor(baseKey: LegacyBaseKey | typeof V2_STORAGE_KEY, userId?: string | null): string {
+function keyFor(baseKey: ProgressBaseKey, userId?: string | null): string {
   return userId ? `${baseKey}:user:${encodeURIComponent(userId)}` : baseKey;
 }
 
 function readJson<T>(key: string, fallback: T): T {
   const raw = localStorage.getItem(key);
   if (!raw) return fallback;
-  return JSON.parse(raw) as T;
-}
 
-function isProgressItemState(value: unknown): value is ProgressItemState {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const item = value as Record<string, unknown>;
-  return (
-    (item.scope === "lesson" || item.scope === "project_feature") &&
-    typeof item.itemKey === "string" &&
-    typeof item.completed === "boolean" &&
-    typeof item.clientUpdatedAt === "string" &&
-    typeof item.mutationId === "string"
-  );
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
 }
 
 function isResultMap(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function parseV2(value: unknown): StoreState | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const document = value as Record<string, unknown>;
-  if (
-    document.schemaVersion !== 2 ||
-    !Array.isArray(document.itemStates) ||
-    !document.itemStates.every(isProgressItemState) ||
-    (document.pendingItemMutations !== undefined &&
-      (!Array.isArray(document.pendingItemMutations) ||
-        !document.pendingItemMutations.every(isProgressItemState))) ||
-    (document.pendingPracticeEvents !== undefined && !Array.isArray(document.pendingPracticeEvents)) ||
-    (document.syncEpoch !== undefined &&
-      document.syncEpoch !== null &&
-      (typeof document.syncEpoch !== "number" || !Number.isInteger(document.syncEpoch))) ||
-    !isResultMap(document.quizResults) ||
-    !isResultMap(document.challengeResults) ||
-    (document.startedAt !== null && typeof document.startedAt !== "string") ||
-    (document.lastVisit !== null && typeof document.lastVisit !== "string")
-  ) {
-    return null;
+function legacyMutationId(scope: "lesson" | "project_feature", itemKey: string): string {
+  let hash = 2166136261;
+  for (const character of `${scope}:${itemKey}`) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
   }
-
-  const itemStates = new Map<string, ProgressItemState>();
-  for (const state of document.itemStates) {
-    itemStates.set(itemStateKey(state.scope, state.itemKey), state);
-  }
-
-  const { completed, projectFeatures } = deriveProgressSets(itemStates);
-  return {
-    completed,
-    projectFeatures,
-    itemStates,
-    pendingItemMutations: (document.pendingItemMutations as ProgressItemState[] | undefined) ?? [],
-    pendingPracticeEvents: (document.pendingPracticeEvents as import("./practice-events").PracticeEvent[] | undefined) ?? [],
-    syncEpoch: (document.syncEpoch as number | null | undefined) ?? null,
-    quizResults: new Map(Object.entries(document.quizResults as Record<string, QuizResult>)),
-    challengeResults: new Map(
-      Object.entries(document.challengeResults as Record<string, ChallengeResult>)
-    ),
-    startedAt: document.startedAt,
-    lastVisit: document.lastVisit,
-  };
+  const suffix = (hash >>> 0).toString(16).padStart(8, "0");
+  return `00000000-0000-4000-8000-0000${suffix}`;
 }
 
 function createLegacyItemStates(
@@ -118,7 +68,7 @@ function createLegacyItemStates(
       itemKey,
       completed: true,
       clientUpdatedAt,
-      mutationId: `legacy:lesson:${itemKey}`,
+      mutationId: legacyMutationId("lesson", itemKey),
     };
     itemStates.set(itemStateKey(state.scope, state.itemKey), state);
   }
@@ -129,7 +79,7 @@ function createLegacyItemStates(
       itemKey,
       completed: true,
       clientUpdatedAt,
-      mutationId: `legacy:project_feature:${itemKey}`,
+      mutationId: legacyMutationId("project_feature", itemKey),
     };
     itemStates.set(itemStateKey(state.scope, state.itemKey), state);
   }
@@ -178,63 +128,68 @@ function loadLegacyProgressState(userId?: string | null): StoreState {
   };
 }
 
-function itemStatesForPersistence(state: StoreState): Map<string, ProgressItemState> {
-  if (state.itemStates.size > 0) return state.itemStates;
-  return createLegacyItemStates(state.completed, state.projectFeatures, state.lastVisit);
+function parseStoredDocument(key: string): StoreState | null {
+  const raw = localStorage.getItem(key);
+  if (!raw) return null;
+
+  try {
+    return parseProgressDocument(JSON.parse(raw));
+  } catch {
+    return null;
+  }
 }
 
-function toV2Document(state: StoreState): LocalProgressDocumentV2 {
+function stateForPersistence(state: StoreState): StoreState {
+  if (state.itemStates.size > 0) return state;
+
   return {
-    schemaVersion: 2,
-    syncEpoch: state.syncEpoch,
-    pendingItemMutations: state.pendingItemMutations,
-    pendingPracticeEvents: state.pendingPracticeEvents,
-    itemStates: [...itemStatesForPersistence(state).values()],
-    quizResults: Object.fromEntries(state.quizResults),
-    challengeResults: Object.fromEntries(state.challengeResults),
-    startedAt: state.startedAt,
-    lastVisit: state.lastVisit,
+    ...state,
+    itemStates: createLegacyItemStates(state.completed, state.projectFeatures, state.lastVisit),
   };
+}
+
+function persistV3Document(state: StoreState, userId?: string | null): boolean {
+  try {
+    localStorage.setItem(
+      keyFor(V3_STORAGE_KEY, userId),
+      JSON.stringify(serializeProgressDocument(stateForPersistence(state)))
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeKeys(keys: readonly ProgressBaseKey[], userId?: string | null): void {
+  for (const key of keys) localStorage.removeItem(keyFor(key, userId));
 }
 
 export function loadLocalProgressState(userId?: string | null): StoreState {
   if (typeof window === "undefined") return createEmptyProgressState();
 
-  try {
-    const v2Key = keyFor(V2_STORAGE_KEY, userId);
-    const rawV2 = localStorage.getItem(v2Key);
-    if (rawV2) {
-      const state = parseV2(JSON.parse(rawV2));
-      return state ?? createEmptyProgressState();
-    }
+  const v3State = parseStoredDocument(keyFor(V3_STORAGE_KEY, userId));
+  if (v3State) return v3State;
 
-    const legacyState = loadLegacyProgressState(userId);
-    const hasLegacyData = LEGACY_BASE_KEYS.some((key) => localStorage.getItem(keyFor(key, userId)) !== null);
-    if (hasLegacyData) persistLocalProgressState(legacyState, userId);
-    return legacyState;
-  } catch {
-    return createEmptyProgressState();
+  const v2State = parseStoredDocument(keyFor(V2_STORAGE_KEY, userId));
+  if (v2State) {
+    if (persistV3Document(v2State, userId)) localStorage.removeItem(keyFor(V2_STORAGE_KEY, userId));
+    return v2State;
   }
+
+  const hasLegacyData = LEGACY_BASE_KEYS.some((key) => localStorage.getItem(keyFor(key, userId)) !== null);
+  if (!hasLegacyData) return createEmptyProgressState();
+
+  const legacyState = loadLegacyProgressState(userId);
+  if (persistV3Document(legacyState, userId)) removeKeys(LEGACY_BASE_KEYS, userId);
+  return legacyState;
 }
 
 export function persistLocalProgressState(state: StoreState, userId?: string | null): void {
   if (typeof window === "undefined") return;
-
-  try {
-    localStorage.setItem(keyFor(V2_STORAGE_KEY, userId), JSON.stringify(toV2Document(state)));
-    for (const key of LEGACY_BASE_KEYS) {
-      localStorage.removeItem(keyFor(key, userId));
-    }
-  } catch {
-    // Ignore browser quota/security errors. The in-memory store remains usable.
-  }
+  if (persistV3Document(state, userId)) removeKeys([V2_STORAGE_KEY, ...LEGACY_BASE_KEYS], userId);
 }
 
 export function clearLocalProgressState(userId?: string | null): void {
   if (typeof window === "undefined") return;
-
-  localStorage.removeItem(keyFor(V2_STORAGE_KEY, userId));
-  for (const key of LEGACY_BASE_KEYS) {
-    localStorage.removeItem(keyFor(key, userId));
-  }
+  removeKeys([V3_STORAGE_KEY, V2_STORAGE_KEY, ...LEGACY_BASE_KEYS], userId);
 }

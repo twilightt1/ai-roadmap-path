@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+/test-results/
+/playwright-report/
 
 # next.js
 /.next/
@@ -32,6 +34,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -51,3 +54,7 @@ public/pagefind/
 
 # Supabase CLI link/runtime metadata is local to each environment.
 supabase/.temp/
+supabase/.branches/
+
+# Windows reserved-name artifact occasionally created by shell tools.
+/nul

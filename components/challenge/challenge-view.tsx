@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -15,7 +15,6 @@ import {
   type Challenge,
 } from "@/lib/challenge-types";
 import { useProgress } from "@/lib/progress";
-import { MdxContent } from "@/components/roadmap/mdx-content";
 import { cn } from "@/lib/utils";
 import { BookmarkButton } from "@/components/library/bookmark-button";
 import { SolutionWalkthroughPanel } from "./solution-walkthrough-panel";
@@ -41,9 +40,11 @@ const DIFFICULTY_LABELS: Record<string, string> = {
 export function ChallengeView({
   challenge,
   ladder,
+  description,
 }: {
   challenge: Challenge;
   ladder: LearnerSafePracticeLadder | null;
+  description: ReactNode;
 }) {
   const { isChallengeSolved, getChallengeResult, recordPracticeEvent, setChallengeResult, hydrated } = useProgress();
   const [showHint, setShowHint] = useState(false);
@@ -111,7 +112,7 @@ export function ChallengeView({
         <div className="space-y-4">
           <div className="rounded-xl border border-border/60 bg-card/30 p-5">
             <article className="prose prose-sm prose-invert max-w-none prose-headings:scroll-mt-20 prose-headings:font-semibold prose-headings:tracking-tight prose-h2:mt-6 prose-h2:text-base prose-h3:text-sm prose-p:text-sm prose-p:leading-relaxed prose-li:text-sm prose-code:rounded prose-code:bg-foreground/10 prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-pre:bg-foreground/[0.03] prose-pre:text-xs">
-              <MdxContent source={challenge.description} />
+              {description}
             </article>
           </div>
 

@@ -1,4 +1,5 @@
 import { ExecutionWorkerClient, WorkerExecutionError } from "./execution-worker-client";
+import { RUNNER_LIMITS, truncateUtf8 } from "./runner-limits";
 import type { RunResult } from "./types";
 
 export type RunnerStatus = "loading-runtime" | "loading-packages" | "executing";
@@ -19,6 +20,14 @@ function getClient(): ExecutionWorkerClient {
   return client;
 }
 
+export function mapPyodideRunnerError(error: unknown): RunResult {
+  const message = truncateUtf8(error instanceof Error ? error.message : String(error), RUNNER_LIMITS.errorBytes);
+  if (error instanceof WorkerExecutionError) {
+    return { stdout: "", stderr: "", error: message, errorCode: error.kind };
+  }
+  return { stdout: "", stderr: "", error: message };
+}
+
 /**
  * Run Python in a dedicated worker. Terminating the worker handles timeout and
  * cancellation without freezing the application page.
@@ -32,9 +41,6 @@ export async function runPython(code: string, options: RunOptions = {}): Promise
       onStatus: options.onStatus,
     });
   } catch (error) {
-    if (error instanceof WorkerExecutionError) {
-      return { stdout: "", stderr: "", error: error.message };
-    }
-    return { stdout: "", stderr: "", error: error instanceof Error ? error.message : String(error) };
+    return mapPyodideRunnerError(error);
   }
 }

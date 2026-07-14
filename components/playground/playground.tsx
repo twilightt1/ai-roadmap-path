@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Play, RotateCcw, ExternalLink, Terminal } from "lucide-react";
+import { Play, RotateCcw, ExternalLink, Terminal, Square } from "lucide-react";
 import { SaveSnippetButton } from "@/components/library/save-snippet-button";
 import { Button } from "@/components/ui/button";
-import { runCode, LANG_LABELS, type Lang, type RunResult } from "@/lib/runner";
+import { featureFlags } from "@/lib/feature-flags";
+import { runCode, LANG_LABELS, WORKER_EXECUTION_DISABLED_MESSAGE, type Lang, type RunResult } from "@/lib/runner";
 import { OutputPanel } from "./output-panel";
 
 // CodeMirror chạm DOM → dynamic import ssr:false để khỏi server bundle.
@@ -69,6 +70,9 @@ export function Playground({
   const [result, setResult] = useState<RunResult | null>(null);
   const [running, setRunning] = useState(false);
   const [loadingRuntime, setLoadingRuntime] = useState<string | null>(null);
+  const controllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => controllerRef.current?.abort(), []);
 
   // Lưu code vào localStorage khi thay đổi.
   useEffect(() => {
@@ -81,23 +85,33 @@ export function Playground({
   }, [persistKey, code]);
 
   const run = useCallback(async () => {
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
     setRunning(true);
     setLoadingRuntime(LOADING_MSG[lang]);
     setResult(null);
     try {
-      const r = await runCode(lang, code);
-      setResult(r);
+      const r = await runCode(lang, code, { signal: controller.signal });
+      if (!controller.signal.aborted) setResult(r);
     } catch (e) {
-      setResult({
-        stdout: "",
-        stderr: "",
-        error: (e as Error).message || String(e),
-      });
+      if (!controller.signal.aborted) {
+        setResult({
+          stdout: "",
+          stderr: "",
+          error: (e as Error).message || String(e),
+        });
+      }
     } finally {
-      setRunning(false);
-      setLoadingRuntime(null);
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        setRunning(false);
+        setLoadingRuntime(null);
+      }
     }
   }, [lang, code]);
+
+  const cancel = useCallback(() => controllerRef.current?.abort(), []);
 
   const reset = useCallback(() => {
     setCode(initialCode);
@@ -125,13 +139,25 @@ export function Playground({
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
           <Button
             onClick={run}
-            disabled={running}
+            disabled={running || !featureFlags.workerExecution}
             size="sm"
-            className="gap-1.5 px-3"
+            className="gap-1.5"
+            title={!featureFlags.workerExecution ? WORKER_EXECUTION_DISABLED_MESSAGE : undefined}
           >
             <Play className="h-3.5 w-3.5" />
             Run
           </Button>
+          {running && (
+            <Button onClick={cancel} variant="outline" size="sm" className="gap-1.5 px-3">
+              <Square className="h-3.5 w-3.5" />
+              Cancel
+            </Button>
+          )}
+          {!featureFlags.workerExecution && (
+            <p className="max-w-64 text-xs text-amber-500" role="status">
+              {WORKER_EXECUTION_DISABLED_MESSAGE}
+            </p>
+          )}
           <SaveSnippetButton
             language={lang}
             code={code}

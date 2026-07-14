@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertCircle, Bookmark, BookmarkCheck, LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { getErrorMessage } from "@/lib/error-message";
 import { isBookmarked, toggleBookmark, type BookmarkTargetType } from "@/lib/personal-library";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "./use-current-user";
@@ -74,7 +75,7 @@ export function BookmarkButton({
         if (mounted) setBookmarked(value);
       })
       .catch((e: unknown) => {
-        if (mounted) setError(e instanceof Error ? e.message : String(e));
+        if (mounted) setError(getErrorMessage(e));
       })
       .finally(() => {
         if (mounted) setChecking(false);
@@ -118,7 +119,7 @@ export function BookmarkButton({
     } catch (e: unknown) {
       if (!isCurrentRequest()) return;
       setBookmarked(previous);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(getErrorMessage(e));
     } finally {
       if (isCurrentRequest()) setSaving(false);
     }

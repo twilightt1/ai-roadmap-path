@@ -4,6 +4,7 @@ import { useState } from "react";
 import { BookOpenCheck, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ChallengeSolutionPayload } from "@/lib/challenge-solution";
+import { emitPlatformEvent } from "@/lib/observability/client";
 import { useProgress } from "@/lib/progress";
 
 export function SolutionWalkthroughPanel({
@@ -26,10 +27,12 @@ export function SolutionWalkthroughPanel({
     setLoading(true);
     setError(null);
     try {
+      emitPlatformEvent({ name: "practice.walkthrough", outcome: "requested" });
       const response = await fetch(`/api/challenges/${challengeId}/solution`);
       if (!response.ok) throw new Error("Không tải được lời giải. Hãy thử lại.");
       setPayload((await response.json()) as ChallengeSolutionPayload);
       recordPracticeEvent({ challengeId, eventType: "walkthrough_opened", step: "independent_challenge" });
+      emitPlatformEvent({ name: "practice.walkthrough", outcome: "displayed" });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {

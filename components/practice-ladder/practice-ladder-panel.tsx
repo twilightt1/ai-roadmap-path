@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { LearnerSafePracticeLadder } from "@/lib/practice-ladder-types";
 import { CodeExercise } from "./code-exercise";
+import { emitPlatformEvent } from "@/lib/observability/client";
 import { useProgress } from "@/lib/progress";
 
 export function PracticeLadderPanel({ ladder }: { ladder: LearnerSafePracticeLadder }) {
@@ -23,6 +24,7 @@ export function PracticeLadderPanel({ ladder }: { ladder: LearnerSafePracticeLad
       eventType: "challenge_started",
       step: "recall",
     });
+    emitPlatformEvent({ name: "practice.step", outcome: "started", metadata: { status: "recall" } });
   }, [ladder.challengeId, ladder.contentVersion, recordPracticeEvent]);
 
   return (
@@ -47,6 +49,11 @@ export function PracticeLadderPanel({ ladder }: { ladder: LearnerSafePracticeLad
                   eventType: "step_completed",
                   step: "recall",
                   passed: index === ladder.recall.correctOption,
+                });
+                emitPlatformEvent({
+                  name: "practice.step",
+                  outcome: "completed",
+                  metadata: { status: "recall", reason: index === ladder.recall.correctOption ? "passed" : "not-passed" },
                 });
               }}
               aria-pressed={recallAnswer === index}

@@ -19,6 +19,8 @@ export type RunResult = {
   stdout: string;
   stderr: string;
   error?: string;
+  /** Stable runner failure category, when the execution adapter provides one. */
+  errorCode?: string;
   columns?: string[];
   rows?: unknown[][];
   durationMs?: number;

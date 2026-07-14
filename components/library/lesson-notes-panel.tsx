@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { getErrorMessage } from "@/lib/error-message";
 import {
   createNote,
   deleteNote,
@@ -32,10 +33,6 @@ function formatTimestamp(value: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 type LessonNotesPanelProps = {
@@ -149,7 +146,7 @@ export function LessonNotesPanel({ lessonSlug, lessonTitle }: LessonNotesPanelPr
       })
       .catch((e: unknown) => {
         if (!isCurrentLoad()) return;
-        setError(errorMessage(e));
+        setError(getErrorMessage(e));
       })
       .finally(() => {
         if (isCurrentLoad()) setLoadingNotes(false);
@@ -179,7 +176,7 @@ export function LessonNotesPanel({ lessonSlug, lessonTitle }: LessonNotesPanelPr
       setDraft("");
     } catch (e: unknown) {
       if (!isCurrentMutationRequest(requestId, capturedContext)) return;
-      setError(errorMessage(e));
+      setError(getErrorMessage(e));
     } finally {
       if (isCurrentMutationRequest(requestId, capturedContext)) setSaving(false);
     }
@@ -210,7 +207,7 @@ export function LessonNotesPanel({ lessonSlug, lessonTitle }: LessonNotesPanelPr
       cancelEditing();
     } catch (e: unknown) {
       if (!isCurrentMutationRequest(requestId, capturedContext)) return;
-      setError(errorMessage(e));
+      setError(getErrorMessage(e));
     } finally {
       if (isCurrentMutationRequest(requestId, capturedContext)) setSaving(false);
     }
@@ -234,7 +231,7 @@ export function LessonNotesPanel({ lessonSlug, lessonTitle }: LessonNotesPanelPr
       if (wasEditingDeletedNote) cancelEditing();
     } catch (e: unknown) {
       if (!isCurrentMutationRequest(requestId, capturedContext)) return;
-      setError(errorMessage(e));
+      setError(getErrorMessage(e));
     } finally {
       if (isCurrentMutationRequest(requestId, capturedContext)) setSaving(false);
     }

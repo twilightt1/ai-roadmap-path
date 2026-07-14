@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 
+import { RUNNER_LIMITS, truncateUtf8 } from "./runner-limits";
 import type { WorkerExecutionMessage, WorkerExecutionRequest } from "./worker-protocol";
 
 function formatArgs(args: unknown[]): string {
@@ -37,8 +38,8 @@ self.addEventListener("message", (event: MessageEvent<WorkerExecutionRequest>) =
       type: "result",
       requestId,
       result: {
-        stdout: stdout.join("\n"),
-        stderr: stderr.join("\n"),
+        stdout: truncateUtf8(stdout.join("\n"), RUNNER_LIMITS.stdoutBytes),
+        stderr: truncateUtf8(stderr.join("\n"), RUNNER_LIMITS.stderrBytes),
         durationMs: Math.round(performance.now() - startedAt),
       },
     } satisfies WorkerExecutionMessage);
@@ -46,7 +47,10 @@ self.addEventListener("message", (event: MessageEvent<WorkerExecutionRequest>) =
     self.postMessage({
       type: "execution-error",
       requestId,
-      message: error instanceof Error ? error.message : String(error),
+      message: truncateUtf8(
+        error instanceof Error ? error.message : String(error),
+        RUNNER_LIMITS.errorBytes
+      ),
     } satisfies WorkerExecutionMessage);
   }
 });

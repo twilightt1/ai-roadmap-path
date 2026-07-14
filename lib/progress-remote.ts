@@ -37,12 +37,57 @@ export type RemoteProgressSnapshot = {
   state: StoreState;
 };
 
+/** A typed, recoverable optimistic-concurrency failure from the progress RPCs. */
+export class ProgressEpochConflictError extends Error {
+  constructor(message = "progress epoch mismatch") {
+    super(message);
+    this.name = "ProgressEpochConflictError";
+  }
+}
+
+export function isProgressEpochConflictError(error: unknown): error is ProgressEpochConflictError {
+  if (error instanceof ProgressEpochConflictError) return true;
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  return (
+    candidate.code === "P0001" &&
+    typeof candidate.message === "string" &&
+    candidate.message.toLowerCase().includes("progress epoch mismatch")
+  );
+}
+
+function throwProgressRemoteError(error: unknown): never {
+  if (isProgressEpochConflictError(error)) {
+    throw new ProgressEpochConflictError(
+      typeof (error as { message?: unknown }).message === "string"
+        ? (error as { message: string }).message
+        : undefined
+    );
+  }
+  throw error;
+}
+
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
+const MAX_PROGRESS_RPC_BATCH_SIZE = 100;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function validDateString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
+  return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+function validUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
+function inBatches<T>(items: readonly T[]): T[][] {
+  const batches: T[][] = [];
+  for (let index = 0; index < items.length; index += MAX_PROGRESS_RPC_BATCH_SIZE) {
+    batches.push(items.slice(index, index + MAX_PROGRESS_RPC_BATCH_SIZE));
+  }
+  return batches;
 }
 
 function parseQuizResult(value: unknown): QuizResult | null {
@@ -150,9 +195,11 @@ function parseProgressItemRows(rows: ProgressItemRow[] | null): Map<string, impo
     if (
       (row.scope !== "lesson" && row.scope !== "project_feature") ||
       typeof row.item_key !== "string" ||
+      row.item_key.length === 0 ||
+      row.item_key.length > 500 ||
       typeof row.completed !== "boolean" ||
-      typeof row.client_updated_at !== "string" ||
-      typeof row.mutation_id !== "string"
+      !validDateString(row.client_updated_at) ||
+      !validUuid(row.mutation_id)
     ) {
       continue;
     }
@@ -210,29 +257,35 @@ export async function applyRemoteProgressItemMutations(
 ): Promise<{ epoch: number; acknowledgedMutationIds: string[] }> {
   if (mutations.length === 0) return { epoch: expectedEpoch, acknowledgedMutationIds: [] };
 
-  const { data, error } = await supabase.rpc("apply_progress_item_mutations", {
-    expected_epoch: expectedEpoch,
-    mutations: mutations.map((mutation) => ({
-      scope: mutation.scope,
-      item_key: mutation.itemKey,
-      completed: mutation.completed,
-      client_updated_at: mutation.clientUpdatedAt,
-      mutation_id: mutation.mutationId,
-    })),
-  });
+  let epoch = expectedEpoch;
+  const acknowledgedMutationIds: string[] = [];
+  for (const batch of inBatches(mutations)) {
+    const { data, error } = await supabase.rpc("apply_progress_item_mutations", {
+      expected_epoch: epoch,
+      mutations: batch.map((mutation) => ({
+        scope: mutation.scope,
+        item_key: mutation.itemKey,
+        completed: mutation.completed,
+        client_updated_at: mutation.clientUpdatedAt,
+        mutation_id: mutation.mutationId,
+      })),
+    });
 
-  if (error) throw error;
-  const result = data as { epoch?: unknown; acknowledgedMutationIds?: unknown } | null;
-  if (
-    !result ||
-    typeof result.epoch !== "number" ||
-    !Array.isArray(result.acknowledgedMutationIds) ||
-    !result.acknowledgedMutationIds.every((id): id is string => typeof id === "string")
-  ) {
-    throw new Error("Invalid progress mutation RPC response");
+    if (error) throwProgressRemoteError(error);
+    const result = data as { epoch?: unknown; acknowledgedMutationIds?: unknown } | null;
+    if (
+      !result ||
+      typeof result.epoch !== "number" ||
+      !Array.isArray(result.acknowledgedMutationIds) ||
+      !result.acknowledgedMutationIds.every((id): id is string => typeof id === "string")
+    ) {
+      throw new Error("Invalid progress mutation RPC response");
+    }
+    epoch = result.epoch;
+    acknowledgedMutationIds.push(...result.acknowledgedMutationIds);
   }
 
-  return { epoch: result.epoch, acknowledgedMutationIds: result.acknowledgedMutationIds };
+  return { epoch, acknowledgedMutationIds };
 }
 
 export async function appendRemotePracticeEvents(
@@ -241,31 +294,38 @@ export async function appendRemotePracticeEvents(
   events: PracticeEvent[]
 ): Promise<{ epoch: number; acknowledgedEventIds: string[] }> {
   if (events.length === 0) return { epoch: expectedEpoch, acknowledgedEventIds: [] };
-  const { data, error } = await supabase.rpc("append_practice_events", {
-    expected_epoch: expectedEpoch,
-    events: events.map((event) => ({
-      event_id: event.eventId,
-      challenge_id: event.challengeId,
-      content_version: event.contentVersion,
-      origin: event.origin,
-      event_type: event.eventType,
-      step: event.step,
-      hint_level: event.hintLevel,
-      passed: event.passed,
-      occurred_at: event.occurredAt,
-    })),
-  });
-  if (error) throw error;
-  const result = data as { epoch?: unknown; acknowledgedEventIds?: unknown } | null;
-  if (
-    !result ||
-    typeof result.epoch !== "number" ||
-    !Array.isArray(result.acknowledgedEventIds) ||
-    !result.acknowledgedEventIds.every((id): id is string => typeof id === "string")
-  ) {
-    throw new Error("Invalid practice event RPC response");
+
+  let epoch = expectedEpoch;
+  const acknowledgedEventIds: string[] = [];
+  for (const batch of inBatches(events)) {
+    const { data, error } = await supabase.rpc("append_practice_events", {
+      expected_epoch: epoch,
+      events: batch.map((event) => ({
+        event_id: event.eventId,
+        challenge_id: event.challengeId,
+        content_version: event.contentVersion,
+        origin: event.origin,
+        event_type: event.eventType,
+        step: event.step,
+        hint_level: event.hintLevel,
+        passed: event.passed,
+        occurred_at: event.occurredAt,
+      })),
+    });
+    if (error) throwProgressRemoteError(error);
+    const result = data as { epoch?: unknown; acknowledgedEventIds?: unknown } | null;
+    if (
+      !result ||
+      typeof result.epoch !== "number" ||
+      !Array.isArray(result.acknowledgedEventIds) ||
+      !result.acknowledgedEventIds.every((id): id is string => typeof id === "string")
+    ) {
+      throw new Error("Invalid practice event RPC response");
+    }
+    epoch = result.epoch;
+    acknowledgedEventIds.push(...result.acknowledgedEventIds);
   }
-  return { epoch: result.epoch, acknowledgedEventIds: result.acknowledgedEventIds };
+  return { epoch, acknowledgedEventIds };
 }
 
 export async function resetAuthoritativeProgress(
@@ -275,7 +335,7 @@ export async function resetAuthoritativeProgress(
   const { data, error } = await supabase.rpc("reset_learning_progress", {
     expected_epoch: expectedEpoch,
   });
-  if (error) throw error;
+  if (error) throwProgressRemoteError(error);
 
   const result = data as { epoch?: unknown } | null;
   if (!result || typeof result.epoch !== "number") {

@@ -1,3 +1,4 @@
+import { featureFlags } from "../feature-flags";
 import type { Lang, RunResult } from "./types";
 import { runPython } from "./pyodide-runner";
 import { runSql } from "./sql-runner";
@@ -17,7 +18,19 @@ export function isLangSupported(lang: string): lang is Lang {
  * Dispatch code đến runner tương ứng.
  * Python/SQL async (load runtime), JS sync.
  */
+export const WORKER_EXECUTION_DISABLED_MESSAGE =
+  "Code execution is temporarily unavailable while the isolated worker is under maintenance. Please try again later.";
+
 export async function runCode(lang: Lang, code: string, options?: RunOptions): Promise<RunResult> {
+  if (!featureFlags.workerExecution) {
+    return {
+      stdout: "",
+      stderr: "",
+      error: WORKER_EXECUTION_DISABLED_MESSAGE,
+      errorCode: "execution-disabled",
+    };
+  }
+
   switch (lang) {
     case "python":
       return runPython(code, options);

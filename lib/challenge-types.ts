@@ -45,7 +45,7 @@ export type TestCase = {
   expected: string;
   /** Cách so sánh. */
   compare: CompareMode;
-  /** Test ẩn — LeetCode ẩn khi fail; MVP hiện hết để debug. */
+  /** Legacy flag for an additional client-side test; browser content remains inspectable. */
   hidden?: boolean;
 };
 

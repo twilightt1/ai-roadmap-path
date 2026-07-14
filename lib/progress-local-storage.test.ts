@@ -13,6 +13,7 @@ const PROJECT_FEATURES_KEY = "ai-roadmap:project-features:v1";
 const QUIZ_RESULTS_KEY = "ai-roadmap:quiz-results:v1";
 const CHALLENGE_RESULTS_KEY = "ai-roadmap:challenge-results:v1";
 const V2_STORAGE_KEY = "ai-roadmap:progress:v2";
+const V3_STORAGE_KEY = "ai-roadmap:progress:v3";
 
 function createLocalStorageMock() {
   const values = new Map<string, string>();
@@ -93,28 +94,73 @@ describe("progress local storage", () => {
     expect(state.startedAt).toBe("2026-01-01T00:00:00.000Z");
   });
 
-  it("migrates positive v1 completion values into explicit v2 item states", () => {
+  it("migrates v1 data into a V3 document", () => {
     storage.seed(COMPLETED_KEY, JSON.stringify(["phase-1/a"]));
     storage.seed(PROJECT_FEATURES_KEY, JSON.stringify(["project-1/0"]));
     storage.seed(STORAGE_KEY, "2026-01-03T00:00:00.000Z");
 
     const state = loadLocalProgressState();
+    const document = JSON.parse(storage.value(V3_STORAGE_KEY) ?? "{}");
 
-    expect(state.itemStates.get("lesson\u0000phase-1/a")).toEqual({
+    expect(state.itemStates.get("lesson\u0000phase-1/a")).toMatchObject({
       scope: "lesson",
       itemKey: "phase-1/a",
       completed: true,
       clientUpdatedAt: "2026-01-03T00:00:00.000Z",
-      mutationId: "legacy:lesson:phase-1/a",
     });
-    expect(state.itemStates.get("project_feature\u0000project-1/0")).toEqual({
+    expect(state.itemStates.get("project_feature\u0000project-1/0")).toMatchObject({
       scope: "project_feature",
       itemKey: "project-1/0",
       completed: true,
       clientUpdatedAt: "2026-01-03T00:00:00.000Z",
-      mutationId: "legacy:project_feature:project-1/0",
     });
-    expect(storage.value(V2_STORAGE_KEY)).not.toBeNull();
+    expect(document).toMatchObject({
+      schemaVersion: 3,
+      itemStates: expect.arrayContaining([
+        expect.objectContaining({ scope: "lesson", itemKey: "phase-1/a", completed: true }),
+        expect.objectContaining({ scope: "project_feature", itemKey: "project-1/0", completed: true }),
+      ]),
+    });
+    expect(storage.value(COMPLETED_KEY)).toBeNull();
+    expect(storage.value(V2_STORAGE_KEY)).toBeNull();
+  });
+
+  it("migrates a V2 document into V3", () => {
+    storage.seed(
+      V2_STORAGE_KEY,
+      JSON.stringify({
+        schemaVersion: 2,
+        syncEpoch: null,
+        pendingItemMutations: [],
+        pendingPracticeEvents: [],
+        itemStates: [
+          {
+            scope: "lesson",
+            itemKey: "phase-1/a",
+            completed: true,
+            clientUpdatedAt: "2026-01-03T00:00:00.000Z",
+            mutationId: "00000000-0000-4000-8000-000000000001",
+          },
+        ],
+        quizResults: {},
+        challengeResults: {},
+        startedAt: null,
+        lastVisit: "2026-01-03T00:00:00.000Z",
+      })
+    );
+
+    expect([...loadLocalProgressState().completed]).toEqual(["phase-1/a"]);
+    expect(JSON.parse(storage.value(V3_STORAGE_KEY) ?? "{}")).toMatchObject({ schemaVersion: 3 });
+    expect(storage.value(V2_STORAGE_KEY)).toBeNull();
+  });
+
+  it("falls back from corrupt V3 data to V2 without deleting the corrupt value", () => {
+    storage.seed(V3_STORAGE_KEY, "not-json");
+    storage.seed(V2_STORAGE_KEY, "not-json");
+
+    expect(loadLocalProgressState()).toEqual(createEmptyProgressState());
+    expect(storage.value(V3_STORAGE_KEY)).toBe("not-json");
+    expect(storage.value(V2_STORAGE_KEY)).toBe("not-json");
   });
 
   it("falls back to an empty state when stored JSON is corrupt", () => {
@@ -129,7 +175,7 @@ describe("progress local storage", () => {
     expect(loadLocalProgressState()).toEqual(createEmptyProgressState());
   });
 
-  it("persists writes to a versioned v2 document", () => {
+  it("persists writes to a versioned V3 document", () => {
     persistLocalProgressState({
       completed: new Set(["phase-1/a"]),
       projectFeatures: new Set(["project-1/0"]),
@@ -161,8 +207,8 @@ describe("progress local storage", () => {
       startedAt: "2026-01-01T00:00:00.000Z",
     });
 
-    expect(JSON.parse(storage.value(V2_STORAGE_KEY) ?? "{}")).toMatchObject({
-      schemaVersion: 2,
+    expect(JSON.parse(storage.value(V3_STORAGE_KEY) ?? "{}")).toMatchObject({
+      schemaVersion: 3,
       itemStates: [
         {
           scope: "lesson",

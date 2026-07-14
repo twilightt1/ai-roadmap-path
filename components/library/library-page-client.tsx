@@ -14,6 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { getErrorMessage } from "@/lib/error-message";
 import {
   buildBookmarkHref,
   buildNoteHref,
@@ -86,10 +87,6 @@ function formatTimestamp(value: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function previewText(value: string, maxLength = 180): string {
@@ -278,7 +275,7 @@ export function LibraryPageClient() {
       setData({ bookmarks, notes, snippets });
     } catch (error: unknown) {
       if (!isCurrentLoad(requestId, capturedUserId)) return;
-      setLoadError(errorMessage(error));
+      setLoadError(getErrorMessage(error));
     } finally {
       if (isCurrentLoad(requestId, capturedUserId)) setLoadingLibrary(false);
     }
@@ -331,7 +328,7 @@ export function LibraryPageClient() {
         }));
       } catch (error: unknown) {
         if (!isCurrentDelete()) return;
-        setInlineErrors((current) => ({ ...current, [itemKey]: errorMessage(error) }));
+        setInlineErrors((current) => ({ ...current, [itemKey]: getErrorMessage(error) }));
       } finally {
         if (isCurrentDelete()) setDeletingItemKey(null);
       }

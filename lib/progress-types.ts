@@ -51,13 +51,20 @@ export type ProgressItemState = {
   mutationId: string;
 };
 
+export type ProgressOutboxEntry = {
+  mutation: ProgressItemState;
+  attemptCount: number;
+  nextAttemptAt: string;
+  lastErrorCode: string | null;
+};
+
 export type ProgressSyncStatus = "local-only" | "syncing" | "synced" | "failed";
 
 export type StoreState = {
   completed: Set<string>;
   projectFeatures: Set<string>;
   itemStates: Map<string, ProgressItemState>;
-  pendingItemMutations: ProgressItemState[];
+  pendingItemMutations: ProgressOutboxEntry[];
   pendingPracticeEvents: import("./practice-events").PracticeEvent[];
   syncEpoch: number | null;
   quizResults: Map<string, QuizResult>;
