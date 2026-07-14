@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { getSmokeUser, signIn } from "./support/supabase-users";
 
 const challengePath = "/practice/python-fibonacci";
+const lessonPath = "/phase/phase-1-programming/python-fundamentals";
 const user = getSmokeUser();
 
 test.describe("practice and personal library", () => {
@@ -57,6 +58,64 @@ test.describe("practice and personal library", () => {
       await page.goto("/library");
       await expect(page.getByRole("heading", { name: "Thư viện cá nhân" })).toBeVisible();
       await expect(page.getByText("python-fibonacci")).toBeVisible();
+    });
+
+    test("persists and cleans up a lesson note and challenge snippet", async ({ page }) => {
+      test.slow();
+      if (!user) throw new Error("Smoke user is required");
+
+      const marker = `staging-library-${Date.now()}`;
+      const initialNote = `${marker}-note`;
+      const updatedNote = `${initialNote}-updated`;
+      const snippetTitle = `${marker}-snippet`;
+
+      await signIn(page, user);
+      await page.goto(lessonPath);
+
+      const noteDraft = page.getByRole("textbox", { name: "Nội dung ghi chú mới" });
+      await expect(noteDraft).toBeEnabled();
+      await noteDraft.fill(initialNote);
+      await page.getByRole("button", { name: "Thêm ghi chú", exact: true }).click();
+
+      let noteArticle = page.locator("article").filter({ hasText: initialNote });
+      await expect(noteArticle).toBeVisible();
+      await noteArticle.getByRole("button", { name: "Sửa", exact: true }).click();
+      await noteArticle.getByRole("textbox", { name: "Chỉnh sửa nội dung ghi chú" }).fill(updatedNote);
+      await noteArticle.getByRole("button", { name: "Lưu", exact: true }).click();
+      noteArticle = page.locator("article").filter({ hasText: updatedNote });
+      await expect(noteArticle).toBeVisible();
+
+      await page.goto("/library");
+      await page.getByRole("button", { name: /^Ghi chú/ }).click();
+      let notesRegion = page.getByRole("region", { name: "Ghi chú" });
+      await expect(notesRegion.locator("article").filter({ hasText: updatedNote })).toBeVisible();
+
+      await page.goto(lessonPath);
+      noteArticle = page.locator("article").filter({ hasText: updatedNote });
+      await expect(noteArticle).toBeVisible();
+      await noteArticle.getByRole("button", { name: "Xoá", exact: true }).click();
+      await expect(noteArticle).toHaveCount(0);
+
+      await page.goto("/library");
+      await page.getByRole("button", { name: /^Ghi chú/ }).click();
+      notesRegion = page.getByRole("region", { name: "Ghi chú" });
+      await expect(notesRegion.getByText(updatedNote, { exact: true })).toHaveCount(0);
+
+      await page.goto(challengePath);
+      await page.getByRole("button", { name: "Lưu snippet", exact: true }).click();
+      const snippetDialog = page.getByRole("dialog", { name: "Lưu code snippet" });
+      await expect(snippetDialog).toBeVisible();
+      await snippetDialog.getByRole("textbox", { name: "Tiêu đề" }).fill(snippetTitle);
+      await snippetDialog.getByRole("button", { name: "Lưu", exact: true }).click();
+      await expect(snippetDialog).toBeHidden();
+
+      await page.goto("/library");
+      await page.getByRole("button", { name: /^Snippets/ }).click();
+      const snippetsRegion = page.getByRole("region", { name: "Snippets" });
+      const snippetArticle = snippetsRegion.locator("article").filter({ hasText: snippetTitle });
+      await expect(snippetArticle).toBeVisible();
+      await snippetArticle.getByRole("button", { name: "Xóa", exact: true }).click();
+      await expect(snippetArticle).toHaveCount(0);
     });
   });
 });
