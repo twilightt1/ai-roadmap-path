@@ -35,7 +35,7 @@ export async function runCode(lang: Lang, code: string, options?: RunOptions): P
     case "python":
       return runPython(code, options);
     case "sql":
-      return runSql(code);
+      return runSql(code, options);
     case "javascript":
       return runJs(code, options);
   }
