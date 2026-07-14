@@ -1,5 +1,7 @@
 # P0 Final Verification Report
 
+> **Candidate-specific follow-up:** The populated technical staging and rollback record for `914bd03` is [`p0-p1-staging-verification-2026-07-15.md`](./p0-p1-staging-verification-2026-07-15.md). This file remains the reusable release template; its default `BLOCKED` rows do not replace that candidate record. A named human reviewer is still required for formal sign-off.
+
 > **Template status:** This file is **not evidence of a completed release** and makes no P0-ready claim until a named candidate SHA, approved environment, command outputs, reviewer-accessible evidence links, operator, and ISO date populate **every required row**. Do not replace missing evidence with `PASS`. **Default: P0 Not Ready — evidence pending.**
 
 ## Result vocabulary
