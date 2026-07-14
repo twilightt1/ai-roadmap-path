@@ -1,5 +1,7 @@
 # P1 Learning Loop Local Verification — 2026-07-14
 
+> **Staging follow-up:** [`p0-p1-staging-verification-2026-07-15.md`](./p0-p1-staging-verification-2026-07-15.md) records the successful P1 staging canary, full canary, and rollback/restore rehearsal for `914bd03`. Broad exposure still requires the named human content/moderated-usability review listed below.
+
 ## Decision
 
 **The P1 learning-loop vertical slice passes local implementation gates. It is not ready for release.**
