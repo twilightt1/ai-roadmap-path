@@ -8,6 +8,8 @@ Release still requires protected CI, an approved staging backup and additive mig
 
 An `approved` workflow state records one allow-listed person's manual review outcome. It is not automated verification, a security review, proof of originality, a grade, mastery, or certification.
 
+Current staging progress is tracked separately in [`p2-1-staging-verification-2026-07-16.md`](./p2-1-staging-verification-2026-07-16.md). That record must remain the source of truth for migration, proof, reviewer provisioning, deploy, canary, rollback, restore, and human sign-off gates.
+
 ## Verification context
 
 | Field | Value |
