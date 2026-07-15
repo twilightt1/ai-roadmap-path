@@ -2,13 +2,14 @@
 
 ## Decision
 
-**Pre-deploy staging gates are complete. P2.1 is ready for a controlled deployment of the immutable candidate; it is not approved for broad release.**
+**Controlled P2.1 deployment, dedicated canary, and full regression canary passed on the immutable candidate. Rollback/restore rehearsal and human review remain required before broad release.**
 
 - Candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` is merged into `main` and its post-merge CI passed.
 - The protected pre-P2.1 backup is present and its hashes were re-verified.
 - Staging migration history matches all seven local migrations, including the additive P2.1 migration.
 - The P2.1 RLS/RPC proof passed transactionally on staging and left zero fixture records.
 - One dedicated staging reviewer is allow-listed and both protected reviewer secrets are configured for the learner/reviewer canary.
+- Candidate `e054b2b` is live with P2.1 enabled; the dedicated reviewer journey and full staging regression suite passed.
 
 This is a sanitized operational record. It contains no user email, password, token, cookie, service-role key, learner URL, reflection, or reviewer identity.
 
@@ -33,6 +34,32 @@ This is a sanitized operational record. It contains no user email, password, tok
 | Post-merge checks on `main@e054b2b` | PASS | [run 29435828015](https://github.com/twilightt1/ai-roadmap-path/actions/runs/29435828015) |
 | Fresh `pnpm check` from `e054b2b` plus this documentation-only branch | PASS | 118 lessons, 118 quizzes, 35 challenge files, 2 ladders; 43 test files and 172 tests; 243 routes built; 234 Pagefind pages indexed |
 | Fresh `pnpm audit:prod` | PASS at high threshold | One tracked moderate advisory; zero high/critical advisories |
+
+## Deployment and canary evidence
+
+The operator deployed exact candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` with LWW progress, P2 evidence, and P2.1 review enabled.
+
+| Gate | Result | Evidence |
+|---|---|---|
+| Live application health | PASS | `/` returned `200` |
+| Reviewer route enabled | PASS | `/review/projects` changed from flag-off `404` to `200` |
+| Anonymous reviewer-route privacy probe | PASS | `noindex, nofollow`; sign-in CTA only; no queue/items, reviewer data request, or console error |
+| Project route regression probe | PASS | `/projects/p1-easy` returned `200` with the expected project heading |
+| Dedicated learner/reviewer canary | PASS — `1 passed (22.1s)` | [run 29440161448](https://github.com/twilightt1/ai-roadmap-path/actions/runs/29440161448) |
+| Full all-flags regression canary | PASS — `16 passed (1.7m)` | [run 29440310652](https://github.com/twilightt1/ai-roadmap-path/actions/runs/29440310652) |
+
+Both workflow runs checked out `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3`. The public HTTP probe validates the deployed runtime but does not independently expose or infer a Git SHA.
+
+The dedicated canary created the immutable state that must survive the rollback rehearsal:
+
+| Pre-rollback class | Rows |
+|---|---:|
+| Reviewer memberships | 1 |
+| Submission snapshots | 1 |
+| Workflow rows | 1 |
+| Submission events | 3 |
+
+Migration history still matched all seven local/remote versions after both canaries.
 
 ## Backup and migration evidence
 
@@ -103,7 +130,7 @@ The first provisioning attempt reached user/membership creation but failed while
 
 ## Next operator action
 
-Deploy exact candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` with `NEXT_PUBLIC_P2_REVIEW_WORKFLOW=true` while keeping LWW progress and P2 evidence enabled. Do not dispatch `p2-review` until the deployment is healthy and `/review/projects` no longer returns the flag-off 404.
+Redeploy exact candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` with only `NEXT_PUBLIC_P2_REVIEW_WORKFLOW=false`. Keep LWW progress, P2 evidence, and every prior capability enabled. Do not roll back the P2.1 migration, delete the reviewer, clear browser state, or remove submission history.
 
 ## Remaining rollout gates
 
@@ -116,9 +143,9 @@ Deploy exact candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` with `NEXT_PUB
 | Zero proof fixtures after rollback | PASS |
 | Dedicated reviewer provisioned | PASS — one generated Auth user and one allow-list membership |
 | Protected reviewer secrets configured | PASS — both reviewer secret names present |
-| Deploy exact candidate with P2.1 enabled | PENDING |
-| Dedicated `p2-review` canary | PENDING |
-| Full regression canary | PENDING |
+| Deploy exact candidate with P2.1 enabled | PASS |
+| Dedicated `p2-review` canary | PASS — 1 passed |
+| Full regression canary | PASS — 16 passed |
 | P2.1-only rollback and `p2-review-rollback` canary | PENDING |
 | Restore P2.1 and rerun dedicated canary | PENDING |
 | Snapshot/history and seven-migration preservation evidence | PENDING |
