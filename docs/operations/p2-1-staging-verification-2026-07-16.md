@@ -2,13 +2,13 @@
 
 ## Decision
 
-**Pre-deploy staging gates are partially complete. P2.1 must remain disabled until a dedicated reviewer is provisioned and the protected reviewer credentials are configured.**
+**Pre-deploy staging gates are complete. P2.1 is ready for a controlled deployment of the immutable candidate; it is not approved for broad release.**
 
 - Candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` is merged into `main` and its post-merge CI passed.
 - The protected pre-P2.1 backup is present and its hashes were re-verified.
 - Staging migration history matches all seven local migrations, including the additive P2.1 migration.
 - The P2.1 RLS/RPC proof passed transactionally on staging and left zero fixture records.
-- Staging currently has zero reviewer memberships, so the P2.1 flag must not be enabled yet and the learner/reviewer canary cannot run.
+- One dedicated staging reviewer is allow-listed and both protected reviewer secrets are configured for the learner/reviewer canary.
 
 This is a sanitized operational record. It contains no user email, password, token, cookie, service-role key, learner URL, reflection, or reviewer identity.
 
@@ -86,16 +86,24 @@ The post-proof cleanup query returned:
 
 No fixture cleanup mutation was necessary because the proof transaction rolled back successfully.
 
-## Current blocker
+## Reviewer provisioning evidence
 
-A staging count query returned `reviewer_memberships=0`, `submissions=0`, and `submission_events=0`.
+A dedicated canary reviewer was created through the Supabase Admin API using a freshly retrieved service-role key. The returned Auth UUID was inserted into `public.project_reviewer_memberships` through the trusted service-role REST path. The generated password was never printed or written to the repository.
 
-Before enabling P2.1:
+The GitHub `staging` environment now contains all four expected protected secret names:
 
-1. Create or select a dedicated staging reviewer Auth user.
-2. Add that user's UUID to `public.project_reviewer_memberships` through a trusted service-role or SQL-editor operation.
-3. Store `PLAYWRIGHT_REVIEWER_USER_EMAIL` and `PLAYWRIGHT_REVIEWER_USER_PASSWORD` as protected secrets in the GitHub `staging` environment.
-4. Confirm only the membership count, never the reviewer UUID/email/password, in the sanitized release record.
+- `PLAYWRIGHT_SMOKE_USER_EMAIL`
+- `PLAYWRIGHT_SMOKE_USER_PASSWORD`
+- `PLAYWRIGHT_REVIEWER_USER_EMAIL`
+- `PLAYWRIGHT_REVIEWER_USER_PASSWORD`
+
+A sanitized follow-up query returned `generated_reviewer_users=1` and `reviewer_memberships=1`. No reviewer UUID, email, password, token, or service-role key is retained in this record.
+
+The first provisioning attempt reached user/membership creation but failed while formatting its sanitized status output. Its compensation path deleted the generated Auth user and both newly written reviewer secrets; a follow-up query proved zero generated users and zero memberships before the successful retry. This rollback evidence is retained to show that partial provisioning does not leave an orphaned reviewer.
+
+## Next operator action
+
+Deploy exact candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` with `NEXT_PUBLIC_P2_REVIEW_WORKFLOW=true` while keeping LWW progress and P2 evidence enabled. Do not dispatch `p2-review` until the deployment is healthy and `/review/projects` no longer returns the flag-off 404.
 
 ## Remaining rollout gates
 
@@ -106,8 +114,8 @@ Before enabling P2.1:
 | Seven migrations match local/remote | PASS |
 | Transactional P2.1 RLS/RPC proof | PASS |
 | Zero proof fixtures after rollback | PASS |
-| Dedicated reviewer provisioned | BLOCKED — zero memberships |
-| Protected reviewer secrets configured | PENDING |
+| Dedicated reviewer provisioned | PASS — one generated Auth user and one allow-list membership |
+| Protected reviewer secrets configured | PASS — both reviewer secret names present |
 | Deploy exact candidate with P2.1 enabled | PENDING |
 | Dedicated `p2-review` canary | PENDING |
 | Full regression canary | PENDING |
