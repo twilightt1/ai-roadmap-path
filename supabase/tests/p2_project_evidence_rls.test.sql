@@ -1,6 +1,6 @@
 -- P2 project evidence ownership, validation, and field-level LWW assertions.
-
-\set ON_ERROR_STOP on
+-- The transaction is compatible with both local psql and `supabase db query
+-- --linked`, so staging proof never retains its fixture users or evidence rows.
 
 begin;
 
@@ -193,5 +193,3 @@ select pg_temp.assert_true(
 );
 
 rollback;
-
-\echo 'PASS P2 project evidence RLS and merge tests'
