@@ -13,6 +13,8 @@ on:
           - lww
           - ladder
           - p1
+          - p2
+          - p2-rollback
           - full
 
 permissions:
@@ -79,6 +81,13 @@ jobs:
               ;;
             p1)
               pnpm exec playwright test e2e/learning-loop.spec.ts --project=chromium
+              ;;
+            p2)
+              pnpm exec playwright test e2e/project-evidence.spec.ts --project=chromium
+              ;;
+            p2-rollback)
+              PLAYWRIGHT_EXPECT_P2_DISABLED=true pnpm exec playwright test \
+                e2e/project-evidence-disabled.spec.ts --project=chromium
               ;;
             full)
               PLAYWRIGHT_RUN_EXTERNAL_RUNTIME=true pnpm test:e2e:smoke

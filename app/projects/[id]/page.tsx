@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Reveal } from "@/components/shared/reveal";
 import { FeatureChecklist } from "@/components/roadmap/feature-checklist";
 import { BookmarkButton } from "@/components/library/bookmark-button";
+import { ProjectEvidencePanel } from "@/components/project-evidence/project-evidence-panel";
+import { featureFlags } from "@/lib/feature-flags";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -103,6 +105,12 @@ export default async function ProjectDetailPage({ params }: Props) {
           <FeatureChecklist projectId={project.id} features={project.features} />
         </div>
       </Reveal>
+
+      {featureFlags.projectEvidence && (
+        <Reveal className="mt-6">
+          <ProjectEvidencePanel projectId={project.id} features={project.features} />
+        </Reveal>
+      )}
 
       {/* Link to parent phase */}
       <div className="mt-6">
