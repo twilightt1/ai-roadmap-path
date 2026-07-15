@@ -15,6 +15,12 @@ export function getSmokeUser(): SmokeUser | null {
   return email && password ? { email, password } : null;
 }
 
+export function getReviewerUser(): SmokeUser | null {
+  const email = process.env.PLAYWRIGHT_REVIEWER_USER_EMAIL;
+  const password = process.env.PLAYWRIGHT_REVIEWER_USER_PASSWORD;
+  return email && password ? { email, password } : null;
+}
+
 export async function signIn(page: Page, user: SmokeUser): Promise<void> {
   await page.goto("/login");
   await page.getByLabel("Email").fill(user.email);

@@ -73,6 +73,42 @@ async function adminRequest(apiUrl, serviceRoleKey, path, init) {
   });
 }
 
+async function createTestUser(apiUrl, serviceRoleKey, prefix) {
+  const email = `${prefix}-${randomUUID()}@example.test`;
+  const password = `Aa9!${randomUUID()}`;
+  const response = await adminRequest(apiUrl, serviceRoleKey, "/auth/v1/admin/users", {
+    method: "POST",
+    body: JSON.stringify({ email, password, email_confirm: true }),
+  });
+  if (!response.ok) {
+    throw new Error(`Unable to create local ${prefix} user (HTTP ${response.status}).`);
+  }
+  const user = await response.json();
+  if (!user?.id) throw new Error(`Local Supabase did not return a ${prefix} user id.`);
+  return { id: user.id, email, password };
+}
+
+async function deleteTestUser(apiUrl, serviceRoleKey, user) {
+  if (!user?.id) return;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await adminRequest(
+        apiUrl,
+        serviceRoleKey,
+        `/auth/v1/admin/users/${encodeURIComponent(user.id)}`,
+        { method: "DELETE" }
+      );
+      if (response.ok || response.status === 404) return;
+      if (attempt === 3) {
+        console.error(`Local test-user cleanup failed (HTTP ${response.status}).`);
+      }
+    } catch {
+      if (attempt === 3) console.error("Local test-user cleanup failed after retry.");
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, attempt * 250));
+  }
+}
+
 async function main() {
   const status = parseEnv(supabaseStatus());
   const required = ["API_URL", "ANON_KEY", "SERVICE_ROLE_KEY"];
@@ -82,20 +118,26 @@ async function main() {
   }
 
   const apiUrl = requireLocalUrl(status.API_URL);
-  const email = `local-smoke-${randomUUID()}@example.test`;
-  const password = `Aa9!${randomUUID()}`;
-  const createResponse = await adminRequest(apiUrl, status.SERVICE_ROLE_KEY, "/auth/v1/admin/users", {
-    method: "POST",
-    body: JSON.stringify({ email, password, email_confirm: true }),
-  });
-  if (!createResponse.ok) {
-    throw new Error(`Unable to create local smoke user (HTTP ${createResponse.status}).`);
-  }
-
-  const user = await createResponse.json();
-  if (!user?.id) throw new Error("Local Supabase did not return a smoke-user id.");
+  let learner;
+  let reviewer;
 
   try {
+    learner = await createTestUser(apiUrl, status.SERVICE_ROLE_KEY, "local-smoke");
+    reviewer = await createTestUser(apiUrl, status.SERVICE_ROLE_KEY, "local-reviewer");
+    const membershipResponse = await adminRequest(
+      apiUrl,
+      status.SERVICE_ROLE_KEY,
+      "/rest/v1/project_reviewer_memberships",
+      {
+        method: "POST",
+        headers: { prefer: "return=minimal" },
+        body: JSON.stringify({ user_id: reviewer.id }),
+      }
+    );
+    if (!membershipResponse.ok) {
+      throw new Error(`Unable to provision local reviewer membership (HTTP ${membershipResponse.status}).`);
+    }
+
     const playwrightCli = require.resolve("@playwright/test/cli");
     const requestedTests = process.argv.slice(2);
     execFileSync(process.execPath, [playwrightCli, "test", ...requestedTests, "--project=chromium"], {
@@ -105,21 +147,17 @@ async function main() {
         ...process.env,
         NEXT_PUBLIC_SUPABASE_URL: apiUrl,
         NEXT_PUBLIC_SUPABASE_ANON_KEY: status.ANON_KEY,
-        PLAYWRIGHT_SMOKE_USER_EMAIL: email,
-        PLAYWRIGHT_SMOKE_USER_PASSWORD: password,
+        PLAYWRIGHT_SMOKE_USER_EMAIL: learner.email,
+        PLAYWRIGHT_SMOKE_USER_PASSWORD: learner.password,
+        PLAYWRIGHT_REVIEWER_USER_EMAIL: reviewer.email,
+        PLAYWRIGHT_REVIEWER_USER_PASSWORD: reviewer.password,
         PLAYWRIGHT_RUN_EXTERNAL_RUNTIME: "true",
+        PLAYWRIGHT_RUN_P2_REVIEW: "true",
       },
     });
   } finally {
-    const deleteResponse = await adminRequest(
-      apiUrl,
-      status.SERVICE_ROLE_KEY,
-      `/auth/v1/admin/users/${encodeURIComponent(user.id)}`,
-      { method: "DELETE" }
-    );
-    if (!deleteResponse.ok) {
-      console.error(`Local smoke-user cleanup failed (HTTP ${deleteResponse.status}).`);
-    }
+    await deleteTestUser(apiUrl, status.SERVICE_ROLE_KEY, reviewer);
+    await deleteTestUser(apiUrl, status.SERVICE_ROLE_KEY, learner);
   }
 }
 

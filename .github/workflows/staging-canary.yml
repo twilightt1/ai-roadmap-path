@@ -15,6 +15,8 @@ on:
           - p1
           - p2
           - p2-rollback
+          - p2-review
+          - p2-review-rollback
           - full
 
 permissions:
@@ -36,6 +38,9 @@ jobs:
       PLAYWRIGHT_BASE_URL: ${{ vars.PLAYWRIGHT_BASE_URL }}
       PLAYWRIGHT_SMOKE_USER_EMAIL: ${{ secrets.PLAYWRIGHT_SMOKE_USER_EMAIL }}
       PLAYWRIGHT_SMOKE_USER_PASSWORD: ${{ secrets.PLAYWRIGHT_SMOKE_USER_PASSWORD }}
+      PLAYWRIGHT_REVIEWER_USER_EMAIL: ${{ secrets.PLAYWRIGHT_REVIEWER_USER_EMAIL }}
+      PLAYWRIGHT_REVIEWER_USER_PASSWORD: ${{ secrets.PLAYWRIGHT_REVIEWER_USER_PASSWORD }}
+      CANARY_SUITE: ${{ inputs.suite }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,6 +60,7 @@ jobs:
       - name: Validate protected staging inputs
         run: >-
           node -e "const required=['PLAYWRIGHT_BASE_URL','PLAYWRIGHT_SMOKE_USER_EMAIL','PLAYWRIGHT_SMOKE_USER_PASSWORD'];
+          if(process.env.CANARY_SUITE==='p2-review')required.push('PLAYWRIGHT_REVIEWER_USER_EMAIL','PLAYWRIGHT_REVIEWER_USER_PASSWORD');
           const missing=required.filter((name)=>!process.env[name]?.trim());
           if(missing.length){console.error('Missing staging inputs: '+missing.join(', '));process.exit(1)}"
 
@@ -88,6 +94,14 @@ jobs:
             p2-rollback)
               PLAYWRIGHT_EXPECT_P2_DISABLED=true pnpm exec playwright test \
                 e2e/project-evidence-disabled.spec.ts --project=chromium
+              ;;
+            p2-review)
+              PLAYWRIGHT_RUN_P2_REVIEW=true pnpm exec playwright test \
+                e2e/project-review.spec.ts --project=chromium
+              ;;
+            p2-review-rollback)
+              PLAYWRIGHT_EXPECT_P2_REVIEW_DISABLED=true pnpm exec playwright test \
+                e2e/project-review-disabled.spec.ts --project=chromium
               ;;
             full)
               PLAYWRIGHT_RUN_EXTERNAL_RUNTIME=true pnpm test:e2e:smoke
