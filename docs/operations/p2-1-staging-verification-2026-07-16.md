@@ -2,7 +2,7 @@
 
 ## Decision
 
-**Controlled P2.1 deployment, dedicated canary, and full regression canary passed on the immutable candidate. Rollback/restore rehearsal and human review remain required before broad release.**
+**Controlled P2.1 deployment, dedicated/full canaries, and the P2.1-only rollback rehearsal passed on the immutable candidate. Restore verification and human review remain required before broad release.**
 
 - Candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` is merged into `main` and its post-merge CI passed.
 - The protected pre-P2.1 backup is present and its hashes were re-verified.
@@ -60,6 +60,24 @@ The dedicated canary created the immutable state that must survive the rollback 
 | Submission events | 3 |
 
 Migration history still matched all seven local/remote versions after both canaries.
+
+## P2.1-only rollback evidence
+
+The operator redeployed the same candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` with only `NEXT_PUBLIC_P2_REVIEW_WORKFLOW=false`. LWW progress, P2 evidence, and prior capabilities remained enabled.
+
+| Rollback gate | Result | Evidence |
+|---|---|---|
+| Reviewer route hidden | PASS | `/review/projects` returned `404` |
+| Existing project surface retained | PASS | `/projects/p1-easy` returned `200` |
+| Application health retained | PASS | `/` returned `200` |
+| Dedicated flag-off canary | PASS — `1 passed (2.8s)` | [run 29441025551](https://github.com/twilightt1/ai-roadmap-path/actions/runs/29441025551) |
+| Reviewer membership preserved | PASS | 1 before rollback; 1 during rollback |
+| Submission snapshot preserved | PASS | 1 before rollback; 1 during rollback |
+| Workflow row preserved | PASS | 1 before rollback; 1 during rollback |
+| Submission events preserved | PASS | 3 before rollback; 3 during rollback |
+| Migration history preserved | PASS | All seven local/remote migration versions still match |
+
+No migration rollback, reviewer deletion, snapshot/event deletion, or browser-storage clearing was performed.
 
 ## Backup and migration evidence
 
@@ -130,7 +148,7 @@ The first provisioning attempt reached user/membership creation but failed while
 
 ## Next operator action
 
-Redeploy exact candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` with only `NEXT_PUBLIC_P2_REVIEW_WORKFLOW=false`. Keep LWW progress, P2 evidence, and every prior capability enabled. Do not roll back the P2.1 migration, delete the reviewer, clear browser state, or remove submission history.
+Restore exact candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` with `NEXT_PUBLIC_P2_REVIEW_WORKFLOW=true`. Keep LWW progress, P2 evidence, and every prior capability enabled. After the restored deployment is healthy, rerun the dedicated `p2-review` canary and recheck the preserved database counts.
 
 ## Remaining rollout gates
 
@@ -146,9 +164,9 @@ Redeploy exact candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` with only `N
 | Deploy exact candidate with P2.1 enabled | PASS |
 | Dedicated `p2-review` canary | PASS — 1 passed |
 | Full regression canary | PASS — 16 passed |
-| P2.1-only rollback and `p2-review-rollback` canary | PENDING |
+| P2.1-only rollback and `p2-review-rollback` canary | PASS — 1 passed; data and schema preserved |
 | Restore P2.1 and rerun dedicated canary | PENDING |
-| Snapshot/history and seven-migration preservation evidence | PENDING |
+| Snapshot/history and seven-migration preservation evidence | PASS in rollback state; restore recheck pending |
 | Named release and reviewer-workflow usability sign-off | PENDING |
 | Existing P2 rubric/content/moderated-usability sign-off | PENDING |
 
