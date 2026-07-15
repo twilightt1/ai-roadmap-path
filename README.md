@@ -1,6 +1,6 @@
 # AI Engineer Roadmap 2026 🧠
 
-Website học AI Engineer theo lộ trình đầy đủ — từ Zero đến Production-Grade AI Systems. Hiển thị toàn bộ **17 phases + Capstone, 51 dự án thực hành, 3 skill tiers, 4 learning paths** và tài liệu tham khảo, dưới dạng timeline interactive dark modern.
+Website học AI Engineer theo lộ trình đầy đủ — từ Zero đến Production-Grade AI Systems. Hiển thị toàn bộ **17 phases + Capstone, 52 dự án thực hành, 3 skill tiers, 4 learning paths** và tài liệu tham khảo, dưới dạng timeline interactive dark modern.
 
 Nguồn nội dung: [`AI_ENGINEER_ROADMAP.md`](./AI_ENGINEER_ROADMAP.md).
 
@@ -8,7 +8,7 @@ Nguồn nội dung: [`AI_ENGINEER_ROADMAP.md`](./AI_ENGINEER_ROADMAP.md).
 
 - **Timeline dạng path** (như roadmap.dev): mở rộng từng phase xem chủ đề + dự án ngay tại chỗ.
 - **Trang chi tiết phase** riêng biệt (`/phase/[slug]`) với accordion chủ đề đầy đủ.
-- **Trang dự án** (`/projects`): 51 project nhóm theo độ khó 🟢 / 🟡 / 🔴.
+- **Trang dự án** (`/projects`): 52 project nhóm theo độ khó 🟢 / 🟡 / 🔴.
 - **Trang kỹ năng** (`/skills`): 3 tier theo nhu cầu thị trường 2026.
 - **Trang con đường** (`/paths`): 4 lộ trình A (Product) / B (Research) / C (Architect) / D (Full stack).
 - **Trang tài liệu** (`/resources`): bảng resources phân nhóm.
@@ -61,7 +61,7 @@ pnpm test:e2e:local
 pnpm exec supabase stop
 ```
 
-Yêu cầu: Node 20.9+ (đã test trên Node 24), pnpm 10+.
+Yêu cầu: Node 22.13+ (đã test trên Node 24), pnpm 11.13.0 (được pin trong `packageManager`).
 
 ## 🧪 Challenge execution trust boundary
 
@@ -206,7 +206,7 @@ app/                         # App Router pages
 ├── practice/[id]/page.tsx   # Quiz/challenge practice detail
 ├── roadmap/page.tsx         # Timeline chính
 ├── phase/[slug]/page.tsx    # Chi tiết từng phase (SSG)
-├── projects/page.tsx        # 51 projects theo độ khó
+├── projects/page.tsx        # 52 projects theo độ khó
 ├── skills/page.tsx          # 3 skill tiers
 ├── paths/page.tsx           # 4 learning paths
 ├── resources/page.tsx       # Bảng resources

@@ -20,6 +20,7 @@ import { useCurrentUser } from "@/components/library/use-current-user";
 import {
   MAX_PROJECT_EVIDENCE_REFLECTION_LENGTH,
   MIN_PROJECT_EVIDENCE_REFLECTION_LENGTH,
+  countProjectEvidenceReflectionCharacters,
   deriveProjectEvidenceRubric,
   isSafeProjectEvidenceUrl,
 } from "@/lib/project-evidence";
@@ -123,7 +124,7 @@ function ReflectionField({ savedValue, onSave }: { savedValue: string; onSave(va
         aria-describedby="project-evidence-reflection-description project-evidence-reflection-count"
       />
       <p id="project-evidence-reflection-count" className="text-right text-[10px] font-mono text-muted-foreground/70">
-        {value.trim().length}/{MIN_PROJECT_EVIDENCE_REFLECTION_LENGTH} tối thiểu · {value.length}/{MAX_PROJECT_EVIDENCE_REFLECTION_LENGTH}
+        {countProjectEvidenceReflectionCharacters(value)}/{MIN_PROJECT_EVIDENCE_REFLECTION_LENGTH} ký tự nội dung tối thiểu · {value.length}/{MAX_PROJECT_EVIDENCE_REFLECTION_LENGTH}
       </p>
     </div>
   );

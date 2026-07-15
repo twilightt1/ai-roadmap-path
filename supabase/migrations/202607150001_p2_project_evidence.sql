@@ -3,8 +3,7 @@
 create table if not exists public.project_evidence (
   user_id uuid not null references auth.users(id) on delete cascade,
   project_id text not null check (
-    char_length(project_id) between 1 and 80
-    and project_id ~ '^[a-z0-9][a-z0-9-]*$'
+    project_id ~ '^(p([1-9]|1[0-7])-(easy|medium|hard)|capstone-main)$'
   ),
   repository_url text not null default '' check (
     char_length(repository_url) <= 500
@@ -12,16 +11,19 @@ create table if not exists public.project_evidence (
     and (repository_url = '' or repository_url ~ '^https://[^/?#[:space:]@]+([/?#]|$)')
     and repository_url !~ '^https://[^/]*@'
   ),
-  repository_url_updated_at timestamptz not null default '1970-01-01T00:00:00Z',
+  repository_url_updated_at timestamptz not null default '1970-01-01T00:00:00Z'
+    check (isfinite(repository_url_updated_at)),
   demo_url text not null default '' check (
     char_length(demo_url) <= 500
     and demo_url !~ '[[:space:]]'
     and (demo_url = '' or demo_url ~ '^https://[^/?#[:space:]@]+([/?#]|$)')
     and demo_url !~ '^https://[^/]*@'
   ),
-  demo_url_updated_at timestamptz not null default '1970-01-01T00:00:00Z',
+  demo_url_updated_at timestamptz not null default '1970-01-01T00:00:00Z'
+    check (isfinite(demo_url_updated_at)),
   reflection text not null default '' check (char_length(reflection) <= 2000),
-  reflection_updated_at timestamptz not null default '1970-01-01T00:00:00Z',
+  reflection_updated_at timestamptz not null default '1970-01-01T00:00:00Z'
+    check (isfinite(reflection_updated_at)),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   primary key (user_id, project_id)
@@ -61,8 +63,7 @@ begin
     raise exception 'Authentication required';
   end if;
   if project_id_input is null
-    or char_length(project_id_input) not between 1 and 80
-    or project_id_input !~ '^[a-z0-9][a-z0-9-]*$'
+    or project_id_input !~ '^(p([1-9]|1[0-7])-(easy|medium|hard)|capstone-main)$'
   then
     raise exception 'invalid project evidence project id';
   end if;
@@ -94,6 +95,9 @@ begin
   if repository_url_updated_at_input is null
     or demo_url_updated_at_input is null
     or reflection_updated_at_input is null
+    or not isfinite(repository_url_updated_at_input)
+    or not isfinite(demo_url_updated_at_input)
+    or not isfinite(reflection_updated_at_input)
     or repository_url_updated_at_input > now() + interval '24 hours'
     or demo_url_updated_at_input > now() + interval '24 hours'
     or reflection_updated_at_input > now() + interval '24 hours'

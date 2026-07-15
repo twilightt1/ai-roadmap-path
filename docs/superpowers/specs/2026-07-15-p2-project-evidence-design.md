@@ -15,6 +15,7 @@ This slice remains deterministic and local-first. It does not grade the learner,
 - A deterministic rubric combining the existing project feature checklist with repository and reflection evidence.
 - An optional demo link that improves reviewability but does not block manual-review readiness.
 - Bounded HTTPS repository and demo URLs.
+- Evidence rows are limited to the 52 project IDs in the static roadmap catalog.
 - A bounded private reflection covering decisions, obstacles, or trade-offs.
 - Local-first anonymous persistence and user-scoped local persistence.
 - Field-level LWW merge into owner-scoped Supabase rows through an authenticated RPC.
@@ -65,6 +66,7 @@ A demo URL is a fourth, optional signal. The UI reports completed mandatory crit
 - Flag on: project pages expose the private evidence panel after the existing checklist.
 - Apply `202607150001_p2_project_evidence.sql` and pass owner/RLS/RPC checks before enabling the flag for authenticated learners.
 - Run the dedicated `p2` staging canary, then the `full` canary, with zero authenticated skips.
+- During rollback, run `p2-rollback` to prove the evidence panel is absent while the feature checklist remains usable.
 - Rollback disables only `NEXT_PUBLIC_P2_PROJECT_EVIDENCE`; the additive table remains in place and local/remote evidence must not be cleared.
 
 ## Acceptance criteria

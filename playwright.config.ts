@@ -5,6 +5,9 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: process.env.PLAYWRIGHT_EXPECT_P2_DISABLED === "true"
+    ? undefined
+    : "**/project-evidence-disabled.spec.ts",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
@@ -31,7 +34,8 @@ export default defineConfig({
           NEXT_PUBLIC_P0_LWW_PROGRESS: "true",
           NEXT_PUBLIC_P0_PRACTICE_LADDER: "true",
           NEXT_PUBLIC_P1_LEARNING_LOOP: "true",
-          NEXT_PUBLIC_P2_PROJECT_EVIDENCE: "true",
+          NEXT_PUBLIC_P2_PROJECT_EVIDENCE:
+            process.env.PLAYWRIGHT_EXPECT_P2_DISABLED === "true" ? "false" : "true",
         },
       },
 });

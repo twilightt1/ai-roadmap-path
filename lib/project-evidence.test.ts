@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_PROJECT_EVIDENCE_REFLECTION_LENGTH,
   MIN_PROJECT_EVIDENCE_REFLECTION_LENGTH,
+  countProjectEvidenceReflectionCharacters,
   createDefaultProjectEvidence,
   deriveProjectEvidenceRubric,
   mergeProjectEvidence,
@@ -48,6 +49,9 @@ describe("project evidence", () => {
         value: "x".repeat(MAX_PROJECT_EVIDENCE_REFLECTION_LENGTH + 1),
       },
     })).toBeNull();
+    expect(() => createDefaultProjectEvidence("unbounded-project-id")).toThrow(
+      "Invalid project evidence project id"
+    );
   });
 
   it("merges fields independently so concurrent device edits are preserved", () => {
@@ -127,5 +131,27 @@ describe("project evidence", () => {
       satisfied: false,
     });
     expect(incomplete.readyForManualReview).toBe(false);
+  });
+
+  it("counts only non-whitespace reflection characters for readiness", () => {
+    const sparseReflection = `a${" ".repeat(MIN_PROJECT_EVIDENCE_REFLECTION_LENGTH)}b`;
+    const evidence = updateProjectEvidenceField(
+      updateProjectEvidenceField(
+        createDefaultProjectEvidence(projectId),
+        "repositoryUrl",
+        "https://github.com/learner/project",
+        "2026-07-15T10:00:00.000Z"
+      ),
+      "reflection",
+      sparseReflection,
+      "2026-07-15T11:00:00.000Z"
+    );
+
+    expect(countProjectEvidenceReflectionCharacters(sparseReflection)).toBe(2);
+    expect(deriveProjectEvidenceRubric({
+      evidence,
+      completedFeatures: 3,
+      totalFeatures: 3,
+    }).readyForManualReview).toBe(false);
   });
 });

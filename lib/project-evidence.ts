@@ -5,7 +5,10 @@ export const MIN_PROJECT_EVIDENCE_REFLECTION_LENGTH = 80;
 export const MAX_PROJECT_EVIDENCE_REFLECTION_LENGTH = 2_000;
 
 const EMPTY_TIMESTAMP = "1970-01-01T00:00:00.000Z";
-const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,79}$/;
+// Keep the persistence contract bounded to the static catalog: three projects
+// for phases 1-17 plus the capstone. Update the database constraint together
+// with this pattern when the catalog gains another project.
+const PROJECT_ID_PATTERN = /^(?:p(?:[1-9]|1[0-7])-(?:easy|medium|hard)|capstone-main)$/;
 
 export type ProjectEvidenceFieldName = "repositoryUrl" | "demoUrl" | "reflection";
 
@@ -61,6 +64,10 @@ export function isSafeProjectEvidenceUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function countProjectEvidenceReflectionCharacters(value: string): number {
+  return value.match(/\S/gu)?.length ?? 0;
 }
 
 function parseField(value: unknown, kind: ProjectEvidenceFieldName): ProjectEvidenceField | null {
@@ -183,7 +190,9 @@ export function deriveProjectEvidenceRubric({
       label: "Tự đánh giá",
       description: `Nêu quyết định, trở ngại hoặc trade-off trong ít nhất ${MIN_PROJECT_EVIDENCE_REFLECTION_LENGTH} ký tự.`,
       required: true,
-      satisfied: evidence.reflection.value.trim().length >= MIN_PROJECT_EVIDENCE_REFLECTION_LENGTH,
+      satisfied:
+        countProjectEvidenceReflectionCharacters(evidence.reflection.value) >=
+        MIN_PROJECT_EVIDENCE_REFLECTION_LENGTH,
     },
     {
       id: "demo",

@@ -143,6 +143,46 @@ exception
     end if;
 end;
 $$;
+
+do $$
+begin
+  perform public.merge_project_evidence(
+    'unbounded-project-id',
+    'https://github.com/learner/project',
+    '2026-07-15T12:00:00Z'::timestamptz,
+    '',
+    '2026-07-15T12:00:00Z'::timestamptz,
+    'Unknown project attempt',
+    '2026-07-15T12:00:00Z'::timestamptz
+  );
+  raise exception 'FAIL: project id outside the static catalog was accepted';
+exception
+  when others then
+    if sqlerrm = 'FAIL: project id outside the static catalog was accepted' then
+      raise;
+    end if;
+end;
+$$;
+
+do $$
+begin
+  perform public.merge_project_evidence(
+    'p1-easy',
+    'https://github.com/learner/project',
+    '-infinity'::timestamptz,
+    '',
+    '2026-07-15T12:00:00Z'::timestamptz,
+    'Non-finite timestamp attempt',
+    '2026-07-15T12:00:00Z'::timestamptz
+  );
+  raise exception 'FAIL: non-finite project evidence timestamp was accepted';
+exception
+  when others then
+    if sqlerrm = 'FAIL: non-finite project evidence timestamp was accepted' then
+      raise;
+    end if;
+end;
+$$;
 reset role;
 
 select pg_temp.assert_true(
