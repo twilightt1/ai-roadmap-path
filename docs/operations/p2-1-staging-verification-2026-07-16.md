@@ -2,7 +2,7 @@
 
 ## Decision
 
-**Controlled P2.1 deployment, dedicated/full canaries, and the P2.1-only rollback rehearsal passed on the immutable candidate. Restore verification and human review remain required before broad release.**
+**Technical staging rollout: PASS. Controlled deployment, dedicated/full canaries, P2.1-only rollback, and restored dedicated canary passed without deleting immutable history or rolling back schema. Human review remains required before broad release.**
 
 - Candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` is merged into `main` and its post-merge CI passed.
 - The protected pre-P2.1 backup is present and its hashes were re-verified.
@@ -10,6 +10,7 @@
 - The P2.1 RLS/RPC proof passed transactionally on staging and left zero fixture records.
 - One dedicated staging reviewer is allow-listed and both protected reviewer secrets are configured for the learner/reviewer canary.
 - Candidate `e054b2b` is live with P2.1 enabled; the dedicated reviewer journey and full staging regression suite passed.
+- The first restored canary exposed a reusable-state race in the Playwright harness. PR #14 fixed the harness without changing runtime or schema; protected/post-merge CI and the restored canary then passed.
 
 This is a sanitized operational record. It contains no user email, password, token, cookie, service-role key, learner URL, reflection, or reviewer identity.
 
@@ -34,6 +35,8 @@ This is a sanitized operational record. It contains no user email, password, tok
 | Post-merge checks on `main@e054b2b` | PASS | [run 29435828015](https://github.com/twilightt1/ai-roadmap-path/actions/runs/29435828015) |
 | Fresh `pnpm check` from `e054b2b` plus this documentation-only branch | PASS | 118 lessons, 118 quizzes, 35 challenge files, 2 ladders; 43 test files and 172 tests; 243 routes built; 234 Pagefind pages indexed |
 | Fresh `pnpm audit:prod` | PASS at high threshold | One tracked moderate advisory; zero high/critical advisories |
+| Protected replay-fix checks on `8f9987d` | PASS — Quality, Database integration, Dependency audit, Browser smoke | [PR #14](https://github.com/twilightt1/ai-roadmap-path/pull/14), [run 29442463962](https://github.com/twilightt1/ai-roadmap-path/actions/runs/29442463962) |
+| Post-merge checks on `main@9ae80aa` | PASS — all four jobs | [run 29442895784](https://github.com/twilightt1/ai-roadmap-path/actions/runs/29442895784) |
 
 ## Deployment and canary evidence
 
@@ -78,6 +81,33 @@ The operator redeployed the same candidate `e054b2b6856dafe91b7e4c5a4e06a3109d00
 | Migration history preserved | PASS | All seven local/remote migration versions still match |
 
 No migration rollback, reviewer deletion, snapshot/event deletion, or browser-storage clearing was performed.
+
+## Restore and reusable-canary correction
+
+The operator restored the same P2.1 runtime with `NEXT_PUBLIC_P2_REVIEW_WORKFLOW=true`. The reviewer route returned `200`, the project route remained healthy, and the preserved pre-restore counts were still one membership, one snapshot, one workflow row, and three events.
+
+The first restored dedicated run is intentionally retained as failed evidence:
+
+| Gate | Result | Evidence |
+|---|---|---|
+| Initial restored canary | FAIL — existing `changes_requested` state was read before the independently loaded submission card finished hydrating | [run 29441468693](https://github.com/twilightt1/ai-roadmap-path/actions/runs/29441468693) |
+| Data after failed run | PASS — unchanged | 1 membership, 1 snapshot, 1 workflow row, 3 events |
+
+The failure was in the reusable Playwright harness, not the submission state machine. The existing test used immediate `locator.count()` probes while the submission card still rendered its loading skeleton, so it skipped the allowed superseding submission and later observed the preserved `changes_requested` state.
+
+PR #14 made the canary wait for submission-card hydration, create a run-specific evidence revision, match the actual submission `POST`, and reload persisted state before the reviewer transition. Before merge, the corrected test passed two consecutive staging cycles with disposable learner/reviewer users; the second cycle exercised `changes_requested` to superseding snapshot. Both disposable users and their cascaded data were then cleaned to zero, while canonical canary counts remained unchanged.
+
+The final restored run used the merged harness from `main@9ae80aaa39bb7bf17ab32c642019b4db2e5fbc1f`:
+
+| Restore gate | Result | Evidence |
+|---|---|---|
+| Reviewer route restored | PASS | `/review/projects` returned `200` |
+| Dedicated restored canary | PASS — `1 passed (25.3s)` | [run 29443157281](https://github.com/twilightt1/ai-roadmap-path/actions/runs/29443157281) |
+| Superseding immutable chain | PASS | Snapshots 1→2; workflows 1→2; events 3→6 |
+| Reviewer membership retained | PASS | 1 |
+| Migration history retained | PASS | All seven local/remote versions match |
+
+The row-count increase is expected evidence of a second immutable review cycle, not duplication or cleanup failure. The previous snapshot and its events remain intact.
 
 ## Backup and migration evidence
 
@@ -148,7 +178,7 @@ The first provisioning attempt reached user/membership creation but failed while
 
 ## Next operator action
 
-Restore exact candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` with `NEXT_PUBLIC_P2_REVIEW_WORKFLOW=true`. Keep LWW progress, P2 evidence, and every prior capability enabled. After the restored deployment is healthy, rerun the dedicated `p2-review` canary and recheck the preserved database counts.
+Complete named human release review, existing P2 rubric/content/moderated-usability review, and P2.1 reviewer-workflow usability review. Record reviewer name, date, reviewed SHA/runtime state, conclusion, and any required changes before broad exposure.
 
 ## Remaining rollout gates
 
@@ -165,9 +195,9 @@ Restore exact candidate `e054b2b6856dafe91b7e4c5a4e06a3109d0075e3` with `NEXT_PU
 | Dedicated `p2-review` canary | PASS — 1 passed |
 | Full regression canary | PASS — 16 passed |
 | P2.1-only rollback and `p2-review-rollback` canary | PASS — 1 passed; data and schema preserved |
-| Restore P2.1 and rerun dedicated canary | PENDING |
-| Snapshot/history and seven-migration preservation evidence | PASS in rollback state; restore recheck pending |
+| Restore P2.1 and rerun dedicated canary | PASS — 1 passed with merged replay-safe harness |
+| Snapshot/history and seven-migration preservation evidence | PASS — immutable chain grew 1→2 snapshots and 3→6 events; seven migrations match |
 | Named release and reviewer-workflow usability sign-off | PENDING |
 | Existing P2 rubric/content/moderated-usability sign-off | PENDING |
 
-Do not call P2.1 deployed or broadly released until the pending rollout and human-review gates are recorded with the exact candidate SHA, flag state, reviewer, date, and conclusion.
+The controlled technical staging rollout is complete. Do not call P2.1 broadly released, content-approved, or certification-grade until the pending human-review gates are recorded with reviewer, date, reviewed SHA/runtime state, and conclusion.
