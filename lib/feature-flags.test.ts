@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseFeatureFlag } from "./feature-flags";
+import { parseFeatureFlag, validateFeatureFlagDependencies } from "./feature-flags";
 
 describe("parseFeatureFlag", () => {
   it("uses the supplied default when unset", () => {
@@ -20,5 +20,23 @@ describe("parseFeatureFlag", () => {
 
   it("rejects invalid values instead of silently enabling a capability", () => {
     expect(() => parseFeatureFlag("maybe", false)).toThrow('Invalid feature flag value: "maybe"');
+  });
+
+  it("rejects P2.1 review without both synced progress and P2 evidence", () => {
+    expect(() => validateFeatureFlagDependencies({
+      lwwRemoteProgress: false,
+      projectEvidence: true,
+      projectReviewWorkflow: true,
+    })).toThrow("requires NEXT_PUBLIC_P0_LWW_PROGRESS");
+    expect(() => validateFeatureFlagDependencies({
+      lwwRemoteProgress: true,
+      projectEvidence: false,
+      projectReviewWorkflow: true,
+    })).toThrow("requires NEXT_PUBLIC_P0_LWW_PROGRESS");
+    expect(() => validateFeatureFlagDependencies({
+      lwwRemoteProgress: true,
+      projectEvidence: true,
+      projectReviewWorkflow: true,
+    })).not.toThrow();
   });
 });

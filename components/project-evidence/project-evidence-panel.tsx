@@ -26,6 +26,8 @@ import {
 } from "@/lib/project-evidence";
 import { useProjectEvidence } from "@/lib/use-project-evidence";
 import { useProgress } from "@/lib/progress";
+import { featureFlags } from "@/lib/feature-flags";
+import { ProjectSubmissionCard } from "./project-submission-card";
 
 const syncLabel = {
   "local-only": "chỉ thiết bị này",
@@ -257,6 +259,17 @@ export function ProjectEvidencePanel({ projectId, features }: { projectId: strin
           </div>
         </div>
       </div>
+
+      {featureFlags.projectReviewWorkflow && (
+        <ProjectSubmissionCard
+          supabase={currentUser.supabase}
+          userId={currentUser.user?.id ?? null}
+          projectId={projectId}
+          rubricReady={rubric.readyForManualReview}
+          evidenceSyncStatus={projectEvidence.status}
+          progressSyncStatus={progress.syncStatus}
+        />
+      )}
     </section>
   );
 }

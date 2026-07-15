@@ -18,6 +18,7 @@ Nguồn nội dung: [`AI_ENGINEER_ROADMAP.md`](./AI_ENGINEER_ROADMAP.md).
 - **Personal Learning Workspace** (`/library`): authenticated bookmarks, lesson notes, and saved code snippets backed by Supabase RLS.
 - **P1 Learning Loop** (`/diagnostic`, `/dashboard`): diagnostic nền tảng, đề xuất học tiếp deterministic, weekly goals và mastery estimate có confidence riêng.
 - **P2 Project Evidence** (`/projects/[id]`): rubric deterministic và bản nháp bằng chứng riêng tư gồm repository, demo, reflection.
+- **P2.1 Submission Review** (`/projects/[id]`, `/review/projects`): snapshot bất biến lấy dữ liệu đã sync từ server và workflow reviewer allow-list.
 
 ## 🛠 Tech Stack
 
@@ -92,7 +93,7 @@ SUPABASE_SERVICE_ROLE_KEY=
 
 Ghi chú bảo mật: client/browser chỉ dùng anon key và dựa vào Row Level Security (RLS). Service role key là optional, chỉ dùng ở server-side trusted code khi thật sự cần quyền admin/bypass RLS, và không bao giờ được dùng trong browser.
 
-### Capability flags (P0/P1/P2)
+### Capability flags (P0/P1/P2/P2.1)
 
 Các capability P0/P1/P2 được rollout và rollback độc lập bằng biến public environment. Giá trị hợp lệ là `true`/`false` hoặc `1`/`0`; giá trị không hợp lệ làm build khởi động thất bại thay vì âm thầm bật capability.
 
@@ -113,13 +114,17 @@ NEXT_PUBLIC_P1_LEARNING_LOOP=false
 
 # Default: false. Requires the P2 project_evidence migration and its RLS/RPC proof.
 NEXT_PUBLIC_P2_PROJECT_EVIDENCE=false
+
+# Default: false. Requires LWW=true, P2 evidence=true, the P2.1 migration,
+# and at least one reviewer provisioned through a trusted service-role operation.
+NEXT_PUBLIC_P2_REVIEW_WORKFLOW=false
 ```
 
-For rollback, deploy or restart with only the affected flag set to `false`. Do not replace LWW with legacy full-snapshot writes, and do not discard local progress/outbox data while the flag is disabled.
+P2.1 fails the build if enabled while LWW progress or P2 evidence is disabled. For rollback, deploy or restart with only the affected flag set to `false`. Do not replace LWW with legacy full-snapshot writes, discard local progress/outbox data, or delete submission history while a flag is disabled.
 
 ### Supabase migration
 
-Schema user data/P0/P1/P2 được áp theo thứ tự:
+Schema user data/P0/P1/P2/P2.1 được áp theo thứ tự:
 
 ```txt
 supabase/migrations/202607060001_user_data.sql
@@ -128,6 +133,7 @@ supabase/migrations/202607110002_fix_progress_rpc_security.sql
 supabase/migrations/202607120001_p0_progress_hardening.sql
 supabase/migrations/202607140001_p1_learning_profiles.sql
 supabase/migrations/202607150001_p2_project_evidence.sql
+supabase/migrations/202607150002_p2_submission_review_workflow.sql
 ```
 
 Các migration tạo bảng user-owned, canonical LWW progress/practice events, trigger profile/bootstrap, owner-scoped RPC và RLS policies. Sau khi apply migration lên Supabase project, cần verify RLS thủ công bằng ít nhất 2 user khác nhau:
@@ -136,6 +142,17 @@ Các migration tạo bảng user-owned, canonical LWW progress/practice events, 
 - User B không đọc/sửa/xoá được records của User A bằng browser Supabase client.
 - Anonymous user không ghi trực tiếp vào các bảng Supabase user data.
 - Browser không bao giờ có `SUPABASE_SERVICE_ROLE_KEY`.
+
+### P2.1 reviewer provisioning
+
+Reviewer phải là Supabase Auth user hiện hữu và được thêm vào `project_reviewer_memberships` bằng SQL editor, migration/operator script, hoặc REST call chạy trong trusted server environment với service role. Không dùng email domain, browser profile hay client metadata làm quyền reviewer. Staging canary `p2-review` cần thêm hai secret riêng:
+
+```env
+PLAYWRIGHT_REVIEWER_USER_EMAIL=
+PLAYWRIGHT_REVIEWER_USER_PASSWORD=
+```
+
+Tài khoản staging này phải được allow-list trước khi chạy canary. Không log password, service-role key, repository URL hoặc reflection vào CI artifacts.
 
 ## 💾 Dữ liệu lưu trong Supabase
 
@@ -148,6 +165,11 @@ Supabase là source of truth cho dữ liệu đăng nhập trong Phase 1:
 - `practice_events`: sự kiện practice append-only, idempotent theo `(user_id, event_id)`.
 - `learning_profiles`: weekly goal và diagnostic aggregate theo field-level LWW; owner chỉ đọc record của mình và chỉ ghi qua authenticated RPC.
 - `project_evidence`: bản nháp repository/demo/reflection riêng theo user và project; owner chỉ đọc record của mình và chỉ ghi qua authenticated field-level LWW RPC.
+- `project_review_requirements`: catalog server-side của 52 project và số feature bắt buộc; browser không được đọc/ghi trực tiếp.
+- `project_reviewer_memberships`: allow-list reviewer chỉ được quản trị qua trusted service-role operation.
+- `project_submissions`: snapshot evidence bất biến do RPC tạo từ evidence/progress đã sync; learner chỉ đọc snapshot của mình, reviewer allow-list đọc queue.
+- `project_submission_workflow`: trạng thái pending/in-review/changes-requested/approved tách khỏi snapshot và chỉ đổi qua reviewer RPC.
+- `project_submission_events`: audit trail append-only cho submit, claim và review decision.
 - `lesson_progress` và `topic_progress`: lesson/topic progress chuẩn hoá theo slug static content.
 - `project_feature_progress`: tiến độ từng feature trong project.
 - `quiz_attempts`: lịch sử lượt làm quiz, điểm số, tổng câu, answers JSONB và thời gian hoàn thành. Authenticated quiz submissions có thể insert remote attempt rows; anonymous full attempt history hiện chưa được replay thành lịch sử attempt rows khi login.

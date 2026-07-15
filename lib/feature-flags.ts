@@ -13,10 +13,29 @@ export function parseFeatureFlag(value: string | undefined, defaultValue: boolea
   }
 }
 
+export function validateFeatureFlagDependencies(flags: {
+  lwwRemoteProgress: boolean;
+  projectEvidence: boolean;
+  projectReviewWorkflow: boolean;
+}): void {
+  if (flags.projectReviewWorkflow && (!flags.lwwRemoteProgress || !flags.projectEvidence)) {
+    throw new Error(
+      "NEXT_PUBLIC_P2_REVIEW_WORKFLOW requires NEXT_PUBLIC_P0_LWW_PROGRESS and NEXT_PUBLIC_P2_PROJECT_EVIDENCE"
+    );
+  }
+}
+
+const lwwRemoteProgress = parseFeatureFlag(process.env.NEXT_PUBLIC_P0_LWW_PROGRESS, false);
+const projectEvidence = parseFeatureFlag(process.env.NEXT_PUBLIC_P2_PROJECT_EVIDENCE, false);
+const projectReviewWorkflow = parseFeatureFlag(process.env.NEXT_PUBLIC_P2_REVIEW_WORKFLOW, false);
+
+validateFeatureFlagDependencies({ lwwRemoteProgress, projectEvidence, projectReviewWorkflow });
+
 export const featureFlags = {
   workerExecution: parseFeatureFlag(process.env.NEXT_PUBLIC_P0_WORKER_EXECUTION, true),
-  lwwRemoteProgress: parseFeatureFlag(process.env.NEXT_PUBLIC_P0_LWW_PROGRESS, false),
+  lwwRemoteProgress,
   practiceLadder: parseFeatureFlag(process.env.NEXT_PUBLIC_P0_PRACTICE_LADDER, false),
   learningLoop: parseFeatureFlag(process.env.NEXT_PUBLIC_P1_LEARNING_LOOP, false),
-  projectEvidence: parseFeatureFlag(process.env.NEXT_PUBLIC_P2_PROJECT_EVIDENCE, false),
+  projectEvidence,
+  projectReviewWorkflow,
 } as const;

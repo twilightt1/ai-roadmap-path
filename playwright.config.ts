@@ -2,12 +2,20 @@ import { defineConfig, devices } from "@playwright/test";
 
 const port = 3100;
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${port}`;
+const ignoredTests: string[] = [];
+if (process.env.PLAYWRIGHT_EXPECT_P2_DISABLED !== "true") {
+  ignoredTests.push("**/project-evidence-disabled.spec.ts");
+}
+if (process.env.PLAYWRIGHT_RUN_P2_REVIEW !== "true") {
+  ignoredTests.push("**/project-review.spec.ts");
+}
+if (process.env.PLAYWRIGHT_EXPECT_P2_REVIEW_DISABLED !== "true") {
+  ignoredTests.push("**/project-review-disabled.spec.ts");
+}
 
 export default defineConfig({
   testDir: "./e2e",
-  testIgnore: process.env.PLAYWRIGHT_EXPECT_P2_DISABLED === "true"
-    ? undefined
-    : "**/project-evidence-disabled.spec.ts",
+  testIgnore: ignoredTests,
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
@@ -36,6 +44,11 @@ export default defineConfig({
           NEXT_PUBLIC_P1_LEARNING_LOOP: "true",
           NEXT_PUBLIC_P2_PROJECT_EVIDENCE:
             process.env.PLAYWRIGHT_EXPECT_P2_DISABLED === "true" ? "false" : "true",
+          NEXT_PUBLIC_P2_REVIEW_WORKFLOW:
+            process.env.PLAYWRIGHT_EXPECT_P2_DISABLED === "true"
+              || process.env.PLAYWRIGHT_EXPECT_P2_REVIEW_DISABLED === "true"
+              ? "false"
+              : process.env.PLAYWRIGHT_RUN_P2_REVIEW === "true" ? "true" : "false",
         },
       },
 });
