@@ -22,6 +22,7 @@
     "test:db": "node scripts/run-supabase-tests.mjs",
     "validate:content": "tsx scripts/validate-content.ts",
     "audit:prod": "pnpm audit --prod --audit-level high",
+    "reviewer:ops": "tsx scripts/manage-project-reviewers.ts",
     "check:fast": "pnpm validate:content && pnpm typecheck && pnpm lint && pnpm test:unit",
     "check": "pnpm check:fast && pnpm build"
   },

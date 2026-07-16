@@ -13,6 +13,10 @@ const sqlTest = resolve(root, "supabase/tests/p0_progress_rls.test.sql");
 const p1SqlTest = resolve(root, "supabase/tests/p1_learning_profiles_rls.test.sql");
 const p2SqlTest = resolve(root, "supabase/tests/p2_project_evidence_rls.test.sql");
 const p2ReviewSqlTest = resolve(root, "supabase/tests/p2_submission_review_rls.test.sql");
+const p2ReviewerOperationsSqlTest = resolve(
+  root,
+  "supabase/tests/p2_reviewer_operations_rls.test.sql"
+);
 const legacyMigration = "202607060001";
 
 function fail(message) {
@@ -93,6 +97,9 @@ if (!existsSync(sqlTest)) fail(`SQL test file is missing: ${sqlTest}`);
 if (!existsSync(p1SqlTest)) fail(`SQL test file is missing: ${p1SqlTest}`);
 if (!existsSync(p2SqlTest)) fail(`SQL test file is missing: ${p2SqlTest}`);
 if (!existsSync(p2ReviewSqlTest)) fail(`SQL test file is missing: ${p2ReviewSqlTest}`);
+if (!existsSync(p2ReviewerOperationsSqlTest)) {
+  fail(`SQL test file is missing: ${p2ReviewerOperationsSqlTest}`);
+}
 requireCommand("supabase");
 requireCommand("psql");
 
@@ -122,9 +129,13 @@ try {
   command("psql", [status.DB_URL, "-v", "ON_ERROR_STOP=1", "-f", p2SqlTest], { stdio: "inherit" });
   console.log("Running P2.1 submission/reviewer RLS assertions...");
   command("psql", [status.DB_URL, "-v", "ON_ERROR_STOP=1", "-f", p2ReviewSqlTest], { stdio: "inherit" });
+  console.log("Running P2.2 reviewer operations and queue assertions...");
+  command("psql", [status.DB_URL, "-v", "ON_ERROR_STOP=1", "-f", p2ReviewerOperationsSqlTest], {
+    stdio: "inherit",
+  });
 } catch (error) {
   console.error(`\nDB TEST FAILED\n${error.message}`);
   process.exit(1);
 }
 
-console.log("DB TEST PASSED: P0 progress, P1 learning profile, P2 project evidence, and P2.1 submission/reviewer RLS/migration assertions.");
+console.log("DB TEST PASSED: P0 progress, P1 learning profile, P2 project evidence, P2.1 submission/reviewer, and P2.2 reviewer operations assertions.");

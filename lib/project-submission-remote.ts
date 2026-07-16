@@ -1,12 +1,18 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   parseProjectSubmissionFeedback,
+  parseProjectReviewQueueCursor,
+  parseProjectReviewQueuePageRows,
   parseProjectSubmissionSnapshot,
   parseProjectSubmissionSummary,
   type ProjectReviewQueueItem,
+  type ProjectReviewQueueCursor,
+  type ProjectReviewQueuePage,
   type ProjectSubmissionFeedback,
   type ProjectSubmissionSnapshot,
   type ProjectSubmissionSummary,
+  DEFAULT_PROJECT_REVIEW_QUEUE_PAGE_SIZE,
+  MAX_PROJECT_REVIEW_QUEUE_PAGE_SIZE,
 } from "./project-submission";
 
 const SUBMISSION_COLUMNS = [
@@ -159,10 +165,41 @@ export async function loadProjectReviewQueue(
     if (!snapshot) throw new Error("Missing project review queue snapshot");
     const summary = parseWorkflowSummary(workflow, snapshot);
     if (!summary) throw new Error("Invalid project review workflow row");
-    return { snapshot, summary };
+    return {
+      snapshot,
+      summary,
+      assignedReviewerActive: summary.assignedReviewerId !== null,
+    };
   });
 
   return { authorized: true, items };
+}
+
+export async function loadProjectReviewQueuePage(
+  supabase: SupabaseClient,
+  cursor: ProjectReviewQueueCursor | null = null,
+  pageSize = DEFAULT_PROJECT_REVIEW_QUEUE_PAGE_SIZE
+): Promise<ProjectReviewQueuePage> {
+  if (!Number.isInteger(pageSize)
+    || pageSize < 1
+    || pageSize > MAX_PROJECT_REVIEW_QUEUE_PAGE_SIZE
+    || (cursor !== null && parseProjectReviewQueueCursor(cursor) === null)
+  ) {
+    throw new Error("Invalid project review queue page request");
+  }
+  if (!await isRemoteProjectReviewer(supabase)) {
+    return { authorized: false, items: [], nextCursor: null };
+  }
+
+  const { data, error } = await supabase.rpc("list_project_review_queue_page", {
+    page_size_input: pageSize,
+    cursor_submitted_at_input: cursor?.submittedAt ?? null,
+    cursor_submission_id_input: cursor?.submissionId ?? null,
+  });
+  if (error) throw error;
+  const page = parseProjectReviewQueuePageRows(data, pageSize);
+  if (!page) throw new Error("Invalid project review queue page response");
+  return { authorized: true, ...page };
 }
 
 export async function claimRemoteProjectSubmission(

@@ -6,6 +6,8 @@ import {
 } from "./project-evidence";
 
 export const MAX_PROJECT_REVIEW_COMMENT_LENGTH = 2_000;
+export const DEFAULT_PROJECT_REVIEW_QUEUE_PAGE_SIZE = 10;
+export const MAX_PROJECT_REVIEW_QUEUE_PAGE_SIZE = 25;
 
 export const PROJECT_SUBMISSION_STATES = [
   "pending",
@@ -52,6 +54,18 @@ export type ProjectSubmissionFeedback = {
 export type ProjectReviewQueueItem = {
   snapshot: ProjectSubmissionSnapshot;
   summary: ProjectSubmissionSummary;
+  assignedReviewerActive: boolean;
+};
+
+export type ProjectReviewQueueCursor = {
+  submittedAt: string;
+  submissionId: string;
+};
+
+export type ProjectReviewQueuePage = {
+  authorized: boolean;
+  items: ProjectReviewQueueItem[];
+  nextCursor: ProjectReviewQueueCursor | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -165,4 +179,66 @@ export function parseProjectSubmissionFeedback(value: unknown): ProjectSubmissio
 
 export function canCreateProjectSubmission(summary: ProjectSubmissionSummary | null): boolean {
   return summary === null || summary.state === "changes_requested";
+}
+
+export function parseProjectReviewQueueCursor(value: unknown): ProjectReviewQueueCursor | null {
+  if (!isRecord(value)
+    || !isTimestamp(value.submittedAt)
+    || !isUuid(value.submissionId)
+  ) {
+    return null;
+  }
+  return {
+    submittedAt: value.submittedAt,
+    submissionId: value.submissionId,
+  };
+}
+
+export function parseProjectReviewQueuePageRows(
+  value: unknown,
+  pageSize: number
+): Omit<ProjectReviewQueuePage, "authorized"> | null {
+  if (!Number.isInteger(pageSize)
+    || pageSize < 1
+    || pageSize > MAX_PROJECT_REVIEW_QUEUE_PAGE_SIZE
+    || !Array.isArray(value)
+    || value.length > pageSize + 1
+  ) {
+    return null;
+  }
+
+  const parsed = value.map((row) => {
+    const snapshot = parseProjectSubmissionSnapshot(row);
+    const summary = parseProjectSubmissionSummary(row);
+    if (!snapshot
+      || !summary
+      || snapshot.id !== summary.id
+      || !isRecord(row)
+      || typeof row.assigned_reviewer_active !== "boolean"
+      || (summary.assignedReviewerId === null && row.assigned_reviewer_active)
+    ) {
+      return null;
+    }
+    return {
+      snapshot,
+      summary,
+      assignedReviewerActive: row.assigned_reviewer_active,
+    } satisfies ProjectReviewQueueItem;
+  });
+
+  if (parsed.some((item) => item === null)) return null;
+  const items = parsed as ProjectReviewQueueItem[];
+  if (new Set(items.map((item) => item.summary.id)).size !== items.length) return null;
+
+  const visibleItems = items.slice(0, pageSize);
+  const lastVisible = visibleItems.at(-1);
+  return {
+    items: visibleItems,
+    nextCursor: items.length > pageSize && lastVisible
+      ? {
+          submittedAt: lastVisible.summary.submittedAt,
+          submissionId: lastVisible.summary.id,
+        }
+      : null,
+  };
 }

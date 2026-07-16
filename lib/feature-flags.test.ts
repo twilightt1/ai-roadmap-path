@@ -27,16 +27,34 @@ describe("parseFeatureFlag", () => {
       lwwRemoteProgress: false,
       projectEvidence: true,
       projectReviewWorkflow: true,
+      projectReviewQueuePagination: false,
     })).toThrow("requires NEXT_PUBLIC_P0_LWW_PROGRESS");
     expect(() => validateFeatureFlagDependencies({
       lwwRemoteProgress: true,
       projectEvidence: false,
       projectReviewWorkflow: true,
+      projectReviewQueuePagination: false,
     })).toThrow("requires NEXT_PUBLIC_P0_LWW_PROGRESS");
     expect(() => validateFeatureFlagDependencies({
       lwwRemoteProgress: true,
       projectEvidence: true,
       projectReviewWorkflow: true,
+      projectReviewQueuePagination: false,
+    })).not.toThrow();
+  });
+
+  it("rejects P2.2 queue pagination without P2.1 review", () => {
+    expect(() => validateFeatureFlagDependencies({
+      lwwRemoteProgress: true,
+      projectEvidence: true,
+      projectReviewWorkflow: false,
+      projectReviewQueuePagination: true,
+    })).toThrow("NEXT_PUBLIC_P2_REVIEW_QUEUE_PAGINATION requires NEXT_PUBLIC_P2_REVIEW_WORKFLOW");
+    expect(() => validateFeatureFlagDependencies({
+      lwwRemoteProgress: true,
+      projectEvidence: true,
+      projectReviewWorkflow: true,
+      projectReviewQueuePagination: true,
     })).not.toThrow();
   });
 });

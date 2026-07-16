@@ -88,6 +88,26 @@ async function createTestUser(apiUrl, serviceRoleKey, prefix) {
   return { id: user.id, email, password };
 }
 
+async function provisionReviewer(apiUrl, serviceRoleKey, reviewerUserId) {
+  const response = await adminRequest(
+    apiUrl,
+    serviceRoleKey,
+    "/rest/v1/rpc/manage_project_reviewer",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation_id_input: randomUUID(),
+        operation_input: "add",
+        reviewer_user_id_input: reviewerUserId,
+        allow_last_reviewer_input: false,
+      }),
+    }
+  );
+  if (!response.ok) {
+    throw new Error(`Unable to provision local reviewer membership (HTTP ${response.status}).`);
+  }
+}
+
 async function deleteTestUser(apiUrl, serviceRoleKey, user) {
   if (!user?.id) return;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -124,19 +144,7 @@ async function main() {
   try {
     learner = await createTestUser(apiUrl, status.SERVICE_ROLE_KEY, "local-smoke");
     reviewer = await createTestUser(apiUrl, status.SERVICE_ROLE_KEY, "local-reviewer");
-    const membershipResponse = await adminRequest(
-      apiUrl,
-      status.SERVICE_ROLE_KEY,
-      "/rest/v1/project_reviewer_memberships",
-      {
-        method: "POST",
-        headers: { prefer: "return=minimal" },
-        body: JSON.stringify({ user_id: reviewer.id }),
-      }
-    );
-    if (!membershipResponse.ok) {
-      throw new Error(`Unable to provision local reviewer membership (HTTP ${membershipResponse.status}).`);
-    }
+    await provisionReviewer(apiUrl, status.SERVICE_ROLE_KEY, reviewer.id);
 
     const playwrightCli = require.resolve("@playwright/test/cli");
     const requestedTests = process.argv.slice(2);
@@ -153,6 +161,10 @@ async function main() {
         PLAYWRIGHT_REVIEWER_USER_PASSWORD: reviewer.password,
         PLAYWRIGHT_RUN_EXTERNAL_RUNTIME: "true",
         PLAYWRIGHT_RUN_P2_REVIEW: "true",
+        PLAYWRIGHT_RUN_P2_REVIEW_OPERATIONS:
+          process.env.PLAYWRIGHT_EXPECT_P2_REVIEW_OPERATIONS_DISABLED === "true"
+            ? "false"
+            : "true",
       },
     });
   } finally {
