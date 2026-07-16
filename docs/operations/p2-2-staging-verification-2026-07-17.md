@@ -2,7 +2,7 @@
 
 ## Status
 
-**Staging backup, additive migration, and corrected transactional security proof are complete. UI rollout, dedicated/full canaries, rollback/restore rehearsal, and human sign-off remain pending.**
+**The P2.2 technical staging rollout is complete: backup, additive migration, transactional security proof, enabled/full canaries, non-destructive rollback, and post-restore replay passed. Broad exposure remains pending named human sign-off.**
 
 This record is not a broad-release approval. P2/P2.1 content, rubric, and usability sign-offs remain separate open gates.
 
@@ -12,10 +12,12 @@ This record is not a broad-release approval. P2/P2.1 content, rubric, and usabil
 |---|---|
 | Merged implementation | `main@ab20e3a9cfe4b8d8078574e0f9184c75b3157d5e` |
 | Implementation PR | `#16` |
+| Staging-proof candidate | `main@90019f2e51ec170fe6a780ef4fe867127fb3be50` |
+| Staging-proof PR | `#17` |
 | Additive migration | `202607160001_p2_reviewer_operations.sql` |
 | Migration target | Linked staging Supabase project |
-| UI state during migration/proof | P2.2 pagination flag OFF |
-| Evidence window | `2026-07-16T17:57:46Z` through `2026-07-16T18:05:09Z` |
+| UI state during migration/proof | P2.2 pagination flag OFF; later toggled ON/OFF/ON on the same candidate |
+| Evidence window | `2026-07-16T17:57:46Z` through `2026-07-16T18:41:57Z` |
 
 ## Pre-migration backup evidence
 
@@ -61,12 +63,64 @@ The corrected staging replay passed:
 
 Post-proof residue was zero for fixture Auth users, memberships, submissions, and operation rows. The pre-existing staging reviewer count returned to one active membership.
 
-## Remaining rollout gates
+## Rollout, rollback, and restore evidence
 
-1. Merge the fixture-isolation proof correction through protected CI.
-2. Deploy the exact merged SHA with `NEXT_PUBLIC_P2_REVIEW_QUEUE_PAGINATION=true` while LWW, P2 evidence, and P2.1 review remain enabled.
-3. Run `p2-review-ops`, then `full`, and retain sanitized evidence.
-4. Redeploy the same SHA with only P2.2 pagination disabled and run `p2-review-ops-rollback`.
-5. Confirm all eight migrations and existing submission/reviewer history remain intact.
-6. Restore only the P2.2 flag and rerun `p2-review-ops`.
-7. Complete named reviewer-operations usability and release sign-off before broad exposure.
+The proof correction and this partial evidence record passed protected CI in PR `#17` and were squash-merged as `main@90019f2`. Post-merge Quality, Database integration, Dependency audit, Browser smoke, and Vercel deployment checks passed before the P2.2 flag was enabled.
+
+The dependency flags remained enabled throughout:
+
+```text
+NEXT_PUBLIC_P0_LWW_PROGRESS=true
+NEXT_PUBLIC_P2_PROJECT_EVIDENCE=true
+NEXT_PUBLIC_P2_REVIEW_WORKFLOW=true
+```
+
+### Enabled rollout
+
+The exact candidate was deployed with `NEXT_PUBLIC_P2_REVIEW_QUEUE_PAGINATION=true`. Vercel recorded a successful [enabled deployment](https://vercel.com/phamvantam03tk-4232s-projects/ai-roadmap-path/8wm4WPRhjouca4MieBpLMKKz1B3m) at `2026-07-16T18:22:21Z`.
+
+- Dedicated [`p2-review-ops`](https://github.com/twilightt1/ai-roadmap-path/actions/runs/29523714587): PASS on `90019f2`.
+- [`full`](https://github.com/twilightt1/ai-roadmap-path/actions/runs/29523837565): PASS on `90019f2`.
+- Pre-rollback aggregate: 1 membership/active reviewer, 3 submissions, 3 workflows, 9 events, and 0 reviewer-operation rows.
+- Migration history remained matched across all eight migrations.
+
+### Non-destructive rollback
+
+The same SHA was redeployed with only `NEXT_PUBLIC_P2_REVIEW_QUEUE_PAGINATION=false`. Vercel recorded the successful [rollback deployment](https://vercel.com/phamvantam03tk-4232s-projects/ai-roadmap-path/EVNMKS247XPzT19yuiHuNDM1YUkt) at `2026-07-16T18:31:18Z`; no database or data rollback was performed.
+
+- [`p2-review-ops-rollback`](https://github.com/twilightt1/ai-roadmap-path/actions/runs/29524313154): PASS.
+- The P2.2 pagination controls were absent while the original P2.1 reviewer queue remained usable.
+- Post-rollback aggregate exactly matched the pre-rollback baseline: 1 membership/active reviewer, 3 submissions, 3 workflows, 9 events, and 0 reviewer-operation rows.
+- All eight migrations remained present and matched local history.
+
+### Restore
+
+The same SHA was restored with `NEXT_PUBLIC_P2_REVIEW_QUEUE_PAGINATION=true`. Vercel recorded the successful [restore deployment](https://vercel.com/phamvantam03tk-4232s-projects/ai-roadmap-path/ByBiZU8LLj8ih27v4h8q6R3hFz1r) at `2026-07-16T18:39:16Z`.
+
+- Post-restore [`p2-review-ops`](https://github.com/twilightt1/ai-roadmap-path/actions/runs/29524878239): PASS.
+- Final aggregate: 1 membership/active reviewer, 4 submissions, 4 workflows, 12 events, and 0 reviewer-operation rows.
+- The increase of one immutable submission/workflow and three audit events is the expected replay behavior of the dedicated learner/reviewer canary; no existing row was deleted or overwritten.
+- Migration history remained matched through `202607160001`.
+
+## Technical gate summary
+
+| Gate | Result |
+|---|---|
+| Pre-migration logical backup and SHA-256 record | PASS |
+| Dry-run selected only P2.2 migration | PASS |
+| Additive migration and 8/8 history match | PASS |
+| Transactional security proof and zero fixture residue | PASS |
+| Protected implementation/proof CI | PASS |
+| Enabled P2.2 dedicated canary | PASS |
+| Full regression canary | PASS |
+| Flag-only rollback and invariant comparison | PASS |
+| Post-restore dedicated canary | PASS |
+| Named reviewer-operations usability/release review | PENDING |
+| Existing P2/P2.1 content/rubric human reviews | PENDING |
+
+## Remaining release gates
+
+1. Merge this completed technical record through protected CI.
+2. Complete a named reviewer-operations usability review covering pagination, inactive-assignee reclaim language, and trusted operator CLI ergonomics.
+3. Complete named release approval before broad P2.2 exposure.
+4. Keep the independent P2/P2.1 content, rubric, and moderated-usability sign-offs open until their named reviewers approve them.
