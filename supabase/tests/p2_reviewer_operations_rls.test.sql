@@ -276,6 +276,14 @@ select pg_temp.assert_true(
   'repeating an operation id does not duplicate release state or events'
 );
 
+-- A linked staging database can already contain real active reviewers. Isolate
+-- the last-reviewer guard inside this transaction; the final rollback restores
+-- every pre-existing membership and its updated_at value.
+update public.project_reviewer_memberships
+set revoked_at = clock_timestamp()
+where user_id <> '88888888-8888-4888-8888-888888888888'
+  and revoked_at is null;
+
 set local role service_role;
 do $$
 begin
