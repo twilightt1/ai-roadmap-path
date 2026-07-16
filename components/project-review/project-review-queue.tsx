@@ -1,21 +1,34 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, ExternalLink, Inbox, LockKeyhole, RefreshCw, UserCheck } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Inbox,
+  LockKeyhole,
+  RefreshCw,
+  UserCheck,
+} from "lucide-react";
 import { useCurrentUser } from "@/components/library/use-current-user";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
+  DEFAULT_PROJECT_REVIEW_QUEUE_PAGE_SIZE,
   MAX_PROJECT_REVIEW_COMMENT_LENGTH,
+  type ProjectReviewQueueCursor,
   type ProjectReviewQueueItem,
 } from "@/lib/project-submission";
 import {
   claimRemoteProjectSubmission,
   loadProjectReviewQueue,
+  loadProjectReviewQueuePage,
   reviewRemoteProjectSubmission,
 } from "@/lib/project-submission-remote";
+import { featureFlags } from "@/lib/feature-flags";
 
 function sanitizedErrorClass(error: unknown): string {
   return error instanceof Error && error.name ? error.name : "UnknownError";
@@ -30,6 +43,48 @@ export function ProjectReviewQueue() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [comments, setComments] = useState<Record<string, string>>({});
   const [error, setError] = useState(false);
+  const [cursorHistory, setCursorHistory] = useState<Array<ProjectReviewQueueCursor | null>>([null]);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [nextCursor, setNextCursor] = useState<ProjectReviewQueueCursor | null>(null);
+  const requestSequence = useRef(0);
+
+  const loadAtCursor = useCallback(async (
+    cursor: ProjectReviewQueueCursor | null,
+    userId: string,
+    resetPagination = false
+  ) => {
+    if (!currentUser.supabase) return;
+    const requestId = ++requestSequence.current;
+    setLoading(true);
+    setError(false);
+    try {
+      const queue = featureFlags.projectReviewQueuePagination
+        ? await loadProjectReviewQueuePage(
+            currentUser.supabase,
+            cursor,
+            DEFAULT_PROJECT_REVIEW_QUEUE_PAGE_SIZE
+          )
+        : {
+            ...await loadProjectReviewQueue(currentUser.supabase),
+            nextCursor: null,
+          };
+      if (requestId !== requestSequence.current) return;
+      setAuthorized(queue.authorized);
+      setItems(queue.items);
+      setNextCursor(queue.nextCursor);
+      setLoadedForUserId(userId);
+      if (resetPagination) {
+        setCursorHistory([null]);
+        setPageIndex(0);
+      }
+    } catch (nextError) {
+      if (requestId !== requestSequence.current) return;
+      console.error("[project-review] queue load failed", sanitizedErrorClass(nextError));
+      setError(true);
+    } finally {
+      if (requestId === requestSequence.current) setLoading(false);
+    }
+  }, [currentUser.supabase]);
 
   const refresh = useCallback(async () => {
     if (currentUser.loading) return;
@@ -39,43 +94,53 @@ export function ProjectReviewQueue() {
       setLoading(false);
       return;
     }
-
-    setLoading(true);
-    setError(false);
-    try {
-      const queue = await loadProjectReviewQueue(currentUser.supabase);
-      setAuthorized(queue.authorized);
-      setItems(queue.items);
-    } catch (nextError) {
-      console.error("[project-review] queue load failed", sanitizedErrorClass(nextError));
-      setError(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [currentUser.loading, currentUser.supabase, currentUser.user]);
+    await loadAtCursor(cursorHistory[pageIndex] ?? null, currentUser.user.id);
+  }, [
+    currentUser.loading,
+    currentUser.supabase,
+    currentUser.user,
+    cursorHistory,
+    loadAtCursor,
+    pageIndex,
+  ]);
 
   useEffect(() => {
     if (currentUser.loading || !currentUser.supabase || !currentUser.user) return;
-    let active = true;
     const userId = currentUser.user.id;
-    void loadProjectReviewQueue(currentUser.supabase)
-      .then((queue) => {
-        if (!active) return;
-        setAuthorized(queue.authorized);
-        setItems(queue.items);
-        setLoadedForUserId(userId);
-        setError(false);
-      })
-      .catch((nextError) => {
-        if (!active) return;
-        console.error("[project-review] queue load failed", sanitizedErrorClass(nextError));
-        setAuthorized(null);
-        setItems([]);
-        setLoadedForUserId(userId);
-        setError(true);
-      });
-    return () => { active = false; };
-  }, [currentUser.loading, currentUser.supabase, currentUser.user]);
+    let active = true;
+    queueMicrotask(() => {
+      if (active) void loadAtCursor(null, userId, true);
+    });
+    return () => {
+      active = false;
+      requestSequence.current += 1;
+    };
+  }, [currentUser.loading, currentUser.supabase, currentUser.user, loadAtCursor]);
+
+  const resetToFirstPage = async () => {
+    if (!currentUser.user) return;
+    setCursorHistory([null]);
+    setPageIndex(0);
+    await loadAtCursor(null, currentUser.user.id);
+  };
+
+  const previousPage = async () => {
+    if (!currentUser.user || pageIndex === 0) return;
+    const previousIndex = pageIndex - 1;
+    setPageIndex(previousIndex);
+    await loadAtCursor(cursorHistory[previousIndex] ?? null, currentUser.user.id);
+  };
+
+  const followingPage = async () => {
+    if (!currentUser.user || !nextCursor) return;
+    const followingIndex = pageIndex + 1;
+    setCursorHistory((current) => [
+      ...current.slice(0, followingIndex),
+      nextCursor,
+    ]);
+    setPageIndex(followingIndex);
+    await loadAtCursor(nextCursor, currentUser.user.id);
+  };
 
   const claim = async (submissionId: string) => {
     if (!currentUser.supabase) return;
@@ -83,7 +148,7 @@ export function ProjectReviewQueue() {
     setError(false);
     try {
       await claimRemoteProjectSubmission(currentUser.supabase, submissionId);
-      await refresh();
+      await resetToFirstPage();
     } catch (nextError) {
       console.error("[project-review] claim failed", sanitizedErrorClass(nextError));
       setError(true);
@@ -109,7 +174,7 @@ export function ProjectReviewQueue() {
         comment
       );
       setComments((current) => ({ ...current, [submissionId]: "" }));
-      await refresh();
+      await resetToFirstPage();
     } catch (nextError) {
       console.error("[project-review] decision failed", sanitizedErrorClass(nextError));
       setError(true);
@@ -153,7 +218,11 @@ export function ProjectReviewQueue() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 id="project-review-queue-title" className="text-xl font-bold">Hàng đợi đang hoạt động</h2>
-          <p className="mt-1 text-xs text-muted-foreground">Tối đa 50 snapshot gần nhất; chỉ hiển thị pending và in-review.</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {featureFlags.projectReviewQueuePagination
+              ? `Tối đa ${DEFAULT_PROJECT_REVIEW_QUEUE_PAGE_SIZE} snapshot mỗi trang; sắp xếp theo thời điểm nộp bất biến.`
+              : "Tối đa 50 snapshot gần nhất; chỉ hiển thị pending và in-review."}
+          </p>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={() => void refresh()}>
           <RefreshCw /> Làm mới
@@ -173,8 +242,11 @@ export function ProjectReviewQueue() {
         </div>
       ) : (
         <div className="mt-5 space-y-5">
-          {items.map(({ snapshot, summary }) => {
+          {items.map(({ snapshot, summary, assignedReviewerActive }) => {
             const assignedToCurrentReviewer = summary.assignedReviewerId === currentUser.user?.id;
+            const reclaimable = featureFlags.projectReviewQueuePagination
+              && summary.state === "in_review"
+              && !assignedReviewerActive;
             const comment = comments[summary.id] ?? "";
             const busy = busyId === summary.id;
             return (
@@ -226,10 +298,11 @@ export function ProjectReviewQueue() {
                   </p>
                 </div>
 
-                {summary.state === "pending" ? (
+                {summary.state === "pending" || reclaimable ? (
                   <div className="mt-4 flex justify-end">
                     <Button type="button" size="sm" disabled={busy} onClick={() => void claim(summary.id)}>
-                      {busy ? <RefreshCw className="animate-spin" /> : <UserCheck />} Nhận review
+                      {busy ? <RefreshCw className="animate-spin" /> : <UserCheck />}
+                      {reclaimable ? "Nhận lại review" : "Nhận review"}
                     </Button>
                   </div>
                 ) : assignedToCurrentReviewer ? (
@@ -278,6 +351,34 @@ export function ProjectReviewQueue() {
             );
           })}
         </div>
+      )}
+
+      {featureFlags.projectReviewQueuePagination && (
+        <nav
+          data-testid="project-review-pagination"
+          aria-label="Phân trang hàng đợi review"
+          className="mt-5 flex items-center justify-between gap-3"
+        >
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={loading || pageIndex === 0}
+            onClick={() => void previousPage()}
+          >
+            <ChevronLeft /> Trang trước
+          </Button>
+          <span className="text-xs font-mono text-muted-foreground">Trang {pageIndex + 1}</span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={loading || nextCursor === null}
+            onClick={() => void followingPage()}
+          >
+            Trang sau <ChevronRight />
+          </Button>
+        </nav>
       )}
     </section>
   );

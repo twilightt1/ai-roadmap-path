@@ -12,6 +12,12 @@ if (process.env.PLAYWRIGHT_RUN_P2_REVIEW !== "true") {
 if (process.env.PLAYWRIGHT_EXPECT_P2_REVIEW_DISABLED !== "true") {
   ignoredTests.push("**/project-review-disabled.spec.ts");
 }
+if (process.env.PLAYWRIGHT_RUN_P2_REVIEW_OPERATIONS !== "true") {
+  ignoredTests.push("**/project-review-operations.spec.ts");
+}
+if (process.env.PLAYWRIGHT_EXPECT_P2_REVIEW_OPERATIONS_DISABLED !== "true") {
+  ignoredTests.push("**/project-review-operations-disabled.spec.ts");
+}
 
 export default defineConfig({
   testDir: "./e2e",
@@ -33,7 +39,7 @@ export default defineConfig({
     : {
         command: "pnpm build && pnpm start --hostname 127.0.0.1 --port 3100",
         url: baseURL,
-        timeout: 120_000,
+        timeout: 240_000,
         reuseExistingServer: !process.env.CI,
         env: {
           ...process.env,
@@ -48,7 +54,13 @@ export default defineConfig({
             process.env.PLAYWRIGHT_EXPECT_P2_DISABLED === "true"
               || process.env.PLAYWRIGHT_EXPECT_P2_REVIEW_DISABLED === "true"
               ? "false"
-              : process.env.PLAYWRIGHT_RUN_P2_REVIEW === "true" ? "true" : "false",
+              : process.env.PLAYWRIGHT_RUN_P2_REVIEW === "true"
+                || process.env.PLAYWRIGHT_RUN_P2_REVIEW_OPERATIONS === "true"
+                || process.env.PLAYWRIGHT_EXPECT_P2_REVIEW_OPERATIONS_DISABLED === "true"
+                ? "true"
+                : "false",
+          NEXT_PUBLIC_P2_REVIEW_QUEUE_PAGINATION:
+            process.env.PLAYWRIGHT_RUN_P2_REVIEW_OPERATIONS === "true" ? "true" : "false",
         },
       },
 });

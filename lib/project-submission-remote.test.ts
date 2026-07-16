@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   claimRemoteProjectSubmission,
+  loadProjectReviewQueuePage,
   reviewRemoteProjectSubmission,
   submitRemoteProjectEvidence,
 } from "./project-submission-remote";
@@ -14,6 +15,21 @@ const summaryRow = {
   assigned_reviewer_id: null,
   submitted_at: "2026-07-15T10:00:00.000Z",
   updated_at: "2026-07-15T10:00:00.000Z",
+};
+
+const queueRow = {
+  ...summaryRow,
+  learner_id: "33333333-3333-4333-8333-333333333333",
+  repository_url: "https://github.com/learner/project",
+  repository_url_updated_at: "2026-07-15T09:00:00.000Z",
+  demo_url: "",
+  demo_url_updated_at: "1970-01-01T00:00:00.000Z",
+  reflection: "A deterministic architecture keeps domain behavior independent from transport retries and makes failure ownership explicit.",
+  reflection_updated_at: "2026-07-15T09:00:00.000Z",
+  completed_feature_count: 3,
+  required_feature_count: 3,
+  rubric_version: 1,
+  assigned_reviewer_active: false,
 };
 
 describe("project submission remote adapter", () => {
@@ -70,5 +86,36 @@ describe("project submission remote adapter", () => {
       decision_input: "changes_requested",
       comment_input: "Add a deterministic failure-path test.",
     });
+  });
+
+  it("loads a bounded reviewer page only after reviewer authorization", async () => {
+    const rpc = vi.fn()
+      .mockResolvedValueOnce({ data: true, error: null })
+      .mockResolvedValueOnce({ data: [queueRow], error: null });
+    const client = { rpc } as unknown as SupabaseClient;
+
+    await expect(loadProjectReviewQueuePage(client, null, 10)).resolves.toMatchObject({
+      authorized: true,
+      items: [{ summary: { id: summaryRow.id } }],
+      nextCursor: null,
+    });
+    expect(rpc).toHaveBeenNthCalledWith(1, "is_project_reviewer");
+    expect(rpc).toHaveBeenNthCalledWith(2, "list_project_review_queue_page", {
+      page_size_input: 10,
+      cursor_submitted_at_input: null,
+      cursor_submission_id_input: null,
+    });
+  });
+
+  it("does not call the page RPC for non-reviewers", async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: false, error: null });
+    const client = { rpc } as unknown as SupabaseClient;
+
+    await expect(loadProjectReviewQueuePage(client)).resolves.toEqual({
+      authorized: false,
+      items: [],
+      nextCursor: null,
+    });
+    expect(rpc).toHaveBeenCalledTimes(1);
   });
 });
